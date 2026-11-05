@@ -8,11 +8,11 @@ oder Passwort-Login, ufw nur SSH, automatische Sicherheitsupdates. Neustart und 
 Zugangsdaten stehen nur lokal (`~/.ssh/config`, Alias), nicht im Repo.
 
 ## Nächster Schritt
-1. `/spec` für M1 Nr. 2: welche Arena-Strategie der Bot fährt (klassisch oder LLM) – Arena-Ergebnisse ansehen.
-2. Danach Nr. 3 (Paper-Ausführung + SQLite).
+1. `/umsetzen 003` – Indikatoren, klassische Strategien, LLM-Kontext (identisch zu Arena v0.3.1, ADR-0007).
+2. Danach Nr. 3 (Paper-Ausführung + SQLite), dann 3a LLM-Strategie (vom Nutzer für M1 gewählt).
 
 ## In Arbeit
-- Spec: –
+- Spec: 003 (freigegeben)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
