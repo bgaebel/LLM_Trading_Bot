@@ -1,0 +1,91 @@
+import io
+import json
+import urllib.error
+import urllib.request
+from email.message import Message
+from typing import Any
+
+import pytest
+
+from llm_trading_bot.market.http import HTTPFailure, UrllibTransport, retry_after_seconds
+
+
+def headers(**values: str) -> Message:
+    msg = Message()
+    for name, value in values.items():
+        msg[name.replace("_", "-")] = value
+    return msg
+
+
+def test_retry_after_header_in_seconds() -> None:
+    assert retry_after_seconds(headers(Retry_After="10"), now=0) == 10
+
+
+def test_bitvavo_reset_in_milliseconds() -> None:
+    h = headers(**{"bitvavo-ratelimit-resetat": "1900000900000"})
+    assert retry_after_seconds(h, now=1_900_000_000) == 900
+
+
+def test_larger_of_both_headers_wins() -> None:
+    h = headers(Retry_After="5", **{"bitvavo-ratelimit-resetat": "1900000030"})
+    assert retry_after_seconds(h, now=1_900_000_000) == 30
+
+
+@pytest.mark.parametrize("value", ["99999", "1e9"])
+def test_delay_capped_to_one_hour(value: str) -> None:
+    assert retry_after_seconds(headers(Retry_After=value), now=0) == 3600
+
+
+@pytest.mark.parametrize("value", ["garbage", "nan", "-5", "0"])
+def test_unusable_header_gives_no_delay(value: str) -> None:
+    assert retry_after_seconds(headers(Retry_After=value), now=0) is None
+
+
+def test_no_headers_gives_no_delay() -> None:
+    assert retry_after_seconds(headers(), now=0) is None
+
+
+def test_http_error_exposes_status_and_delay_but_not_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    failure = urllib.error.HTTPError(
+        "https://example.invalid", 429, "error", headers(Retry_After="10"), io.BytesIO(b"PRIVATE")
+    )
+
+    def fail(*_args: Any, **_kwargs: Any) -> None:
+        raise failure
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    with pytest.raises(HTTPFailure) as exc:
+        UrllibTransport().get_json("https://example.invalid")
+    assert exc.value.status == 429
+    assert exc.value.retry_after == 10
+    assert "PRIVATE" not in str(exc.value)
+    assert exc.value.__cause__ is None
+
+
+class FakeResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def read(self, _limit: int) -> bytes:
+        return self._payload
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+def test_get_request_is_plain_get_and_decodes_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[urllib.request.Request] = []
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> FakeResponse:
+        seen.append(request)
+        return FakeResponse(json.dumps({"name": "Ümlaut"}).encode("utf-8"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    assert UrllibTransport().get_json("https://example.invalid/x") == {"name": "Ümlaut"}
+    request = seen[0]
+    assert request.get_method() == "GET"
+    assert request.data is None
+    assert {k.lower() for k in request.headers} == {"user-agent", "accept"}
