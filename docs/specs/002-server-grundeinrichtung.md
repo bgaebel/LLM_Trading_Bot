@@ -63,8 +63,8 @@ Verworfen: Ansible (für einen Server zu schwer), cloud-init (der Server existie
 
 ## Plan
 - [x] 1. `deploy/setup-server.sh` (beide Phasen, idempotent) + CI-Job `shellcheck`/`bash -n` (AK1)
-- [ ] 2. Phase 1 auf dem Server ausführen, mit Zustimmung (AK2, AK4, AK5, AK6)
-- [ ] 3. In zweiter Sitzung Admin-Login + `sudo -n true` prüfen, lokalen SSH-Alias anlegen (AK2, AK7)
+- [x] 2. Phase 1 auf dem Server ausführen, mit Zustimmung (AK2, AK4, AK5, AK6)
+- [x] 3. In zweiter Sitzung Admin-Login + `sudo -n true` prüfen, lokalen SSH-Alias anlegen (AK2, AK7)
 - [ ] 4. Phase 2 (`--lock`) ausführen, mit Zustimmung; Root- und Passwort-Login gegenprüfen (AK3)
 - [ ] 5. Zweiter Lauf zur Prüfung der Idempotenz; `docs/betrieb/server.md`, ARCHITEKTUR.md „Deployment" (AK1, AK8)
 
@@ -80,6 +80,9 @@ Verworfen: Ansible (für einen Server zu schwer), cloud-init (der Server existie
 ---
 
 ## Verlauf
+- 2026-11-05: Host-Key des Servers wich vom alten `known_hosts`-Eintrag ab (IP vorher anders vergeben). Der Nutzer hat bestätigt, dass der Server neu ist; der Eintrag wurde ersetzt.
+- 2026-11-05: Die Beispielaufrufe im Skriptkopf waren falsch: `ssh` fügt die entfernten Argumente zu einer Zeile zusammen, dadurch zerfiel der Public Key. Jetzt mit inneren einfachen Anführungszeichen.
+- 2026-11-05: Phase 1 ausgeführt (7 Änderungen; `apt upgrade` hat doch Updates gefunden → Neustart nötig). Gegenprobe in neuer Sitzung: Admin-Login, `sudo -n true`, Dienstbenutzer mit `nologin`, ufw `LIMIT 22/tcp` (v4+v6), UTC/NTP, `unattended-upgrade --dry-run` – alles OK. SSH-Alias lokal angelegt und getestet.
 
 ## Ergebnis
 - **Erreicht:** …

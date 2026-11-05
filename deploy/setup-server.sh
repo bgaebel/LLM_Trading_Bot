@@ -4,10 +4,11 @@
 #
 # Runs on the server and is piped in via SSH, so no copy stays behind:
 #   Phase 1 (root and password login stay open so a mistake cannot lock you out):
-#     ssh root@<server> 'bash -s' -- prepare <admin> <service> "<ssh-public-key>" < deploy/setup-server.sh
+#     ssh root@<server> "bash -s -- prepare <admin> <service> '$(cat ~/.ssh/<key>.pub)'" < deploy/setup-server.sh
+#   (ssh joins remote arguments into one command line, so the key needs the inner single quotes.)
 #   Check in a SECOND session: ssh <admin>@<server> sudo -n true
 #   Phase 2 (via the admin user, which also proves that sudo works):
-#     ssh <admin>@<server> 'sudo bash -s' -- lock <admin> < deploy/setup-server.sh
+#     ssh <admin>@<server> "sudo bash -s -- lock <admin>" < deploy/setup-server.sh
 #
 # Real host names, IPs and user names never go into this file: the repository is public.
 set -euo pipefail
