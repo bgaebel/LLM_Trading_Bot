@@ -17,6 +17,14 @@ uv run trading-bot
 
 Lint und Typprüfung: `uv run ruff check . && uv run ruff format --check . && uv run mypy src`
 
+Live-Marktdaten einmal abrufen und prüfen (öffentliche Bitvavo-API, kein Key nötig):
+
+```bash
+uv run trading-bot market
+```
+
+Tests gegen die echte API sind standardmäßig aus: `uv run pytest -m net`.
+
 Konfiguration: `TRADING_MODE` (Standard `paper`; `live` wird abgelehnt).
 
 ## Dokumentation
