@@ -1,0 +1,44 @@
+# Normalize line endings: LF in the repo and in the working tree on every OS (matches .editorconfig).
+# Exceptions below (Windows scripts need CRLF). Later lines override earlier ones.
+* text=auto eol=lf
+
+# Scripts with fixed line endings
+*.sh   text eol=lf
+*.ps1  text eol=crlf
+*.psm1 text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Intel HEX / S-Record are text (per-line checksums don't cover line endings)
+*.hex  text
+*.srec text
+*.s19  text
+
+# Binary
+*.bin  binary
+*.elf  binary
+*.axf  binary
+*.uf2  binary
+*.o    binary
+*.a    binary
+*.lib  binary
+*.dll  binary
+*.exe  binary
+*.so   binary
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.7z   binary
+*.gz   binary
+*.xlsx binary
+*.docx binary
+
+# GitHub language stats
+docs/** linguist-documentation
+
+# TwinCAT skeleton files keep CRLF like XAE writes them (projects get this via presets/twincat/gitattributes)
+presets/twincat/geruest/**/*.Tc* text eol=crlf

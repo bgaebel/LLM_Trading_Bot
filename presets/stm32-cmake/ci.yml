@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CLANG_FORMAT_VERSION: "18.1.8" # keep in sync with the local pip install (PRESET.md)
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - run: pip install "clang-format==${CLANG_FORMAT_VERSION}"
+      - name: clang-format (own code only, CubeMX output excluded)
+        run: clang-format --dry-run --Werror $(git ls-files -- '*.c' '*.h' '*.cpp' '*.hpp' ':!:Core' ':!:Drivers' ':!:Middlewares')
+
+  host-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Cache host build (GoogleTest download + objects)
+        uses: actions/cache@v6
+        with:
+          path: build/host
+          key: host-${{ runner.os }}-${{ hashFiles('test/CMakeLists.txt') }}
+          restore-keys: host-${{ runner.os }}-
+      - run: cmake -S test -B build/host -G Ninja
+      - run: cmake --build build/host
+      - run: ctest --test-dir build/host --output-on-failure
+
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Install arm-none-eabi-gcc (cached by the action)
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: "14.3.Rel1" # keep in sync with the local toolchain (STM32CubeCLT)
+      # Skipped until CubeMX has generated the project (root CMakeLists.txt).
+      - name: Build firmware (Debug)
+        if: hashFiles('CMakeLists.txt') != ''
+        run: cmake --preset Debug && cmake --build --preset Debug
+      - name: Size report
+        if: hashFiles('CMakeLists.txt') != ''
+        run: arm-none-eabi-size build/Debug/*.elf
+      - uses: actions/upload-artifact@v7
+        if: hashFiles('CMakeLists.txt') != ''
+        with:
+          name: firmware-debug
+          path: |
+            build/Debug/*.elf
+            build/Debug/*.map
+          if-no-files-found: warn

@@ -1,0 +1,9 @@
+# Dependabot: keeps GitHub Actions versions up to date.
+# Hinweis: Presets können nach dem Kickoff ihr Ökosystem ergänzen (z. B. pip oder npm),
+# indem sie hier einen weiteren Eintrag unter "updates" anlegen.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

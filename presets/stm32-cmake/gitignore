@@ -1,0 +1,19 @@
+# --- stm32-cmake ---
+# CMake build trees (firmware presets + host tests)
+build/
+# CubeMX / CubeIDE local state (the .ioc itself IS versioned)
+.mxproject
+*.launch
+.settings/
+/Debug/
+/Release/
+# Toolchain/debug outputs outside build/
+*.elf
+*.hex
+*.bin
+*.map
+*.su
+*.cyclo
+# clangd
+.cache/
+compile_commands.json

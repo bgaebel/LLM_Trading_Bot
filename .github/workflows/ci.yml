@@ -1,0 +1,19 @@
+# Generic placeholder. /kickoff replaces this file with the CI of the chosen stack preset.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: No stack preset applied
+        run: |
+          echo "::notice title=CI placeholder::No stack preset applied yet. Run /kickoff to replace .github/workflows/ci.yml with real build/test/lint jobs."

@@ -1,0 +1,50 @@
+name: Bug
+description: Fehlverhalten melden
+title: "fix: "
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Umgebung
+      description: Was genau lief? Nicht Zutreffendes weglassen.
+      value: |
+        - Commit / Version (Firmware oder Software):
+        - Board-Revision / Hardware:
+        - Toolchain (Compiler, SDK, Version):
+        - Betriebssystem / Host:
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduktion
+      description: Schritte, mit denen der Fehler auftritt. Wie oft? (immer / sporadisch)
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Erwartet
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Beobachtet
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Ausgabe
+      description: Serieller Monitor, Stacktrace, Testausgabe.
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: Vermutung / bereits geprüft
+      description: Hypothesen und Ausgeschlossenes (vermeidet doppelte Arbeit in `/diagnose`).

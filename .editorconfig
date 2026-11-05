@@ -1,0 +1,30 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{c,h,cpp,hpp,cc,hh,py}]
+indent_size = 4
+
+[*.{yml,yaml,json,ts,tsx,js,jsx,mjs,cjs,md}]
+indent_size = 2
+
+# Two trailing spaces are a hard line break in Markdown
+[*.md]
+trim_trailing_whitespace = false
+
+# Windows PowerShell 5.1 needs a BOM to read non-ASCII characters as UTF-8
+[*.{ps1,psm1}]
+charset = utf-8-bom
+end_of_line = crlf
+
+[*.{bat,cmd}]
+end_of_line = crlf
+
+[Makefile]
+indent_style = tab

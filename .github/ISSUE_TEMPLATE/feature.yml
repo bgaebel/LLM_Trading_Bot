@@ -1,0 +1,34 @@
+name: Feature
+description: Neue Funktion oder größere Änderung vorschlagen
+title: "feat: "
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Ziel
+      description: Was ist danach anders – aus Sicht von Nutzer/System?
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Welches Problem löst es? Warum jetzt?
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Akzeptanzkriterien (Entwurf)
+      description: Prüfbar formulieren. Werden in der Spec (`/spec`) verfeinert.
+      placeholder: |
+        - [ ] ...
+  - type: textarea
+    id: scope
+    attributes:
+      label: Abgrenzung / Nicht-Ziele
+  - type: checkboxes
+    id: hardware
+    attributes:
+      label: Hardware
+      options:
+        - label: Braucht Hardware-in-the-Loop-Test (Label `hil`)

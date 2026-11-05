@@ -1,0 +1,22 @@
+# --- twincat ---
+# XAE writes CRLF; pin it so checkouts on Linux/CI and Windows produce identical files.
+*.TcPOU    text eol=crlf
+*.TcDUT    text eol=crlf
+*.TcGVL    text eol=crlf
+*.TcIO     text eol=crlf
+*.TcTTO    text eol=crlf
+*.TcVis    text eol=crlf
+*.TcTLO    text eol=crlf
+*.TcGTLO   text eol=crlf
+*.TcIPO    text eol=crlf
+*.TcVMO    text eol=crlf
+*.TcRMO    text eol=crlf
+*.plcproj  text eol=crlf
+*.tsproj   text eol=crlf
+*.tspproj  text eol=crlf
+*.xti      text eol=crlf
+*.tmc      text eol=crlf
+*.sln      text eol=crlf
+# Libraries and compiled artifacts are binary.
+*.library          binary
+*.compiled-library binary

@@ -1,0 +1,14 @@
+# Close to Zephyr's own style (Linux kernel: tabs, width 8, 100 cols).
+# Zephyr ships a full .clang-format in zephyr/.clang-format if you prefer to copy it.
+BasedOnStyle: LLVM
+IndentWidth: 8
+TabWidth: 8
+UseTab: ForContinuationAndIndentation
+ColumnLimit: 100
+BreakBeforeBraces: Linux
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+IndentCaseLabels: false
+SortIncludes: Never
+ForEachMacros: ['ARRAY_FOR_EACH', 'SYS_SLIST_FOR_EACH_NODE', 'SYS_DLIST_FOR_EACH_NODE']

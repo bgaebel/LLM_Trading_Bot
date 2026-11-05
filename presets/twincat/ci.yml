@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Option A: GitHub-hosted runners cannot build TwinCAT (no XAE, licensing, Windows-only GUI tooling).
+  # Only static checks: XML well-formedness, UTF-8, POU name = file name, plcproj references, no _Boot etc.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      # Standard library only -> nothing to install or cache.
+      - name: TwinCAT repository checks
+        run: python scripts/check-twincat.py
+
+  # Option B (skeleton, disabled): self-hosted Windows runner with TwinCAT XAE + runtime + TcUnit-Runner.
+  # Runner labels, paths and the .sln name are placeholders - adapt before enabling.
+  # TcUnit-Runner ACTIVATES the configuration on the target (-a) and writes TcUnit_xUnit_results.xml next to the .sln.
+  # The runner service needs a user session that can host COM/DTE; try it interactively first.
+  # build-and-test:
+  #   needs: checks
+  #   runs-on: [self-hosted, windows, twincat]
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v7
+  #     - name: Build solution (Automation Interface)
+  #       shell: powershell
+  #       run: powershell -NoProfile -ExecutionPolicy Bypass -STA -File scripts\build-twincat.ps1 -Solution App.sln
+  #     - name: Run TcUnit tests
+  #       shell: powershell
+  #       # -v solution, -t task running PRG_TEST, -a target AMS NetId (local runtime), -u timeout [min]
+  #       run: '& "C:\Tools\TcUnit-Runner\TcUnit-Runner.exe" -v "$env:GITHUB_WORKSPACE\App.sln" -t TestTask -a 127.0.0.1.1.1 -u 5'
+  #     - name: Upload test results
+  #       if: always()
+  #       uses: actions/upload-artifact@v7
+  #       with:
+  #         name: tcunit-results
+  #         path: TcUnit_xUnit_results.xml

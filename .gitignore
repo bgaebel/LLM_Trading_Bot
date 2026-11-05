@@ -1,0 +1,66 @@
+# --- Base (stack-agnostic). Presets append their own section below. ---
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Editors / IDEs (keep shared VS Code config)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+.idea/
+.vs/
+*.suo
+*.user
+*.swp
+*~
+
+# Secrets / local env (keep examples)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+secrets/
+credentials*.json
+.netrc
+# Firmware / app secrets (keep *.example templates, e.g. secrets.h.example)
+secrets.h
+*_secrets.h
+credentials.h
+secrets.ini
+*.jks
+*.keystore
+!*.example
+
+# Claude Code: personal / local only
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+
+# Logs / temp
+*.log
+logs/
+*.tmp
+tmp/
+
+# Generic build output
+build/
+dist/
+out/
+
+# Dropbox / sync conflict files (German client: "(<user>s in Konflikt stehende Kopie <date>)")
+*in Konflikt stehende Kopie*
+*In Konflikt stehende Kopie*
+*Konflikt durch selektive Synchronisierung*
+* (Konflikt*
+*conflicted copy*
+*Conflicted copy*

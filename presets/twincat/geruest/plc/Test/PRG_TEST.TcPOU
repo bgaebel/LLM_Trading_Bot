@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1">
+  <POU Name="PRG_TEST" Id="{9bf69be8-2bff-4426-b5fb-7a4b774a587b}" SpecialFunc="None">
+    <Declaration><![CDATA[// Test entry point; call cyclically from a dedicated test task. Results appear in the XAE Error List.
+PROGRAM PRG_TEST
+VAR
+    fbF_Add_Test : FB_F_Add_Test;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[TcUnit.RUN();]]></ST>
+    </Implementation>
+  </POU>
+</TcPlcObject>
