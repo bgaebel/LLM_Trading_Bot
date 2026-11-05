@@ -31,4 +31,4 @@ body:
     attributes:
       label: Hardware
       options:
-        - label: Braucht Hardware-in-the-Loop-Test (Label `hil`)
+        - label: Braucht manuellen Test auf dem Hetzner-Server (Label `server`)

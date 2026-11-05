@@ -26,7 +26,7 @@ labels=(
   "type:chore|C5DEF5|Wartung, Build, Abhängigkeiten, Aufräumen"
   "type:docs|0075CA|Nur Dokumentation"
   "status:blockiert|000000|Blockiert – wartet auf etwas anderes"
-  "hil|F9D0C4|Braucht Hardware-in-the-Loop-Test"
+  "server|F9D0C4|Braucht manuellen Test auf dem Hetzner-Server"
 )
 
 failed=0

@@ -15,9 +15,8 @@ M1 startet: Arena-Module schrittweise übernehmen, Ziel Paper-Betrieb auf dem He
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
-- `gh` ist nicht angemeldet (`gh auth login`) → Labels (`bash scripts/github-labels.sh`) und Branch-Schutz für `main` stehen noch aus.
+- –
 
 ## Offen – manuell prüfen
-- CI auf GitHub läuft nach dem ersten Push grün durch.
 - Hetzner-Server: Ubuntu-Version, Benutzer und SSH-Zugang festhalten (für M1 Nr. 6).
 - Offene Projektentscheidungen: LLM-Budget, Startkapital für M2.

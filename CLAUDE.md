@@ -89,6 +89,8 @@ brauchen, benenne ich ausdrücklich als **offen – manuell prüfen** und behaup
 - **Kein Echtgeld vor M2 (ADR-0004):** keine Order-Endpunkte implementieren oder aufrufen, keine Bitvavo-Keys
   mit Handelsrecht anlegen/verwenden. `live` bleibt gesperrt, bis ein neues ADR es freigibt.
 - Secrets (`.env`), SQLite-DBs, Backups und Logs nie committen, loggen oder in Diffs zeigen.
+- **Das Repo ist öffentlich (gewollt):** keine Server-IP, Hostnamen, Linux-Benutzer, SSH-Ports, Kontostände
+  oder echten Trades in Code, Doku, Commits oder PRs – in Anleitungen Platzhalter wie `<server>` verwenden.
 - Fail closed: bei fehlenden/veralteten Kursen oder ungültigen LLM-Antworten keine neue Order;
   nur abgeschlossene Kerzen; BTC-Fehler blockiert ETH nicht und umgekehrt.
 - Handelshistorie nie still zurücksetzen oder migrieren; nie zwei Prozesse auf derselben DB.
