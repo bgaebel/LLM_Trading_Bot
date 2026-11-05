@@ -1,5 +1,5 @@
-# Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (PAIRS, Quote) (adapted)
-# Origin: LLM-Trading-Arena@7563724 apps/arena/strategies.py (Candle) (adapted)
+# Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - PAIRS, Quote
+# Origin: LLM-Trading-Arena@7563724 apps/arena/strategies.py (adapted) - Candle
 """Market data value types. Pure, no I/O."""
 
 import math

@@ -85,7 +85,7 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 
 ## Risiken & offene Fragen
 - Bitvavo kann Format oder Rate-Limits geändert haben (in der Arena nie live geprüft) → AK7/AK8 decken es auf.
-- Die lokale Windows-Uhr kann abweichen → Uhrzeitprüfung (120 s) schlägt in AK7 eventuell an; dann ist der Grund sichtbar, nicht still.
+- Die lokale Uhr kann abweichen. Die 120-s-Prüfung vergleicht nur Snapshot-Zeit und Prüfzeit derselben Uhr (erkennt alte Snapshots, nicht eine falsch gehende Uhr); eine falsche Uhr fällt höchstens über die Frische-Prüfung der Kerzen (±90 s) auf. Auf dem Server sorgt NTP für die Uhr (Spec 002).
 - Umfang „Client + Snapshot" und Vorführung per CLI: mit der Freigabe am 2026-11-05 bestätigt.
 
 ---
@@ -97,6 +97,8 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 - 2026-11-06: Test-Hilfsmodul `tests/fakes.py`; dafür `pythonpath = ["tests"]` (pytest) und `mypy_path = "src,tests"`.
 - 2026-11-06 (23:18 UTC am 05.11.): erster Live-Abruf, damit erstmals gegen echte Bitvavo-Daten geprüft (in der Arena nie geschehen). `uv run trading-bot market` → beide Snapshots OK, Exit 0; BTC-EUR Spread 1,34 bp, ETH-EUR 2,68 bp; 1m 500 Kerzen, 15m/60m/240m je 499, 0 gefüllte Lücken. `uv run pytest -m net` → 4 passed. Das Format der Antworten entspricht dem, was der Arena-Code erwartet.
 - 2026-11-06: Die CLI holt Kerzen und Quotes selbst und prüft mit `MarketSnapshot.validate`, statt `build_snapshots` aufzurufen. So kann sie auch bei ungültigem Snapshot die Daten zeigen. Exit-Codes: 0 OK, 1 mindestens ein Markt ungültig, 2 Quotes nicht abrufbar.
+- 2026-11-06 (Prüfer, Blocker): Die eingeengte Fehlerliste `DATA_ERRORS` ließ echte Feed-Fehler durch – `http.client.IncompleteRead`/`BadStatusLine` (urllib verpackt sie nicht in `OSError`) und `OverflowError` bei JSON-`Infinity` im Zeitstempel. Folge: Ein kaputter BTC-Abruf kostete ETH den Snapshot. Behoben: Transport wandelt `HTTPException` in `TransportError`, Parser fängt `OverflowError`, `DATA_ERRORS` ergänzt; Ende-zu-Ende-Test `tests/market/test_isolation_e2e.py` über den echten urllib-Pfad.
+- 2026-11-06 (Prüfer, Hinweise): Laufende/zukünftige Kerzen werden wieder **vor** den Wertprüfungen verworfen (wie Arena und AK2); eine kaputte laufende Kerze verwirft nicht mehr das Intervall. `min_bars` ohne ein Intervall → `KeyError` statt still 1. `HTTPError` ohne Header → `HTTPFailure` statt `AttributeError`. Vorbedingung von `MarketSnapshot` (Zeilen vom Parser geprüft) im Docstring – wichtig, wenn Kerzen später aus SQLite kommen. Herkunftsvermerke exakt im ADR-0003-Format, auch in den aus Arena-Tests abgeleiteten Testdateien.
 
 ## Ergebnis
 - **Erreicht:** …

@@ -1,8 +1,10 @@
+# Origin: LLM-Trading-Arena@7563724 apps/arena/tests/test_reporting_recovery.py (adapted)
 import pytest
 
 from fakes import VALID_BOOK, FakeClock, FakeTransport, fail_with
 from llm_trading_bot.market.bitvavo import BitvavoClient
 from llm_trading_bot.market.http import HTTPFailure
+from llm_trading_bot.market.models import Symbol
 
 
 def test_429_without_headers_blocks_for_900_seconds() -> None:
@@ -50,7 +52,7 @@ def test_cooldown_is_shared_between_quotes_and_candles() -> None:
     with pytest.raises(HTTPFailure):
         client.quotes()
     with pytest.raises(HTTPFailure):
-        client._get("/BTC-EUR/candles?interval=1m&limit=500")
+        client.closed_candles(Symbol.BTCEUR, 1, now_epoch=1_800_000_000)
     assert len(transport.urls) == 1
 
 

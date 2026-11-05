@@ -1,3 +1,4 @@
+# Origin: LLM-Trading-Arena@7563724 apps/arena/tests/test_v031.py (adapted)
 from llm_trading_bot.market.bitvavo import fill_tiny_gaps
 from llm_trading_bot.market.models import Candle
 

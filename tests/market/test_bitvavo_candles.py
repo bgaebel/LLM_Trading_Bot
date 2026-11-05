@@ -1,3 +1,4 @@
+# Origin: LLM-Trading-Arena@7563724 apps/arena/tests/test_v03.py (adapted) - also test_research.py
 from typing import Any
 
 import pytest
@@ -94,3 +95,14 @@ def test_unsupported_interval_rejected_without_request(interval: int) -> None:
 def test_numeric_and_string_values_both_accepted() -> None:
     candle = fetch([[(BUCKET - 60) * 1000, 100, "101", 99.0, "100", 0]])[0]
     assert candle == Candle(BUCKET - 60, 100, 101, 99, 100, 0)
+
+
+def test_infinite_timestamp_rejected() -> None:
+    with pytest.raises(MarketDataError, match="timestamp"):
+        fetch([[float("inf"), "100", "101", "99", "100", "1"]])
+
+
+def test_broken_forming_bar_is_ignored_not_fatal() -> None:
+    # Arena behaviour: the forming bar is skipped before any value checks.
+    rows = [row(BUCKET, v="-1"), row(BUCKET - 60)]
+    assert [c.ts for c in fetch(rows)] == [BUCKET - 60]

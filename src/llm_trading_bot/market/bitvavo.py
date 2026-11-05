@@ -99,17 +99,19 @@ class BitvavoClient:
         step = interval * 60
         seen: dict[int, Candle] = {}
         for row in rows:
-            candle = _parse_candle(row, step)
-            # Never let a forming bar into a strategy: its close is not final yet.
-            if candle.ts + step > now_epoch:
+            # As in the Arena, forming and future bars are skipped before any other check:
+            # their values are not final, so they must neither be used nor reject the interval.
+            if _open_time(row) + step > now_epoch:
                 continue
+            candle = _parse_candle(row, step)
             if candle.ts in seen and seen[candle.ts] != candle:
                 raise MarketDataError(f"candles: conflicting duplicate at {candle.ts}")
             seen[candle.ts] = candle
         return tuple(seen[ts] for ts in sorted(seen))
 
 
-def _parse_candle(row: object, step: int) -> Candle:
+def _open_time(row: object) -> int:
+    """Open time in epoch seconds; rejects anything that is not an exact whole second."""
     if not isinstance(row, list | tuple) or len(row) < 6:
         raise MarketDataError("candles: incomplete OHLCV row")
     raw_ts = row[0]
@@ -118,16 +120,21 @@ def _parse_candle(row: object, step: int) -> Candle:
         raise MarketDataError("candles: invalid timestamp type")
     try:
         ts_ms = int(raw_ts)
-        if float(raw_ts) != ts_ms:
-            raise MarketDataError("candles: fractional millisecond timestamp")
-        values = [float(x) for x in row[1:6]]
-    except (TypeError, ValueError) as exc:
-        if isinstance(exc, MarketDataError):
-            raise
-        raise MarketDataError("candles: unreadable OHLCV row") from exc
-    if ts_ms % 1000:
+        exact = float(raw_ts) == ts_ms
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise MarketDataError("candles: unreadable timestamp") from exc
+    if not exact or ts_ms % 1000:
         raise MarketDataError("candles: fractional millisecond timestamp")
-    ts = ts_ms // 1000
+    return ts_ms // 1000
+
+
+def _parse_candle(row: object, step: int) -> Candle:
+    ts = _open_time(row)
+    assert isinstance(row, list | tuple)  # guaranteed by _open_time
+    try:
+        values = [float(x) for x in row[1:6]]
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise MarketDataError("candles: unreadable OHLCV row") from exc
     if ts % step:
         raise MarketDataError("candles: timestamp not aligned to interval")
     candle = Candle(ts, *values)

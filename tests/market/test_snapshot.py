@@ -1,3 +1,4 @@
+# Origin: LLM-Trading-Arena@7563724 apps/arena/tests/test_v031.py (adapted)
 from collections.abc import Callable
 
 import pytest
@@ -210,3 +211,8 @@ def test_non_ascending_bars_rejected() -> None:
     bars[60] = [*bars[60][:-2], bars[60][-1], bars[60][-2]]
     with pytest.raises(MarketDataError, match="ascending"):
         build_snapshots(FakeClient({s: bars for s in Symbol}), clock=ticking(NOW))
+
+
+def test_min_bars_without_an_interval_is_a_bug_not_a_default() -> None:
+    with pytest.raises(KeyError):
+        build_snapshots(FakeClient(), clock=ticking(NOW), min_bars={1: 45, 15: 110, 60: 110})

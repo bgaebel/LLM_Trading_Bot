@@ -1,6 +1,7 @@
-# Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (HTTPFailure, http_json GET path) (adapted)
+# Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - HTTPFailure, http_json GET
 """Minimal GET-only JSON transport. Kept narrow so tests can swap it for a fake."""
 
+import http.client
 import json
 import math
 import time
@@ -25,12 +26,16 @@ class HTTPFailure(RuntimeError):
         self.retry_after = retry_after
 
 
+class TransportError(RuntimeError):
+    """Connection broke mid-response (e.g. truncated body) - neither an HTTP status nor bad data."""
+
+
 class Transport(Protocol):
     def get_json(self, url: str) -> object: ...
 
 
-def _header_float(headers: Message, name: str) -> float | None:
-    raw = headers.get(name)
+def _header_float(headers: Message | None, name: str) -> float | None:
+    raw = None if headers is None else headers.get(name)
     if raw is None:
         return None
     try:
@@ -40,7 +45,7 @@ def _header_float(headers: Message, name: str) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def retry_after_seconds(headers: Message, *, now: float) -> float | None:
+def retry_after_seconds(headers: Message | None, *, now: float) -> float | None:
     """Delay requested by the server via Retry-After or bitvavo-ratelimit-resetat, capped to 1 h."""
     delay = 0.0
     retry_after = _header_float(headers, "Retry-After")
@@ -81,5 +86,8 @@ class UrllibTransport:
             # The body is dropped on purpose: error pages may echo request data into logs.
             delay = retry_after_seconds(exc.headers, now=self._clock())
             raise HTTPFailure(exc.code, delay) from None
+        except http.client.HTTPException as exc:
+            # urllib does not wrap these (IncompleteRead, BadStatusLine) into URLError/OSError.
+            raise TransportError(f"{type(exc).__name__} while reading response") from None
         result: object = json.loads(body.decode("utf-8"))
         return result

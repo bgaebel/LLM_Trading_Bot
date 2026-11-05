@@ -1,3 +1,4 @@
+# Origin: LLM-Trading-Arena@7563724 apps/arena/tests/test_v03.py (adapted)
 from typing import Any
 
 import pytest

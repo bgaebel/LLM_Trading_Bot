@@ -1,5 +1,5 @@
-# Origin: LLM-Trading-Arena@7563724 apps/arena/strategies.py (MultiSnapshot.validate) (adapted)
-# Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (live_snapshots) (adapted)
+# Origin: LLM-Trading-Arena@7563724 apps/arena/strategies.py (adapted) - MultiSnapshot.validate
+# Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (adapted) - live_snapshots
 """Validated per-market view of quotes and closed candles. Invalid data never becomes a snapshot."""
 
 import time
@@ -9,7 +9,7 @@ from itertools import pairwise
 from typing import Protocol
 
 from llm_trading_bot.market.bitvavo import fill_tiny_gaps
-from llm_trading_bot.market.http import HTTPFailure
+from llm_trading_bot.market.http import HTTPFailure, TransportError
 from llm_trading_bot.market.models import SYMBOLS, Candle, MarketDataError, Quote, Symbol
 
 INTERVALS: tuple[int, ...] = (1, 15, 60, 240)
@@ -22,7 +22,16 @@ MAX_CLOCK_DRIFT = 120
 MAX_QUOTE_AGE = 20
 
 # Errors that mean "this market's data is unusable right now" rather than a programming bug.
-DATA_ERRORS = (MarketDataError, HTTPFailure, OSError, ValueError)
+# Narrower than the Arena's `except Exception` so bugs stay visible; every real feed failure
+# must map onto one of these, otherwise one market's failure costs the other its snapshot.
+DATA_ERRORS = (
+    MarketDataError,
+    HTTPFailure,
+    TransportError,
+    OSError,
+    ValueError,
+    OverflowError,
+)
 
 
 class MarketClient(Protocol):
@@ -35,6 +44,11 @@ class MarketClient(Protocol):
 
 @dataclass(frozen=True)
 class MarketSnapshot:
+    """Precondition: bars passed the per-row checks of the Bitvavo parser (prices, volume,
+    OHLC range). ``validate`` checks only completeness, order, gaps and freshness; bars from any
+    other source (e.g. a database later) must be checked row by row first.
+    """
+
     symbol: Symbol
     bars: Mapping[int, tuple[Candle, ...]]
     quote: Quote
@@ -54,7 +68,8 @@ class MarketSnapshot:
         if abs(self.fetched_at - now_epoch) > MAX_CLOCK_DRIFT:
             raise MarketDataError(f"{name}: snapshot time off by {self.fetched_at - now_epoch}s")
         for tf in INTERVALS:
-            self._validate_bars(tf, self.bars.get(tf, ()), min_bars.get(tf, 1))
+            # A min_bars map without an interval is a configuration bug: KeyError, no default.
+            self._validate_bars(tf, self.bars.get(tf, ()), min_bars[tf])
 
     def _validate_bars(self, tf: int, seq: tuple[Candle, ...], minimum: int) -> None:
         name = self.symbol.market

@@ -1,3 +1,5 @@
+# Origin: LLM-Trading-Arena@7563724 apps/arena/tests/test_reporting_recovery.py (adapted)
+import http.client
 import io
 import json
 import urllib.error
@@ -7,7 +9,12 @@ from typing import Any
 
 import pytest
 
-from llm_trading_bot.market.http import HTTPFailure, UrllibTransport, retry_after_seconds
+from llm_trading_bot.market.http import (
+    HTTPFailure,
+    TransportError,
+    UrllibTransport,
+    retry_after_seconds,
+)
 
 
 def headers(**values: str) -> Message:
@@ -89,3 +96,28 @@ def test_get_request_is_plain_get_and_decodes_utf8(monkeypatch: pytest.MonkeyPat
     assert request.get_method() == "GET"
     assert request.data is None
     assert {k.lower() for k in request.headers} == {"user-agent", "accept"}
+
+
+def test_truncated_body_becomes_transport_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Truncated(FakeResponse):
+        def read(self, _limit: int) -> bytes:
+            raise http.client.IncompleteRead(b"par")
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: Truncated(b""))
+    with pytest.raises(TransportError, match="IncompleteRead"):
+        UrllibTransport().get_json("https://example.invalid")
+
+
+def test_http_error_without_headers_still_gives_http_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = urllib.error.HTTPError("https://example.invalid", 502, "bad", None, None)  # type: ignore[arg-type]
+
+    def fail(*_args: Any, **_kwargs: Any) -> None:
+        raise failure
+
+    monkeypatch.setattr(urllib.request, "urlopen", fail)
+    with pytest.raises(HTTPFailure) as exc:
+        UrllibTransport().get_json("https://example.invalid")
+    assert exc.value.status == 502
+    assert exc.value.retry_after is None

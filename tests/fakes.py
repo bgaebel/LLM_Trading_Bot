@@ -1,3 +1,4 @@
+# Origin: LLM-Trading-Arena@7563724 apps/arena/tests/test_reporting_recovery.py (adapted)
 """Test doubles for the market-data transport and clocks."""
 
 from collections.abc import Callable
