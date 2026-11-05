@@ -1,5 +1,0 @@
-# Applies to own code (app/, test/). CubeMX output (Core/, Drivers/, Middlewares/) is excluded
-# from the lint command, because reformatting it causes diffs on every regeneration.
-BasedOnStyle: LLVM
-IndentWidth: 4
-ColumnLimit: 100

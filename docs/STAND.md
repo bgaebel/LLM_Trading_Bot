@@ -1,24 +1,23 @@
 # Stand
 
-<!-- Übergabe-Notiz für die nächste Session. Wird ÜBERSCHRIEBEN, nicht fortgeschrieben.
-     Max. ~40 Zeilen. Historie steht in git log, Specs und ADRs – nicht hier.
-     Lebt auf dem Branch, auf dem gearbeitet wird (beim Merge gewinnt die Branch-Version). -->
-
-**Aktualisiert:** {{JJJJ-MM-TT}} · **Branch:** `main` · **Meilenstein:** {{M1 – ...}}
+**Aktualisiert:** 2026-11-05 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-Projekt ist noch nicht eingerichtet → als Nächstes `/kickoff` ausführen.
+Projekt per `/kickoff` eingerichtet (Python 3.12 / uv, Gerüst mit Modusprüfung, ADR-0002 bis 0005).
+M1 startet: Arena-Module schrittweise übernehmen, Ziel Paper-Betrieb auf dem Hetzner CX23.
 
 ## Nächster Schritt
-1. `/kickoff`
+1. `/spec` für M1 Nr. 1 – Marktdaten aus der Arena übernehmen (Bitvavo-Quotes, abgeschlossene Kerzen).
+2. Danach Nr. 2 klären: welche Arena-Strategie der Bot fährt (Arena-Ergebnisse ansehen).
 
 ## In Arbeit
 - Spec: –
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
-- –
+- `gh` ist nicht angemeldet (`gh auth login`) → Labels (`bash scripts/github-labels.sh`) und Branch-Schutz für `main` stehen noch aus.
 
 ## Offen – manuell prüfen
-<!-- Dinge, die nur der Nutzer prüfen kann (Hardware, UI, Freigaben). -->
-- –
+- CI auf GitHub läuft nach dem ersten Push grün durch.
+- Hetzner-Server: Ubuntu-Version, Benutzer und SSH-Zugang festhalten (für M1 Nr. 6).
+- Offene Projektentscheidungen: LLM-Budget, Startkapital für M2.

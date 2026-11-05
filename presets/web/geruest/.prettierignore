@@ -1,8 +1,0 @@
-# Prettier also reads .gitignore; repeated here so `pnpm lint` never depends on it.
-dist/
-coverage/
-pnpm-lock.yaml
-# Docs and template/tooling files are not owned by Prettier.
-*.md
-.github/
-.claude/

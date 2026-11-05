@@ -1,7 +1,7 @@
 # ADR-0001: Tragende Entscheidungen als ADR festhalten; nur per neuem ADR revidieren
 
 - **Status:** angenommen
-- **Datum:** {{JJJJ-MM-TT}}
+- **Datum:** 2026-11-05
 - **Bereich:** #prozess
 
 ## Kontext

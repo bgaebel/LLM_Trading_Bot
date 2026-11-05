@@ -1,19 +1,43 @@
-# Generic placeholder. /kickoff replaces this file with the CI of the chosen stack preset.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  placeholder:
+  check:
+    # Add windows-latest via a matrix if the code touches paths, encodings or subprocesses.
     runs-on: ubuntu-latest
     steps:
-      - name: No stack preset applied
-        run: |
-          echo "::notice title=CI placeholder::No stack preset applied yet. Run /kickoff to replace .github/workflows/ci.yml with real build/test/lint jobs."
+      - uses: actions/checkout@v7
+
+      # setup-uv publishes no floating major tag since v8 -> pin the full version.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # Python version comes from .python-version; --locked fails if uv.lock is stale.
+      - name: Install
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run ruff check --output-format=github .
+
+      - name: Format
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy src
+
+      - name: Test
+        # Once hardware tests exist: uv run pytest -m "not hw"
+        run: uv run pytest

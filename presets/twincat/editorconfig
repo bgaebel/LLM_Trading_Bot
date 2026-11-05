@@ -1,8 +1,0 @@
-# --- twincat ---
-# XAE writes CRLF and its own indentation/whitespace; editors must not reformat these files.
-[*.{TcPOU,TcDUT,TcGVL,TcIO,TcTTO,TcVis,TcTLO,TcGTLO,TcIPO,TcVMO,TcRMO,plcproj,tsproj,tspproj,xti,tmc,sln}]
-end_of_line = crlf
-indent_style = unset
-indent_size = unset
-trim_trailing_whitespace = false
-insert_final_newline = unset

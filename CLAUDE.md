@@ -1,6 +1,7 @@
-# {{PROJEKTNAME}}
+# LLM Trading Bot
 
-{{Ein Satz: Was ist das, für wen, welches Problem löst es.}}
+Trading-Bot für BTC/EUR und ETH/EUR auf einem Hetzner-Cloud-Server, gebaut aus Modulen der
+[LLM Trading Arena](https://github.com/bgaebel/LLM-Trading-Arena) – erst Paper, später Echtgeld.
 Details: `docs/PROJEKT.md` · Aufbau: `docs/ARCHITEKTUR.md` · Plan: `docs/ROADMAP.md`
 
 <!-- Diese Datei wird in JEDER Session vollständig geladen. Halte sie unter ~120 Zeilen.
@@ -8,19 +9,22 @@ Details: `docs/PROJEKT.md` · Aufbau: `docs/ARCHITEKTUR.md` · Plan: `docs/ROADM
 
 ## Befehle
 
-Stack: {{z. B. ESP32 / ESP-IDF 5.5 / C}} · Shell: {{Bash-Tool | PowerShell-Tool – womit die Befehle laufen}}
+Stack: Python 3.12 / uv / pytest / ruff / mypy (strict) · Ziel: Hetzner Cloud CX23, Ubuntu, systemd · Shell: Bash-Tool (Git Bash)
 
 | Zweck | Befehl |
 |---|---|
-| Build | `{{...}}` |
-| Test (Host) | `{{...}}` |
-| Lint/Format | `{{...}}` |
-| Flash / Run | `{{...}}` |
-| Monitor / Logs | `{{...}}` |
+| Build | `uv sync` |
+| Test (Host) | `uv run pytest` |
+| Lint/Format | `uv run ruff check . && uv run ruff format --check . && uv run mypy src` (Fix: `uv run ruff check --fix . && uv run ruff format .`) |
+| Run (lokal) | `uv run trading-bot` (Dienst läuft später endlos → nur mit Timeout/im Hintergrund) |
+| Deploy | – (folgt in M1 Nr. 6; nie ohne Zustimmung) |
+| Logs (Server) | – (geplant `journalctl -u <unit>`; `-f` nur mit Timeout) |
 
-„Fertig" heißt: Build + Tests + Lint grün. Schritte, die echte Hardware oder einen Menschen brauchen,
-benenne ich ausdrücklich als **offen – manuell prüfen** und behaupte sie nie als erledigt.
-Flashen nur mit angeschlossenem Board und Zustimmung; Monitor/Run-Befehle, die nicht von selbst enden, nur mit Timeout.
+uv ist per winget installiert; findet die Shell `uv` nicht (PATH erst nach Neustart aktiv), liegt es unter
+`$LOCALAPPDATA/Microsoft/WinGet/Packages/astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe/uv.exe`.
+
+„Fertig" heißt: Build + Tests + Lint grün. Schritte, die den echten Server, echte APIs oder einen Menschen
+brauchen, benenne ich ausdrücklich als **offen – manuell prüfen** und behaupte sie nie als erledigt.
 
 ## Arbeitsweise
 
@@ -30,7 +34,7 @@ Flashen nur mit angeschlossenem Board und Zustimmung; Monitor/Run-Befehle, die n
    das eine Entscheidung berührt, lese ich das ADR. Will ich davon abweichen: Begründung nennen,
    den Nutzer fragen, bei Zustimmung ein neues ADR anlegen, das das alte ablöst (`/entscheidung`).
    Nie still revidieren.
-3. **Code-Anker beachten.** `// ADR-NNNN: …` oder `// LEARNING(#tag): <Titel>` im Code markiert absichtlich
+3. **Code-Anker beachten.** `# ADR-NNNN: …` oder `# LEARNING(#tag): <Titel>` im Code markiert absichtlich
    so gebauten Code. Nicht „aufräumen", ohne das Referenzierte gelesen zu haben
    (Learning finden: `grep -n "<Titel>" docs/LEARNINGS.md`).
 4. **Vor Arbeit in einem Bereich** `docs/LEARNINGS.md` nach dem Bereich durchsuchen (grep nach dem
@@ -78,14 +82,20 @@ Flashen nur mit angeschlossenem Board und Zustimmung; Monitor/Run-Befehle, die n
 | `docs/debug/NNN-*.md` | Fehlersuche-Protokoll (Hypothesen, Ergebnisse) | während `/diagnose` |
 | `docs/ARCHITEKTUR.md` | Module, Schnittstellen, Datenfluss | wenn sich die Struktur ändert |
 | `docs/PROJEKT.md` | Ziel, Nicht-Ziele, Randbedingungen, Glossar | selten, nur mit Nutzer |
-| `docs/hardware/` | Fakten: Pinout, Datenblatt-Notizen, Errata (nur Firmware) | bei Hardware-Fakten; Erfahrung damit → LEARNINGS mit Link |
 
 ## Projektspezifische Regeln
 
-<!-- Harte Regeln, deren Verletzung Schaden anrichtet. Kurz halten. Beispiele:
-- Nie `idf.py erase-flash` ohne Rückfrage – auf dem Board liegen Kalibrierdaten.
-- Interrupt-Handler allokieren keinen Speicher (ADR-0004). -->
-- {{...}}
+<!-- Harte Regeln, deren Verletzung Schaden anrichtet. Kurz halten. -->
+- **Kein Echtgeld vor M2 (ADR-0004):** keine Order-Endpunkte implementieren oder aufrufen, keine Bitvavo-Keys
+  mit Handelsrecht anlegen/verwenden. `live` bleibt gesperrt, bis ein neues ADR es freigibt.
+- Secrets (`.env`), SQLite-DBs, Backups und Logs nie committen, loggen oder in Diffs zeigen.
+- Fail closed: bei fehlenden/veralteten Kursen oder ungültigen LLM-Antworten keine neue Order;
+  nur abgeschlossene Kerzen; BTC-Fehler blockiert ETH nicht und umgekehrt.
+- Handelshistorie nie still zurücksetzen oder migrieren; nie zwei Prozesse auf derselben DB.
+- Gebühren, Slippage, Strategieregeln und Prompts nur mit Tests und neuer Strategieversion ändern.
+- HTTP bindet nur an `127.0.0.1`; Zugriff per SSH-Tunnel (ADR-0005).
+- Befehle auf dem Hetzner-Server (SSH, Deploy, Neustart) nur mit Zustimmung des Nutzers.
+- Aus der Arena übernommener Code bekommt den Herkunftsvermerk aus ADR-0003; das Arena-Repo wird von hier nicht geändert.
 
 ## Aktueller Stand
 

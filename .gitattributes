@@ -40,5 +40,3 @@
 # GitHub language stats
 docs/** linguist-documentation
 
-# TwinCAT skeleton files keep CRLF like XAE writes them (projects get this via presets/twincat/gitattributes)
-presets/twincat/geruest/**/*.Tc* text eol=crlf

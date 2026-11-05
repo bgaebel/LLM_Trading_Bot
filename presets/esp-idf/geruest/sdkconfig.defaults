@@ -1,6 +1,0 @@
-# Committed baseline config. sdkconfig itself is generated and gitignored.
-# Target-specific overrides go into sdkconfig.defaults.<target> (e.g. sdkconfig.defaults.esp32s3).
-CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
-CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
-CONFIG_COMPILER_OPTIMIZATION_SIZE=y
