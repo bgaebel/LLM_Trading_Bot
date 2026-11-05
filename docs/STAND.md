@@ -8,11 +8,11 @@ oder Passwort-Login, ufw nur SSH, automatische Sicherheitsupdates. Neustart und 
 Zugangsdaten stehen nur lokal (`~/.ssh/config`, Alias), nicht im Repo.
 
 ## Nächster Schritt
-1. `/abschluss` für Spec 002 (PR → CI grün → Squash-Merge).
+1. PR für Spec 002 durchsehen (AK8) und mergen (Squash), wenn die CI grün ist.
 2. `/umsetzen 001` – Marktdaten aus der Arena übernehmen.
 
 ## In Arbeit
-- Spec: 002 (in Arbeit, alle Plan-Schritte erledigt) · 001 (freigegeben)
+- Spec: 002 (fertig, PR offen) · 001 (freigegeben)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf

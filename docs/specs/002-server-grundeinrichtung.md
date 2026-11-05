@@ -1,6 +1,6 @@
 # Spec 002: Server-Grundeinrichtung (Härtung)
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s002-server-setup` · **Meilenstein:** M1 (Teil von Nr. 6)
 - **Erstellt:** 2026-11-05
 
@@ -15,22 +15,22 @@ UTC, NTP synchron, Python 3.12.3. Nur `root` mit Key; `PasswordAuthentication ye
 unattended-upgrades installiert, offene Ports nur 22.
 
 ## Akzeptanzkriterien
-- [ ] AK1: `deploy/setup-server.sh` ist idempotent (zweiter Lauf ändert nichts und endet mit 0). Benutzername und
+- [x] AK1: `deploy/setup-server.sh` ist idempotent (zweiter Lauf ändert nichts und endet mit 0). Benutzername und
   Public Key kommen als Parameter. Im Skript stehen keine IP, kein Hostname und kein Benutzername.
   — Nachweis: CI-Job `bash -n` + `shellcheck deploy/*.sh`; [manuell] zweiter Lauf auf dem Server ohne Änderungen
-- [ ] AK2: Ein Admin-Benutzer meldet sich per Key an und hat sudo. Ein Systembenutzer für den späteren Dienst
+- [x] AK2: Ein Admin-Benutzer meldet sich per Key an und hat sudo. Ein Systembenutzer für den späteren Dienst
   existiert ohne Login-Shell und ohne sudo.
   — Nachweis: [manuell] `ssh <admin>@<server> sudo -n true` → Exit 0; `getent passwd <dienst>` zeigt `/usr/sbin/nologin`
-- [ ] AK3: Kein Root-Login und kein Passwort-Login mehr.
+- [x] AK3: Kein Root-Login und kein Passwort-Login mehr.
   — Nachweis: [manuell] `sshd -T` zeigt `permitrootlogin no`, `passwordauthentication no`,
   `kbdinteractiveauthentication no`; `ssh root@<server>` wird abgewiesen
-- [ ] AK4: Firewall aktiv: eingehend alles verboten außer SSH (Port 22, mit Rate-Limit), ausgehend erlaubt.
+- [x] AK4: Firewall aktiv: eingehend alles verboten außer SSH (Port 22, mit Rate-Limit), ausgehend erlaubt.
   — Nachweis: [manuell] `ufw status verbose`
-- [ ] AK5: Sicherheitsupdates werden automatisch installiert, Neustart bei Bedarf um 04:00 UTC.
+- [x] AK5: Sicherheitsupdates werden automatisch installiert, Neustart bei Bedarf um 04:00 UTC.
   — Nachweis: [manuell] `/etc/apt/apt.conf.d/52-llm-trading-bot` vorhanden, `unattended-upgrade --dry-run` ohne Fehler
-- [ ] AK6: Uhr bleibt UTC und NTP-synchron (Voraussetzung für die Zeitprüfungen aus Spec 001).
+- [x] AK6: Uhr bleibt UTC und NTP-synchron (Voraussetzung für die Zeitprüfungen aus Spec 001).
   — Nachweis: [manuell] `timedatectl show -p Timezone -p NTPSynchronized` → `Etc/UTC`, `yes`
-- [ ] AK7: Lokal gibt es einen SSH-Alias für den Server, nur in `~/.ssh/config`, nicht im Repo.
+- [x] AK7: Lokal gibt es einen SSH-Alias für den Server, nur in `~/.ssh/config`, nicht im Repo.
   — Nachweis: [manuell] `ssh <alias> true` ohne weitere Angaben
 - [ ] AK8: `docs/betrieb/server.md` beschreibt Einrichtung, Notzugang (Hetzner-Konsole) und Prüfbefehle,
   nur mit Platzhaltern (`<server>`, `<admin>`). — Nachweis: `bash scripts/docs-check.sh`; Durchsicht im PR
@@ -87,8 +87,18 @@ Verworfen: Ansible (für einen Server zu schwer), cloud-init (der Server existie
 - 2026-11-05: Zusätzlich (nicht im Plan) neu gestartet, weil die Updates es verlangten. Danach: Kernel 6.8.0-138, kein weiterer Neustart nötig, ufw aktiv, sshd-Härtung wirksam. Zweiter Lauf beider Phasen: `changes: 0` (AK1).
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Server gehärtet: Key-Login nur für den Admin-Benutzer (sudo ohne Passwort), Root- und Passwort-Login
+  aus, ufw nur 22/tcp mit Rate-Limit (v4+v6), automatische Sicherheitsupdates mit Neustart 04:00 UTC, UTC/NTP,
+  Systembenutzer für den Dienst ohne Shell und sudo. Einrichtung reproduzierbar per `deploy/setup-server.sh`.
+- **Abweichungen vom Plan:** zusätzlicher Neustart nach den Updates (Härtung danach weiter wirksam); Beispielaufrufe
+  im Skriptkopf korrigiert (Key zerfiel über ssh). Nach der Prüfung: `bash -n` in CI je Datei, Rücknahme des
+  sshd-Drop-ins nur, wenn dieser Lauf ihn geschrieben hat, Primärgruppe statt gleichnamiger Gruppe.
+- **Nachweise:** lokal `uv run pytest` (7 passed), ruff/mypy/shellcheck grün, `docs-check` 0 Fehler. Server: `sshd -T`
+  (permitrootlogin no, passwordauthentication no, kbdinteractiveauthentication no, pubkeyauthentication yes),
+  `ssh root@<server>` → „Permission denied (publickey)", `ufw status verbose`, `timedatectl`, `apt-config dump`;
+  zweiter und dritter Lauf beider Phasen `changes: 0`. Unabhängiger Prüfer: bereit, keine Blocker, alle Server-AKs
+  selbst gegengeprüft. AK8: Durchsicht im PR durch den Nutzer.
+- **Offen / Folgearbeit:** optional Hetzner-Cloud-Firewall und Backups/Snapshot (manuell); Deployment des Bots
+  (Unit, Verzeichnisse, `.env`, Backup) in M1 Nr. 6.
+- **Neue ADRs / Learnings:** ADR-0006; Learnings „Argumente mit Leerzeichen über ssh zerfallen" und
+  „sshd übernimmt den ersten Wert – cloud-init kann Passwort-Login einschalten".
