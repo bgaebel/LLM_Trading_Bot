@@ -74,7 +74,7 @@ Kostenannahmen: Die Arena nutzt im Code `TAKER_FEE=0.0025` und `SLIPPAGE=0.0005`
 
 ## Plan
 - [x] 1. Generator + Fixtures (aus Arena@7563724) + `indicators.py` + Golden-Test der Indikatoren (AK1, AK6)
-- [ ] 2. `signals.py` mit `Signal`, fünf Strategien + Golden-Test der Signale + Zweigabdeckung (AK2, AK3, AK5)
+- [x] 2. `signals.py` mit `Signal`, fünf Strategien + Golden-Test der Signale + Zweigabdeckung (AK2, AK3, AK5)
 - [ ] 3. `payload.py` mit `feature_payload` und `cost_roundtrip` + Golden-Test (AK4)
 - [ ] 4. CLI `trading-bot signals` (AK7)
 - [ ] 5. Doku: ARCHITEKTUR.md (Modul strategy), README
