@@ -51,6 +51,7 @@ prepare() {
 
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
+  # Package upgrades are not counted in "changes": that counter covers configuration only.
   apt-get -y -qq upgrade
   apt-get -y -qq install --no-install-recommends ufw unattended-upgrades >/dev/null
 
@@ -78,14 +79,16 @@ prepare() {
   home="$(getent passwd "$admin" | cut -d: -f6)"
   ssh_dir="$home/.ssh"
   keys="$ssh_dir/authorized_keys"
-  install -d -m 700 -o "$admin" -g "$admin" "$ssh_dir"
+  local group
+  group="$(id -gn "$admin")"
+  install -d -m 700 -o "$admin" -g "$group" "$ssh_dir"
   touch "$keys"
   if ! grep -qxF "$pubkey" "$keys"; then
     printf '%s\n' "$pubkey" >> "$keys"
     log "added      admin SSH key"
     changes=$((changes + 1))
   fi
-  chown "$admin:$admin" "$keys"
+  chown "$admin:$group" "$keys"
   chmod 600 "$keys"
 
   local sudoers="/etc/sudoers.d/90-admin-$admin" rule tmp
@@ -142,16 +145,20 @@ lock() {
   [ -s "$keys" ] || die "admin has no authorized_keys - refusing to lock out root"
   [ -f "/etc/sudoers.d/90-admin-$admin" ] || die "admin has no sudo rule - refusing to lock out root"
 
-  # Ubuntu cloud images set 'PasswordAuthentication yes' in 50-cloud-init.conf. sshd keeps the FIRST
-  # value it reads, so this drop-in must sort before it.
-  local conf=/etc/ssh/sshd_config.d/01-hardening.conf
+  # LEARNING(#ssh): sshd übernimmt den ersten Wert – cloud-init kann Passwort-Login einschalten
+  # sshd keeps the FIRST value it reads and drop-ins load alphabetically, so this one must sort first.
+  local conf=/etc/ssh/sshd_config.d/01-hardening.conf before=$changes
   write_file "$conf" 644 \
 '# Spec 002 / ADR-0006: key-only login, no root.
 PermitRootLogin no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PubkeyAuthentication yes'
-  sshd -t || { rm -f "$conf"; die "sshd config invalid - drop-in removed, nothing reloaded"; }
+  if ! sshd -t; then
+    # Only roll back a drop-in written by this run; an existing one is not the cause and must stay.
+    [ "$changes" -gt "$before" ] && rm -f "$conf"
+    die "sshd config invalid - nothing reloaded"
+  fi
   systemctl reload ssh
 
   local effective

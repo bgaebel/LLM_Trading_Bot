@@ -35,7 +35,8 @@ Voraussetzung: Der Server wurde mit dem lokalen Key `<key>` für root angelegt.
    ssh <alias> "sudo bash -s -- lock <admin>" < deploy/setup-server.sh
    ```
 
-Beide Phasen sind idempotent: Ein erneuter Lauf meldet `unchanged` und `changes: 0`.
+Beide Phasen sind idempotent: Ein erneuter Lauf meldet `unchanged` und `changes: 0`. `changes` zählt nur die
+Konfiguration; `prepare` spielt zusätzlich anstehende Paket-Updates ein (`apt-get upgrade`).
 
 ## Prüfbefehle
 ```bash
@@ -54,7 +55,7 @@ danach `/etc/ssh/sshd_config.d/01-hardening.conf` prüfen bzw. `authorized_keys`
 ## Fallen
 - **ufw-Rate-Limit:** Viele SSH-Verbindungen kurz hintereinander (Skripte, Schleifen) werden nach 6 in 30 s
   verworfen und sehen wie ein Ausfall aus. Ein paar Sekunden warten, Befehle in einer Sitzung bündeln.
-- **cloud-init:** Ubuntu-Images setzen `PasswordAuthentication yes` in `50-cloud-init.conf`. sshd übernimmt den
+- **cloud-init:** Viele Ubuntu-Images setzen `PasswordAuthentication yes` in `50-cloud-init.conf` (unser Hetzner-Image nicht). sshd übernimmt den
   ersten Wert, deshalb heißt der eigene Drop-in `01-…`. Immer mit `sshd -T` prüfen, nicht mit der Datei.
 - **Argumente über ssh:** `ssh` fügt die entfernten Argumente zu einer Kommandozeile zusammen. Werte mit
   Leerzeichen (Public Key) brauchen innere einfache Anführungszeichen, wie oben.

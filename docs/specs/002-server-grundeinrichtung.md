@@ -45,7 +45,7 @@ unattended-upgrades installiert, offene Ports nur 22.
 - ADR-0005: CX23, Ubuntu, systemd; Zugang nur per SSH-Key, Firewall nur SSH, Status nur per Tunnel.
 - ADR-0006: Admin-Benutzer mit `sudo NOPASSWD` und Key; eigener Systembenutzer für den Dienst.
 - CLAUDE.md: Repo ist öffentlich → IP, Hostname und Benutzernamen nur als Platzhalter; Server-Befehle nur mit Zustimmung.
-- LEARNINGS #git #windows (CRLF): `*.sh` muss LF haben – `.gitattributes` regelt das bereits.
+- `.gitattributes`: `*.sh` muss LF haben (`*.sh text eol=lf` ist bereits gesetzt).
 
 ## Ansatz
 Ein Bash-Skript `deploy/setup-server.sh`, das als root auf dem Server läuft, in zwei Phasen:
@@ -70,7 +70,7 @@ Verworfen: Ansible (für einen Server zu schwer), cloud-init (der Server existie
 
 ## Risiken & offene Fragen
 - Aussperren: Wird abgesperrt, bevor der Admin-Login klappt, hilft nur noch die Hetzner-Konsole → Zwei-Phasen-Ablauf, Gegenprobe in zweiter Sitzung.
-- Ubuntu-Cloud-Images setzen in `/etc/ssh/sshd_config.d/50-cloud-init.conf` `PasswordAuthentication yes`.
+- Viele Ubuntu-Cloud-Images setzen in `/etc/ssh/sshd_config.d/50-cloud-init.conf` `PasswordAuthentication yes`.
   sshd übernimmt den **ersten** Wert, deshalb heißt der Drop-in `01-…`. AK3 prüft mit `sshd -T`, nicht nur die Datei.
 - Automatischer Neustart um 04:00 UTC: Solange es keinen Dienst gibt, ist das egal. Später muss der Bot einen
   Neustart vertragen (M1-Kriterium), dann prüft ihn das sogar regelmäßig.

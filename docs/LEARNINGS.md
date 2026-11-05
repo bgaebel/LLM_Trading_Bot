@@ -72,8 +72,8 @@
 - **Ursache:** `ssh` fügt alle entfernten Argumente mit Leerzeichen zu **einer** Kommandozeile zusammen, die die entfernte Shell neu zerlegt; lokale Anführungszeichen gehen verloren.
 - **Lösung / Regel:** Ganze entfernte Kommandozeile in doppelte Anführungszeichen, Werte darin in einfache: `ssh host "bash -s -- prepare a b '$KEY'" < skript.sh`.
 
-### sshd übernimmt den ersten Wert – cloud-init schaltet Passwort-Login ein #ssh #hetzner #ubuntu
+### sshd übernimmt den ersten Wert – cloud-init kann Passwort-Login einschalten #ssh #hetzner #ubuntu
 *2026-11-05 · Quelle: Spec 002*
-- **Symptom:** `PasswordAuthentication no` in einer eigenen Datei wirkt nicht.
-- **Ursache:** Ubuntu-Cloud-Images haben `/etc/ssh/sshd_config.d/50-cloud-init.conf` mit `PasswordAuthentication yes`; sshd nimmt je Option den **ersten** gelesenen Wert, Dateien alphabetisch.
+- **Symptom:** (bekannte Falle, auf unserem Hetzner-Server nicht aufgetreten) `PasswordAuthentication no` in einer eigenen Datei wirkt nicht.
+- **Ursache:** Viele Ubuntu-Cloud-Images legen `/etc/ssh/sshd_config.d/50-cloud-init.conf` mit `PasswordAuthentication yes` an (das Hetzner-Image vom 2026-11-05 nicht – dort war `yes` der Standardwert). sshd nimmt je Option den **ersten** gelesenen Wert, Dateien alphabetisch.
 - **Lösung / Regel:** Eigenen Drop-in `01-…` nennen und immer mit `sshd -T` (wirksame Werte) prüfen, nie nur die Datei ansehen.

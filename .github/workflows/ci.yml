@@ -36,7 +36,10 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Shell lint
-        run: bash -n deploy/*.sh scripts/*.sh && uv run shellcheck deploy/*.sh scripts/*.sh
+        # bash -n checks only its first argument, so loop over every file.
+        run: |
+          for f in deploy/*.sh scripts/*.sh; do bash -n "$f"; done
+          uv run shellcheck deploy/*.sh scripts/*.sh
 
       - name: Type check
         run: uv run mypy src

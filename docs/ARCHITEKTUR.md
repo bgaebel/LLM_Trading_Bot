@@ -34,7 +34,7 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | `src/llm_trading_bot/core.py` | Reine Logik ohne I/O (aktuell: Modusauflösung) |
 | `tests/` | pytest-Tests |
 | `deploy/` | Server-Skripte; `setup-server.sh` härtet einen frischen Server (Spec 002) |
-| `.github/workflows/` | CI (ruff, mypy, pytest) und Doku-Prüfung |
+| `.github/workflows/` | CI (ruff, mypy, pytest, shellcheck) und Doku-Prüfung |
 
 ## Module & Schnittstellen
 ### core
