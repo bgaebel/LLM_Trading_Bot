@@ -81,7 +81,7 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 - [x] 4. `closed_candles()` + `fill_tiny_gaps()` mit den Arena-Testfällen (AK2, AK3)
 - [x] 5. `market/snapshot.py` + Tests inkl. Fehlerisolation BTC/ETH (AK5)
 - [x] 6. CLI `trading-bot market`, Marker `net` registrieren, Live-Test, CI auf `-m "not net"` (AK7, AK8)
-- [ ] 7. Doku: ARCHITEKTUR.md (Modul market), README (Befehl)
+- [x] 7. Doku: ARCHITEKTUR.md (Modul market), README (Befehl)
 
 ## Risiken & offene Fragen
 - Bitvavo kann Format oder Rate-Limits geändert haben (in der Arena nie live geprüft) → AK7/AK8 decken es auf.
