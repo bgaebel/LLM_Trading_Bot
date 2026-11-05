@@ -40,7 +40,7 @@ stammt aus der Arena und ist dort erprobt.
   Bei Fehler ist der Exit-Code ≠ 0. — Nachweis: [manuell] Befehl lokal ausführen, Ausgabe in „Verlauf" festhalten
 - [x] AK8: Tests gegen die echte Bitvavo-API haben den Marker `net` und laufen in CI nicht mit.
   — Nachweis: [manuell] `uv run pytest -m net` grün; CI-Log zeigt `-m "not net"`
-- [ ] AK9: Lint, Format, mypy strict und CI sind grün.
+- [x] AK9: Lint, Format, mypy strict und CI sind grün.
   — Nachweis: `uv run ruff check . && uv run ruff format --check . && uv run mypy src`, CI-Lauf im PR
 
 ## Abgrenzung
@@ -112,7 +112,7 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 - **Nachweise:** `uv run pytest` 123 passed, 4 deselected; `uv run pytest -m net` 4 passed; ruff, format,
   `mypy src tests`, shellcheck grün; `uv run trading-bot market` → 2× snapshot: OK, Exit 0 (BTC 1,34 bp, ETH 2,68 bp).
   Unabhängiger Prüfer: erst ein Blocker (Isolation bei `IncompleteRead`/`OverflowError`), nach `c82a61a` bereit;
-  neue Tests schlagen gegen den alten Stand fehl. AK9: CI-Lauf im PR.
+  neue Tests schlagen gegen den alten Stand fehl. CI im PR #2 grün (`pytest -m "not net"`: 123 passed, 4 deselected); Squash-Merge 925d81c.
 - **Offen / Folgearbeit:** Speichern und Worker-Takt (M1 Nr. 3/5); bei Kerzen aus SQLite die Zeilenprüfung
   wiederholen (Vorbedingung `MarketSnapshot`); Strategie legt `min_bars` fest (Nr. 2).
 - **Neue ADRs / Learnings:** keine neuen ADRs. Erkenntnis aus der Prüfung im Verlauf: eine eingeengte

@@ -1,18 +1,18 @@
 # Stand
 
-**Aktualisiert:** 2026-11-05 · **Branch:** `feat/s001-marktdaten` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-05 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-Spec 002 (Server-Härtung) ist fertig und gemergt (PR #1). Spec 001 (Marktdaten) ist umgesetzt, Live-Abruf gegen Bitvavo erfolgreich. Der Server ist zu: nur Key-Login über den Admin-Benutzer, kein Root-
+Spec 002 (Server-Härtung) ist fertig und gemergt (PR #1). Spec 001 (Marktdaten) ist fertig und gemergt (PR #2): Bitvavo-Quotes und Kerzen, geprüfte Snapshots, `trading-bot market`. Der Server ist zu: nur Key-Login über den Admin-Benutzer, kein Root-
 oder Passwort-Login, ufw nur SSH, automatische Sicherheitsupdates. Neustart und zweiter Lauf sind geprüft.
 Zugangsdaten stehen nur lokal (`~/.ssh/config`, Alias), nicht im Repo.
 
 ## Nächster Schritt
-1. PR für Spec 001 mergen (Squash), wenn die CI grün ist.
-2. Danach M1 Nr. 2 planen: welche Arena-Strategie der Bot fährt.
+1. `/spec` für M1 Nr. 2: welche Arena-Strategie der Bot fährt (klassisch oder LLM) – Arena-Ergebnisse ansehen.
+2. Danach Nr. 3 (Paper-Ausführung + SQLite).
 
 ## In Arbeit
-- Spec: 001 (fertig, PR offen)
+- Spec: –
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
