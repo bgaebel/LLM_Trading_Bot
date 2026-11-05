@@ -15,7 +15,7 @@ Stack: Python 3.12 / uv / pytest / ruff / mypy (strict) · Ziel: Hetzner Cloud C
 |---|---|
 | Build | `uv sync` |
 | Test (Host) | `uv run pytest` |
-| Lint/Format | `uv run ruff check . && uv run ruff format --check . && uv run mypy src` (Fix: `uv run ruff check --fix . && uv run ruff format .`) |
+| Lint/Format | `uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run shellcheck deploy/*.sh scripts/*.sh` (Fix: `uv run ruff check --fix . && uv run ruff format .`) |
 | Run (lokal) | `uv run trading-bot` (Dienst läuft später endlos → nur mit Timeout/im Hintergrund) |
 | Deploy | – (folgt in M1 Nr. 6; nie ohne Zustimmung) |
 | Logs (Server) | – (geplant `journalctl -u <unit>`; `-f` nur mit Timeout) |
@@ -89,6 +89,8 @@ brauchen, benenne ich ausdrücklich als **offen – manuell prüfen** und behaup
 - **Kein Echtgeld vor M2 (ADR-0004):** keine Order-Endpunkte implementieren oder aufrufen, keine Bitvavo-Keys
   mit Handelsrecht anlegen/verwenden. `live` bleibt gesperrt, bis ein neues ADR es freigibt.
 - Secrets (`.env`), SQLite-DBs, Backups und Logs nie committen, loggen oder in Diffs zeigen.
+- **Das Repo ist öffentlich (gewollt):** keine Server-IP, Hostnamen, Linux-Benutzer, SSH-Ports, Kontostände
+  oder echten Trades in Code, Doku, Commits oder PRs – in Anleitungen Platzhalter wie `<server>` verwenden.
 - Fail closed: bei fehlenden/veralteten Kursen oder ungültigen LLM-Antworten keine neue Order;
   nur abgeschlossene Kerzen; BTC-Fehler blockiert ETH nicht und umgekehrt.
 - Handelshistorie nie still zurücksetzen oder migrieren; nie zwei Prozesse auf derselben DB.

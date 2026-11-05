@@ -1,23 +1,23 @@
 # Stand
 
-**Aktualisiert:** 2026-11-05 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-05 · **Branch:** `feat/s002-server-setup` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-Projekt per `/kickoff` eingerichtet (Python 3.12 / uv, Gerüst mit Modusprüfung, ADR-0002 bis 0005).
-M1 startet: Arena-Module schrittweise übernehmen, Ziel Paper-Betrieb auf dem Hetzner CX23.
+Spec 002 (Server-Härtung) ist umgesetzt. Der Server ist zu: nur Key-Login über den Admin-Benutzer, kein Root-
+oder Passwort-Login, ufw nur SSH, automatische Sicherheitsupdates. Neustart und zweiter Lauf sind geprüft.
+Zugangsdaten stehen nur lokal (`~/.ssh/config`, Alias), nicht im Repo.
 
 ## Nächster Schritt
-1. `/spec` für M1 Nr. 1 – Marktdaten aus der Arena übernehmen (Bitvavo-Quotes, abgeschlossene Kerzen).
-2. Danach Nr. 2 klären: welche Arena-Strategie der Bot fährt (Arena-Ergebnisse ansehen).
+1. PR für Spec 002 durchsehen (AK8) und mergen (Squash), wenn die CI grün ist.
+2. `/umsetzen 001` – Marktdaten aus der Arena übernehmen.
 
 ## In Arbeit
-- Spec: –
+- Spec: 002 (fertig, PR offen) · 001 (freigegeben)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
-- `gh` ist nicht angemeldet (`gh auth login`) → Labels (`bash scripts/github-labels.sh`) und Branch-Schutz für `main` stehen noch aus.
+- –
 
 ## Offen – manuell prüfen
-- CI auf GitHub läuft nach dem ersten Push grün durch.
-- Hetzner-Server: Ubuntu-Version, Benutzer und SSH-Zugang festhalten (für M1 Nr. 6).
+- Optional in der Hetzner-Oberfläche: Cloud-Firewall als zweite Schicht, Backups/Snapshot (siehe `docs/betrieb/server.md`).
 - Offene Projektentscheidungen: LLM-Budget, Startkapital für M2.

@@ -14,6 +14,7 @@ dev = [
     "pytest>=9.0",
     "ruff>=0.17",
     "mypy>=2.0",
+    "shellcheck-py>=0.11.0.1",
 ]
 
 [build-system]
