@@ -79,7 +79,7 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 - [x] 2. `market/http.py` + Tests (Header-Auswertung Retry-After/resetat, Begrenzung, kein Antworttext in Fehlern)
 - [x] 3. `BitvavoClient.quotes()` + 429-Pause + Test „nur öffentliche GETs" (AK1, AK4, AK6)
 - [x] 4. `closed_candles()` + `fill_tiny_gaps()` mit den Arena-Testfällen (AK2, AK3)
-- [ ] 5. `market/snapshot.py` + Tests inkl. Fehlerisolation BTC/ETH (AK5)
+- [x] 5. `market/snapshot.py` + Tests inkl. Fehlerisolation BTC/ETH (AK5)
 - [ ] 6. CLI `trading-bot market`, Marker `net` registrieren, Live-Test, CI auf `-m "not net"` (AK7, AK8)
 - [ ] 7. Doku: ARCHITEKTUR.md (Modul market), README (Befehl)
 
@@ -91,6 +91,10 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 ---
 
 ## Verlauf
+- 2026-11-06: Quotes kommen wie in der Arena aus **einer** Anfrage für beide Märkte. Fällt `/ticker/book` aus oder fehlt ein Markt darin, sind beide Märkte betroffen. Die Isolation aus AK5 gilt für Kerzen und für die Prüfung je Markt (auch Spread, fehlender Quote). Quotes werden erst nach den Kerzen geholt, weil sie am schnellsten veralten.
+- 2026-11-06: `build_snapshots` fängt nur Datenfehler (`MarketDataError`, `HTTPFailure`, `OSError`, `ValueError`), nicht `Exception` wie die Arena, damit Programmierfehler sichtbar bleiben.
+- 2026-11-06: Die Prüfung der Kerzen auf plausible OHLC-Werte steckt im Parser (`_parse_candle`) und wird im Snapshot nicht wiederholt.
+- 2026-11-06: Test-Hilfsmodul `tests/fakes.py`; dafür `pythonpath = ["tests"]` (pytest) und `mypy_path = "src,tests"`.
 
 ## Ergebnis
 - **Erreicht:** …
