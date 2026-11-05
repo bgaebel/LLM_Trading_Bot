@@ -70,6 +70,12 @@
 - **Ursache:** `open()`/`read_text()` ohne `encoding` nutzt unter Windows cp1252, auf dem Server UTF-8.
 - **Lösung / Regel:** Immer `encoding="utf-8"` angeben (auch bei `subprocess.run(..., text=True)`).
 
+### Umlaute in der Konsolenausgabe kaputt unter Windows #windows #encoding
+*2026-11-06 · Quelle: Spec 003*
+- **Symptom:** `uv run trading-bot signals` zeigt „Abw�rtstrend" statt „Abwärtstrend"; Tests mit `io.StringIO` sind grün.
+- **Ursache:** `sys.stdout` nutzt unter Windows die Konsolen-Codepage (cp1252), nicht UTF-8; die Strategie-Begründungen der Arena sind deutsch.
+- **Lösung / Regel:** In `main()` `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` (nur wenn `io.TextIOWrapper`). Nicht `PYTHONUTF8` global setzen – das verdeckt Datei-Encoding-Fehler (siehe oben).
+
 ### Tests grün unter Windows, rot in der Linux-CI #windows #pfade #ci
 *2026-11-05 · Quelle: Preset python*
 - **Symptom:** Datei/Modul „nicht gefunden" nur in CI bzw. auf dem Server.

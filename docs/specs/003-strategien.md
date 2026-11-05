@@ -76,7 +76,7 @@ Kostenannahmen: Die Arena nutzt im Code `TAKER_FEE=0.0025` und `SLIPPAGE=0.0005`
 - [x] 1. Generator + Fixtures (aus Arena@7563724) + `indicators.py` + Golden-Test der Indikatoren (AK1, AK6)
 - [x] 2. `signals.py` mit `Signal`, fünf Strategien + Golden-Test der Signale + Zweigabdeckung (AK2, AK3, AK5)
 - [x] 3. `payload.py` mit `feature_payload` und `cost_roundtrip` + Golden-Test (AK4)
-- [ ] 4. CLI `trading-bot signals` (AK7)
+- [x] 4. CLI `trading-bot signals` (AK7)
 - [ ] 5. Doku: ARCHITEKTUR.md (Modul strategy), README
 
 ## Risiken & offene Fragen
@@ -94,6 +94,9 @@ Kostenannahmen: Die Arena nutzt im Code `TAKER_FEE=0.0025` und `SLIPPAGE=0.0005`
 ## Verlauf
 - 2026-11-06: Die Fixtures speichern keine Kerzen, nur Szenario-Parameter (Seed, Drift, Volatilität, Sonderfall) und die erwarteten Ausgaben. `tests/golden_scenarios.py` erzeugt die Kerzen deterministisch (`random.Random(seed)`) und wird von Generator und Tests gemeinsam benutzt. 20 Grundszenarien plus 21 gezielt gesuchte für Zweige, die das Raster nicht trifft; 41 Szenarien, alle geforderten Zweige erreicht (`meta.branches_missing == []`), Datei rund 400 KB.
 - 2026-11-06: Generator zweimal ausgeführt, identischer SHA-256 (AK6).
+- 2026-11-06: Alle fünf Strategien und `feature_payload` stimmen auf Anhieb mit der Arena überein (41 Szenarien × 3 Positionsanteile).
+- 2026-11-06 (23:51 UTC am 05.11.): `uv run trading-bot signals` live → Exit 0. BTC-EUR: Regime TREND, ADX 41,7, Trend SELL, Breakout/Mean Reversion/Ensemble HOLD (Score −0,60), Buy & Hold BUY; ETH-EUR: Regime TREND, ADX 42,4, alle HOLD außer Buy & Hold. Roundtrip-Kosten 0,60 %. Umlaute waren unter Windows zunächst kaputt (cp1252) → stdout auf UTF-8, Learning ergänzt.
+- 2026-11-06: Kostenwerte der Arena (`ARENA_TAKER_FEE` 0,25 %, `ARENA_SLIPPAGE` 0,05 %) als Konstanten in `payload.py`, vorerst nur für die Diagnose; die Werte des Bots legt Nr. 3 fest.
 
 ## Ergebnis
 - **Erreicht:** …

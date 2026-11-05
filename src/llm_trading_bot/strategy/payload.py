@@ -13,6 +13,10 @@ from llm_trading_bot.strategy.indicators import Indicators, closes
 from llm_trading_bot.strategy.signals import run_strategy
 
 PER_ASSET_MAX = 0.45
+# Cost defaults in the Arena code (arena.py fee_rate/slip_rate). The bot's own values are set
+# with the paper execution (M1 Nr. 3); until then these only feed diagnostics.
+ARENA_TAKER_FEE = 0.0025
+ARENA_SLIPPAGE = 0.0005
 
 
 def cost_roundtrip(spread_bps: float, fee_rate: float, slippage: float) -> float:
