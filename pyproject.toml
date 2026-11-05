@@ -25,6 +25,8 @@ build-backend = "uv_build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "--import-mode=importlib"]
+# Shared test helpers (tests/fakes.py) are imported as top-level modules.
+pythonpath = ["tests"]
 
 [tool.ruff]
 line-length = 100
@@ -37,4 +39,4 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "src"
+mypy_path = "src,tests"
