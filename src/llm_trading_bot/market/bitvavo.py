@@ -130,7 +130,8 @@ def _open_time(row: object) -> int:
 
 def _parse_candle(row: object, step: int) -> Candle:
     ts = _open_time(row)
-    assert isinstance(row, list | tuple)  # guaranteed by _open_time
+    if not isinstance(row, list | tuple):  # already checked by _open_time; narrows the type
+        raise MarketDataError("candles: incomplete OHLCV row")
     try:
         values = [float(x) for x in row[1:6]]
     except (TypeError, ValueError, OverflowError) as exc:

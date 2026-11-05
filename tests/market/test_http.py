@@ -121,3 +121,10 @@ def test_http_error_without_headers_still_gives_http_failure(
         UrllibTransport().get_json("https://example.invalid")
     assert exc.value.status == 502
     assert exc.value.retry_after is None
+
+
+def test_deeply_nested_json_becomes_transport_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    nested = b"[" * 200_000 + b"]" * 200_000
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: FakeResponse(nested))
+    with pytest.raises(TransportError, match="nested"):
+        UrllibTransport().get_json("https://example.invalid")

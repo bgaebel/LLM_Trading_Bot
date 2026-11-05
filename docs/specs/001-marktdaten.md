@@ -1,6 +1,6 @@
 # Spec 001: Marktdaten aus der Arena übernehmen
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s001-marktdaten` · **Meilenstein:** M1
 - **Erstellt:** 2026-11-05
 
@@ -11,34 +11,34 @@ werden abgelehnt (fail closed), und ein Fehler bei einem Markt blockiert den and
 stammt aus der Arena und ist dort erprobt.
 
 ## Akzeptanzkriterien
-- [ ] AK1: Quotes für beide Märkte kommen aus **einem** Aufruf von `/ticker/book`. Abgelehnt werden: fehlender Markt,
+- [x] AK1: Quotes für beide Märkte kommen aus **einem** Aufruf von `/ticker/book`. Abgelehnt werden: fehlender Markt,
   widersprüchliche Duplikate, Bid ≤ 0 / Bid > Ask / nicht endliche Werte, Spread > 50 bp.
   — Nachweis: `uv run pytest tests/market/test_bitvavo_quotes.py`
-- [ ] AK2: `closed_candles` liefert nur abgeschlossene Kerzen, aufsteigend sortiert, identische Duplikate
+- [x] AK2: `closed_candles` liefert nur abgeschlossene Kerzen, aufsteigend sortiert, identische Duplikate
   zusammengefasst. Laufende oder zukünftige Kerzen werden ignoriert. Abgelehnt werden: widersprüchliche Duplikate,
   Millisekunden-Zeitstempel mit Bruchteil oder schief zum Intervall, OHLC außerhalb des Bereichs, Preise ≤ 0,
   negatives oder nicht endliches Volumen, unvollständige Zeilen. Nur Intervalle 1/15/60/240 min.
   — Nachweis: `uv run pytest tests/market/test_bitvavo_candles.py`
-- [ ] AK3: Lückenfüllung wie in der Arena: Bei 1-min-Kerzen werden höchstens 2 fehlende Kerzen in Folge mit
+- [x] AK3: Lückenfüllung wie in der Arena: Bei 1-min-Kerzen werden höchstens 2 fehlende Kerzen in Folge mit
   dem vorherigen Schlusskurs und Volumen 0 ergänzt. Größere Lücken, Lücken bei anderen Intervallen und
   Lücken am Ende werden nicht gefüllt. Die Anzahl der ergänzten Kerzen wird zurückgegeben.
   — Nachweis: `uv run pytest tests/market/test_gaps.py`
-- [ ] AK4: Nach HTTP 429 macht der Client keine weitere Anfrage, bis die Pause vorbei ist. Die Pause gilt für
+- [x] AK4: Nach HTTP 429 macht der Client keine weitere Anfrage, bis die Pause vorbei ist. Die Pause gilt für
   Quotes und Kerzen gemeinsam. Ihre Dauer kommt aus `Retry-After` bzw. `bitvavo-ratelimit-resetat`;
   ohne diese Header 900 s, begrenzt auf 1–3600 s. Fehler enthalten Status und Restdauer, aber keinen Antworttext.
   — Nachweis: `uv run pytest tests/market/test_rate_limit.py`
-- [ ] AK5: Der Snapshot je Markt wird abgelehnt bei: zu wenigen Kerzen (Mindestanzahl je Intervall als
+- [x] AK5: Der Snapshot je Markt wird abgelehnt bei: zu wenigen Kerzen (Mindestanzahl je Intervall als
   Parameter), Lücken in den letzten 60 Kerzen, veralteten oder zukünftigen Daten
   (Alter < −90 s oder > Intervall + 90 s), Uhrzeitabweichung > 120 s, Quote älter als 20 s.
   Ein Fehler bei BTC liefert trotzdem einen gültigen ETH-Snapshot und umgekehrt (Rückmeldung per `on_error`).
   — Nachweis: `uv run pytest tests/market/test_snapshot.py`
-- [ ] AK6: Der Marktdaten-Code kann keine Order auslösen (ADR-0004): Der Client sendet nur `GET` an
+- [x] AK6: Der Marktdaten-Code kann keine Order auslösen (ADR-0004): Der Client sendet nur `GET` an
   `/v2/ticker/book` und `/v2/<markt>/candles`, ohne Auth-Header und ohne Request-Body.
   — Nachweis: `uv run pytest tests/market/test_public_only.py`
-- [ ] AK7: `uv run trading-bot market` holt einmal Live-Daten und zeigt je Markt Bid/Ask/Spread,
+- [x] AK7: `uv run trading-bot market` holt einmal Live-Daten und zeigt je Markt Bid/Ask/Spread,
   die letzte abgeschlossene Kerze je Intervall und ob der Snapshot gültig ist (sonst den Grund).
   Bei Fehler ist der Exit-Code ≠ 0. — Nachweis: [manuell] Befehl lokal ausführen, Ausgabe in „Verlauf" festhalten
-- [ ] AK8: Tests gegen die echte Bitvavo-API haben den Marker `net` und laufen in CI nicht mit.
+- [x] AK8: Tests gegen die echte Bitvavo-API haben den Marker `net` und laufen in CI nicht mit.
   — Nachweis: [manuell] `uv run pytest -m net` grün; CI-Log zeigt `-m "not net"`
 - [ ] AK9: Lint, Format, mypy strict und CI sind grün.
   — Nachweis: `uv run ruff check . && uv run ruff format --check . && uv run mypy src`, CI-Lauf im PR
@@ -99,10 +99,21 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 - 2026-11-06: Die CLI holt Kerzen und Quotes selbst und prüft mit `MarketSnapshot.validate`, statt `build_snapshots` aufzurufen. So kann sie auch bei ungültigem Snapshot die Daten zeigen. Exit-Codes: 0 OK, 1 mindestens ein Markt ungültig, 2 Quotes nicht abrufbar.
 - 2026-11-06 (Prüfer, Blocker): Die eingeengte Fehlerliste `DATA_ERRORS` ließ echte Feed-Fehler durch – `http.client.IncompleteRead`/`BadStatusLine` (urllib verpackt sie nicht in `OSError`) und `OverflowError` bei JSON-`Infinity` im Zeitstempel. Folge: Ein kaputter BTC-Abruf kostete ETH den Snapshot. Behoben: Transport wandelt `HTTPException` in `TransportError`, Parser fängt `OverflowError`, `DATA_ERRORS` ergänzt; Ende-zu-Ende-Test `tests/market/test_isolation_e2e.py` über den echten urllib-Pfad.
 - 2026-11-06 (Prüfer, Hinweise): Laufende/zukünftige Kerzen werden wieder **vor** den Wertprüfungen verworfen (wie Arena und AK2); eine kaputte laufende Kerze verwirft nicht mehr das Intervall. `min_bars` ohne ein Intervall → `KeyError` statt still 1. `HTTPError` ohne Header → `HTTPFailure` statt `AttributeError`. Vorbedingung von `MarketSnapshot` (Zeilen vom Parser geprüft) im Docstring – wichtig, wenn Kerzen später aus SQLite kommen. Herkunftsvermerke exakt im ADR-0003-Format, auch in den aus Arena-Tests abgeleiteten Testdateien.
+- 2026-11-06 (zweite Prüfung: bereit): Restliche Hinweise umgesetzt – `RecursionError` beim JSON-Parsen → `TransportError`, `assert` zur Typverengung durch explizite Prüfung ersetzt, `TransportError`/`DATA_ERRORS` in ARCHITEKTUR.md.
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Unterpaket `market` (Modelle, GET-only-Transport, Bitvavo-Client, Snapshot-Prüfung) aus der Arena
+  übernommen und an ADR-0002 angepasst; CLI `trading-bot market`; Bitvavo-Endpunkte erstmals live geprüft.
+- **Abweichungen vom Plan / von der Arena:** 429-Pause je Client-Instanz statt global; `build_snapshots` fängt nur
+  `DATA_ERRORS` = `MarketDataError`, `HTTPFailure`, `TransportError`, `OSError`, `ValueError`, `OverflowError`
+  (Arena: `Exception`) – Transport wandelt `http.client.HTTPException` und `RecursionError` in `TransportError`;
+  Quotes nach den Kerzen; OHLC-Plausibilität nur im Parser (Vorbedingung im Docstring von `MarketSnapshot`);
+  CLI prüft selbst mit `MarketSnapshot.validate`, um auch ungültige Daten zu zeigen.
+- **Nachweise:** `uv run pytest` 123 passed, 4 deselected; `uv run pytest -m net` 4 passed; ruff, format,
+  `mypy src tests`, shellcheck grün; `uv run trading-bot market` → 2× snapshot: OK, Exit 0 (BTC 1,34 bp, ETH 2,68 bp).
+  Unabhängiger Prüfer: erst ein Blocker (Isolation bei `IncompleteRead`/`OverflowError`), nach `c82a61a` bereit;
+  neue Tests schlagen gegen den alten Stand fehl. AK9: CI-Lauf im PR.
+- **Offen / Folgearbeit:** Speichern und Worker-Takt (M1 Nr. 3/5); bei Kerzen aus SQLite die Zeilenprüfung
+  wiederholen (Vorbedingung `MarketSnapshot`); Strategie legt `min_bars` fest (Nr. 2).
+- **Neue ADRs / Learnings:** keine neuen ADRs. Erkenntnis aus der Prüfung im Verlauf: eine eingeengte
+  Fehlerliste muss alle realen Transportfehler abdecken, sonst bricht die Marktisolation.

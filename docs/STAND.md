@@ -8,11 +8,11 @@ oder Passwort-Login, ufw nur SSH, automatische Sicherheitsupdates. Neustart und 
 Zugangsdaten stehen nur lokal (`~/.ssh/config`, Alias), nicht im Repo.
 
 ## Nächster Schritt
-1. `/abschluss 001` (PR → CI grün → Squash-Merge).
+1. PR für Spec 001 mergen (Squash), wenn die CI grün ist.
 2. Danach M1 Nr. 2 planen: welche Arena-Strategie der Bot fährt.
 
 ## In Arbeit
-- Spec: 001 (in Arbeit, alle Plan-Schritte erledigt)
+- Spec: 001 (fertig, PR offen)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf

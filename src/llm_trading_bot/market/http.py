@@ -89,5 +89,9 @@ class UrllibTransport:
         except http.client.HTTPException as exc:
             # urllib does not wrap these (IncompleteRead, BadStatusLine) into URLError/OSError.
             raise TransportError(f"{type(exc).__name__} while reading response") from None
-        result: object = json.loads(body.decode("utf-8"))
+        try:
+            result: object = json.loads(body.decode("utf-8"))
+        except RecursionError:
+            # Absurdly nested JSON is not a ValueError; map it so per-market isolation holds.
+            raise TransportError("response JSON nested too deeply") from None
         return result

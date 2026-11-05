@@ -50,9 +50,11 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 - **Zweck:** öffentliche Marktdaten holen und nur geprüfte Daten weitergeben (fail closed). Aus der Arena übernommen (ADR-0003).
 - **Schnittstelle:**
   - `models`: `Symbol` (BTCEUR/ETHEUR), `Quote`, `Candle`, `MarketDataError`
-  - `http`: `Transport`-Protocol, `UrllibTransport` (nur GET), `HTTPFailure(status, retry_after)`
+  - `http`: `Transport`-Protocol, `UrllibTransport` (nur GET), `HTTPFailure(status, retry_after)`,
+    `TransportError` (abgebrochene/unlesbare Antwort)
   - `bitvavo`: `BitvavoClient.quotes()`, `.closed_candles(symbol, interval, now_epoch=)`, `fill_tiny_gaps()`
-  - `snapshot`: `build_snapshots(client, clock=, min_bars=, on_error=)` → `dict[Symbol, MarketSnapshot]`
+  - `snapshot`: `build_snapshots(client, clock=, min_bars=, on_error=)` → `dict[Symbol, MarketSnapshot]`;
+    `DATA_ERRORS` = Fehler, die als „Markt gerade unbrauchbar“ gelten (alles andere ist ein Bug und wird geworfen)
 - **Invarianten:** nur öffentliche GET-Endpunkte, keine Keys (ADR-0004); nur abgeschlossene Kerzen; höchstens 2
   fehlende 1m-Kerzen werden ergänzt; Snapshot ungültig bei Lücke in den letzten 60 Kerzen, veralteten Daten,
   Quote älter als 20 s, Spread > 50 bp oder Uhrzeitabweichung > 120 s. Nach HTTP 429 keine Anfrage bis zum Ende

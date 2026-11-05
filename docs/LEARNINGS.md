@@ -52,6 +52,12 @@
 
 ## Laufzeit & Code
 
+### Eingeengte Fehlerliste muss alle Transportfehler abdecken #python #http #isolation
+*2026-11-06 · Quelle: Spec 001 (Prüfer-Blocker)*
+- **Symptom:** Ein kaputter BTC-Abruf ließ `build_snapshots` abbrechen; ETH verlor seinen Snapshot, obwohl die Isolation getestet war.
+- **Ursache:** Statt `except Exception` nur `(OSError, ValueError, …)` gefangen. `urllib` reicht `http.client.HTTPException` (`IncompleteRead`, `BadStatusLine`) und `OverflowError`/`RecursionError` aus dem Parsen unverpackt durch.
+- **Lösung / Regel:** An der Transportgrenze alle bekannten Fehlertypen in eigene Fehler übersetzen (`TransportError`) und die Isolation Ende-zu-Ende über den echten Transport testen, nicht nur mit einem Fake, der saubere Fehler wirft.
+
 ### Encoding-Fehler nur unter Windows #windows #encoding
 *2026-11-05 · Quelle: Preset python*
 - **Symptom:** `UnicodeDecodeError`/kaputte Umlaute beim Lesen von Dateien, nur unter Windows.
