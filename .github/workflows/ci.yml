@@ -45,5 +45,5 @@ jobs:
         run: uv run mypy src
 
       - name: Test
-        # Once hardware tests exist: uv run pytest -m "not hw"
-        run: uv run pytest
+        # Tests marked `net` hit the real Bitvavo API and stay out of CI.
+        run: uv run pytest -m "not net"

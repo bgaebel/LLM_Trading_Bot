@@ -80,7 +80,7 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 - [x] 3. `BitvavoClient.quotes()` + 429-Pause + Test „nur öffentliche GETs" (AK1, AK4, AK6)
 - [x] 4. `closed_candles()` + `fill_tiny_gaps()` mit den Arena-Testfällen (AK2, AK3)
 - [x] 5. `market/snapshot.py` + Tests inkl. Fehlerisolation BTC/ETH (AK5)
-- [ ] 6. CLI `trading-bot market`, Marker `net` registrieren, Live-Test, CI auf `-m "not net"` (AK7, AK8)
+- [x] 6. CLI `trading-bot market`, Marker `net` registrieren, Live-Test, CI auf `-m "not net"` (AK7, AK8)
 - [ ] 7. Doku: ARCHITEKTUR.md (Modul market), README (Befehl)
 
 ## Risiken & offene Fragen
@@ -95,6 +95,8 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 - 2026-11-06: `build_snapshots` fängt nur Datenfehler (`MarketDataError`, `HTTPFailure`, `OSError`, `ValueError`), nicht `Exception` wie die Arena, damit Programmierfehler sichtbar bleiben.
 - 2026-11-06: Die Prüfung der Kerzen auf plausible OHLC-Werte steckt im Parser (`_parse_candle`) und wird im Snapshot nicht wiederholt.
 - 2026-11-06: Test-Hilfsmodul `tests/fakes.py`; dafür `pythonpath = ["tests"]` (pytest) und `mypy_path = "src,tests"`.
+- 2026-11-06 (23:18 UTC am 05.11.): erster Live-Abruf, damit erstmals gegen echte Bitvavo-Daten geprüft (in der Arena nie geschehen). `uv run trading-bot market` → beide Snapshots OK, Exit 0; BTC-EUR Spread 1,34 bp, ETH-EUR 2,68 bp; 1m 500 Kerzen, 15m/60m/240m je 499, 0 gefüllte Lücken. `uv run pytest -m net` → 4 passed. Das Format der Antworten entspricht dem, was der Arena-Code erwartet.
+- 2026-11-06: Die CLI holt Kerzen und Quotes selbst und prüft mit `MarketSnapshot.validate`, statt `build_snapshots` aufzurufen. So kann sie auch bei ungültigem Snapshot die Daten zeigen. Exit-Codes: 0 OK, 1 mindestens ein Markt ungültig, 2 Quotes nicht abrufbar.
 
 ## Ergebnis
 - **Erreicht:** …
