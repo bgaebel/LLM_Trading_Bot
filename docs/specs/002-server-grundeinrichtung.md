@@ -1,6 +1,6 @@
 # Spec 002: Server-Grundeinrichtung (Härtung)
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s002-server-setup` · **Meilenstein:** M1 (Teil von Nr. 6)
 - **Erstellt:** 2026-11-05
 
@@ -62,7 +62,7 @@ Verworfen: Ansible (für einen Server zu schwer), cloud-init (der Server existie
 (nicht reproduzierbar).
 
 ## Plan
-- [ ] 1. `deploy/setup-server.sh` (beide Phasen, idempotent) + CI-Job `shellcheck`/`bash -n` (AK1)
+- [x] 1. `deploy/setup-server.sh` (beide Phasen, idempotent) + CI-Job `shellcheck`/`bash -n` (AK1)
 - [ ] 2. Phase 1 auf dem Server ausführen, mit Zustimmung (AK2, AK4, AK5, AK6)
 - [ ] 3. In zweiter Sitzung Admin-Login + `sudo -n true` prüfen, lokalen SSH-Alias anlegen (AK2, AK7)
 - [ ] 4. Phase 2 (`--lock`) ausführen, mit Zustimmung; Root- und Passwort-Login gegenprüfen (AK3)
