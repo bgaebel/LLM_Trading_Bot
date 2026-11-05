@@ -33,6 +33,7 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | `src/llm_trading_bot/` | Anwendungspaket, Einstiegspunkt `main()` (`uv run trading-bot`) |
 | `src/llm_trading_bot/core.py` | Reine Logik ohne I/O (aktuell: Modusauflösung) |
 | `tests/` | pytest-Tests |
+| `deploy/` | Server-Skripte; `setup-server.sh` härtet einen frischen Server (Spec 002) |
 | `.github/workflows/` | CI (ruff, mypy, pytest) und Doku-Prüfung |
 
 ## Module & Schnittstellen
@@ -53,7 +54,9 @@ langsamer LLM-Aufruf blockiert die Marktabfrage nicht; ein Fehler bei BTC blocki
 
 ## Build, Konfiguration & Deployment
 Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariablen (`TRADING_MODE`, später
-`.env` auf dem Server, Rechte 600). Ziel: Hetzner Cloud CX23, Ubuntu, systemd-Unit – Ablauf wird in M1 Nr. 6 festgelegt.
+`.env` auf dem Server, Rechte 600). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.
+Server ist gehärtet (Spec 002, Ablauf und Prüfbefehle: `docs/betrieb/server.md`); das Deployment des Bots
+(Unit, Verzeichnisse, Backup, Update/Rollback) folgt in M1 Nr. 6.
 
 ## Teststrategie
 - **Host-Unit-Tests:** pytest, Logik ohne I/O; Netzwerk über schmale Adapter, in Tests ersetzt.

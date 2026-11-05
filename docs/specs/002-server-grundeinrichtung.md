@@ -65,8 +65,8 @@ Verworfen: Ansible (für einen Server zu schwer), cloud-init (der Server existie
 - [x] 1. `deploy/setup-server.sh` (beide Phasen, idempotent) + CI-Job `shellcheck`/`bash -n` (AK1)
 - [x] 2. Phase 1 auf dem Server ausführen, mit Zustimmung (AK2, AK4, AK5, AK6)
 - [x] 3. In zweiter Sitzung Admin-Login + `sudo -n true` prüfen, lokalen SSH-Alias anlegen (AK2, AK7)
-- [ ] 4. Phase 2 (`--lock`) ausführen, mit Zustimmung; Root- und Passwort-Login gegenprüfen (AK3)
-- [ ] 5. Zweiter Lauf zur Prüfung der Idempotenz; `docs/betrieb/server.md`, ARCHITEKTUR.md „Deployment" (AK1, AK8)
+- [x] 4. Phase 2 (`--lock`) ausführen, mit Zustimmung; Root- und Passwort-Login gegenprüfen (AK3)
+- [x] 5. Zweiter Lauf zur Prüfung der Idempotenz; `docs/betrieb/server.md`, ARCHITEKTUR.md „Deployment" (AK1, AK8)
 
 ## Risiken & offene Fragen
 - Aussperren: Wird abgesperrt, bevor der Admin-Login klappt, hilft nur noch die Hetzner-Konsole → Zwei-Phasen-Ablauf, Gegenprobe in zweiter Sitzung.
@@ -83,6 +83,8 @@ Verworfen: Ansible (für einen Server zu schwer), cloud-init (der Server existie
 - 2026-11-05: Host-Key des Servers wich vom alten `known_hosts`-Eintrag ab (IP vorher anders vergeben). Der Nutzer hat bestätigt, dass der Server neu ist; der Eintrag wurde ersetzt.
 - 2026-11-05: Die Beispielaufrufe im Skriptkopf waren falsch: `ssh` fügt die entfernten Argumente zu einer Zeile zusammen, dadurch zerfiel der Public Key. Jetzt mit inneren einfachen Anführungszeichen.
 - 2026-11-05: Phase 1 ausgeführt (7 Änderungen; `apt upgrade` hat doch Updates gefunden → Neustart nötig). Gegenprobe in neuer Sitzung: Admin-Login, `sudo -n true`, Dienstbenutzer mit `nologin`, ufw `LIMIT 22/tcp` (v4+v6), UTC/NTP, `unattended-upgrade --dry-run` – alles OK. SSH-Alias lokal angelegt und getestet.
+- 2026-11-05: Phase 2 über den Admin-Benutzer mit sudo ausgeführt (1 Änderung). `sshd -T`: `permitrootlogin no`, `passwordauthentication no`, `kbdinteractiveauthentication no`, `pubkeyauthentication yes`. `ssh root@<server>` → „Permission denied (publickey)"; mit Passwort angefordert bietet der Server nur `publickey` an.
+- 2026-11-05: Zusätzlich (nicht im Plan) neu gestartet, weil die Updates es verlangten. Danach: Kernel 6.8.0-138, kein weiterer Neustart nötig, ufw aktiv, sshd-Härtung wirksam. Zweiter Lauf beider Phasen: `changes: 0` (AK1).
 
 ## Ergebnis
 - **Erreicht:** …
