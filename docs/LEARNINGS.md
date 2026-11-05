@@ -32,6 +32,12 @@
 - **Ursache:** Nicht abschließend geklärt; das Verzeichnis `cpython-3.13.18-…` existiert, der Link `cpython-3.13-…` wird nicht gültig angelegt (Aufruf aus Git Bash in der Claude-Sandbox).
 - **Lösung / Regel:** System-Python 3.12 nutzen (`.python-version` = 3.12, ADR-0002). Nicht erneut verbiegen, um 3.13 zu erzwingen.
 
+### uv-Neuinstall scheitert mit „os error 32" – venv danach ohne Paket #uv #windows
+*2026-11-06 · Quelle: Spec 003*
+- **Symptom:** `uv run` bricht beim Neubau des eigenen Pakets ab („Datei wird von einem anderen Prozess verwendet", os error 32); danach `ModuleNotFoundError: llm_trading_bot` für alle Tests.
+- **Ursache:** Kurzzeitige Dateisperre in `.venv` (vermutlich Virenscanner/Indexer); uv hat die alte Installation schon entfernt (`.pth` weg, `dist-info` noch da).
+- **Lösung / Regel:** Einfach `uv sync` erneut ausführen – repariert die venv. Nicht mit `--no-sync` weiterarbeiten, sonst laufen Tests gegen eine kaputte Umgebung.
+
 ### .venv im Dropbox-Ordner synchronisiert #uv #dropbox #windows
 *2026-11-05 · Quelle: Preset python*
 - **Symptom:** Dropbox lädt tausende Dateien hoch, `uv sync` scheitert mit „Zugriff verweigert", kaputte venv auf dem Zweitgerät.
