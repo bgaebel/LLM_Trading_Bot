@@ -10,3 +10,4 @@
 | [0003](0003-arena-module-uebernehmen.md) | Arena-Module mit Herkunftsvermerk übernehmen statt die Arena einzubinden | angenommen |
 | [0004](0004-paper-zuerst-echtgeld-gesperrt.md) | Paper-Modus zuerst; Echtgeld gesperrt bis zu eigener Spec und eigenem ADR | angenommen |
 | [0005](0005-betrieb-hetzner-cloud.md) | Betrieb auf Hetzner Cloud CX23 mit Ubuntu und systemd; Status nur per SSH-Tunnel | angenommen |
+| [0006](0006-server-zugang-benutzer.md) | Admin-Benutzer mit Key und sudo NOPASSWD; Dienst unter eigenem Systembenutzer | angenommen |

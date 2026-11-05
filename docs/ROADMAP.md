@@ -13,12 +13,12 @@ Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft,
 
 | # | Feature / Aufgabe | Spec | Issue |
 |---|---|---|---|
-| 1 | Marktdaten aus der Arena übernehmen (Bitvavo-Quotes, abgeschlossene Kerzen, Lückenbehandlung) | – | – |
+| 1 | Marktdaten aus der Arena übernehmen (Bitvavo-Quotes, abgeschlossene Kerzen, Lückenbehandlung) | [001](specs/001-marktdaten.md) | – |
 | 2 | Strategie wählen und übernehmen (klassisch oder LLM – Entscheidung anhand Arena-Ergebnissen) | – | – |
 | 3 | Paper-Ausführung + SQLite-Persistenz (Gebühren, Slippage, Idempotenz, Single-Writer) | – | – |
 | 4 | Risiko-Grenzen und Fail-closed (veraltete Kurse, Feed-/LLM-Ausfall, BTC/ETH entkoppelt) | – | – |
 | 5 | Dienst: Worker-Schleife, sauberer Shutdown, Health, Logging | – | – |
-| 6 | Hetzner-Server: Härtung (SSH-Key, Firewall, Updates), systemd, Backup, Update/Rollback | – | – |
+| 6 | Hetzner-Server: Härtung (SSH-Key, Firewall, Updates), systemd, Backup, Update/Rollback | [002](specs/002-server-grundeinrichtung.md) (Härtung) | – |
 | 7 | Status-Ansicht nur auf 127.0.0.1, Zugriff per SSH-Tunnel | – | – |
 | 8 | Echtgeld-Schnittstelle als Entwurf (Interface + ADR-Vorschlag, keine Implementierung) | – | – |
 
