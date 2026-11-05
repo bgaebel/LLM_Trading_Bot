@@ -1,6 +1,6 @@
 # Spec 001: Marktdaten aus der Arena übernehmen
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s001-marktdaten` · **Meilenstein:** M1
 - **Erstellt:** 2026-11-05
 
@@ -75,7 +75,7 @@ Verworfen: `httpx`/`requests` – bringt für zwei GET-Endpunkte nur eine Abhän
 unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-0002.
 
 ## Plan
-- [ ] 1. `market/models.py` + Tests (Quote-Prüfung, Spread, Symbole)
+- [x] 1. `market/models.py` + Tests (Quote-Prüfung, Spread, Symbole)
 - [ ] 2. `market/http.py` + Tests (Header-Auswertung Retry-After/resetat, Begrenzung, kein Antworttext in Fehlern)
 - [ ] 3. `BitvavoClient.quotes()` + 429-Pause + Test „nur öffentliche GETs" (AK1, AK4, AK6)
 - [ ] 4. `closed_candles()` + `fill_tiny_gaps()` mit den Arena-Testfällen (AK2, AK3)
