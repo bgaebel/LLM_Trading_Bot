@@ -1,21 +1,23 @@
 # Stand
 
-**Aktualisiert:** 2026-11-05 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-05 · **Branch:** `feat/s002-server-setup` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-Spec 001 (Marktdaten) und Spec 002 (Server-Härtung) sind freigegeben, ADR-0006 ist angenommen.
-Zuerst wird der Server abgesichert (noch offen: Passwort-Login, Root-Login, keine Firewall), dann folgen die Marktdaten.
+Spec 002 (Server-Härtung) ist umgesetzt. Der Server ist zu: nur Key-Login über den Admin-Benutzer, kein Root-
+oder Passwort-Login, ufw nur SSH, automatische Sicherheitsupdates. Neustart und zweiter Lauf sind geprüft.
+Zugangsdaten stehen nur lokal (`~/.ssh/config`, Alias), nicht im Repo.
 
 ## Nächster Schritt
-1. `/umsetzen 002` – Server-Härtung (Server-Eingriffe nur mit Zustimmung; Zugangsdaten nur lokal, nicht im Repo).
+1. `/abschluss` für Spec 002 (PR → CI grün → Squash-Merge).
 2. `/umsetzen 001` – Marktdaten aus der Arena übernehmen.
 
 ## In Arbeit
-- Spec: 002 (freigegeben, Umsetzung noch nicht begonnen) · 001 (freigegeben)
+- Spec: 002 (in Arbeit, alle Plan-Schritte erledigt) · 001 (freigegeben)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
 - –
 
 ## Offen – manuell prüfen
+- Optional in der Hetzner-Oberfläche: Cloud-Firewall als zweite Schicht, Backups/Snapshot (siehe `docs/betrieb/server.md`).
 - Offene Projektentscheidungen: LLM-Budget, Startkapital für M2.
