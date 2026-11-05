@@ -78,7 +78,7 @@ unverändert kopieren – flache Imports und globaler Zustand widersprechen ADR-
 - [x] 1. `market/models.py` + Tests (Quote-Prüfung, Spread, Symbole)
 - [x] 2. `market/http.py` + Tests (Header-Auswertung Retry-After/resetat, Begrenzung, kein Antworttext in Fehlern)
 - [x] 3. `BitvavoClient.quotes()` + 429-Pause + Test „nur öffentliche GETs" (AK1, AK4, AK6)
-- [ ] 4. `closed_candles()` + `fill_tiny_gaps()` mit den Arena-Testfällen (AK2, AK3)
+- [x] 4. `closed_candles()` + `fill_tiny_gaps()` mit den Arena-Testfällen (AK2, AK3)
 - [ ] 5. `market/snapshot.py` + Tests inkl. Fehlerisolation BTC/ETH (AK5)
 - [ ] 6. CLI `trading-bot market`, Marker `net` registrieren, Live-Test, CI auf `-m "not net"` (AK7, AK8)
 - [ ] 7. Doku: ARCHITEKTUR.md (Modul market), README (Befehl)
