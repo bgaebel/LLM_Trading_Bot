@@ -23,6 +23,12 @@ Live-Marktdaten einmal abrufen und prüfen (öffentliche Bitvavo-API, kein Key n
 uv run trading-bot market
 ```
 
+Signale der klassischen Strategien (Arena v0.3.1) auf Live-Daten:
+
+```bash
+uv run trading-bot signals
+```
+
 Tests gegen die echte API sind standardmäßig aus: `uv run pytest -m net`.
 
 Konfiguration: `TRADING_MODE` (Standard `paper`; `live` wird abgelehnt).
