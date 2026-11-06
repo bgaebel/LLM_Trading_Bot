@@ -84,7 +84,7 @@ was zuletzt entschieden wurde und warum, was GPT heute gekostet hat und welche v
   GPT heute, Trades, Equity-Reihen + Ausdünnung (AK3–AK8 Daten)
 - [x] 3. `overview_page` + Equity-Chart + Navigation + Meta-Refresh in `pages.py`/`style.py` (AK1, AK4, AK6, AK9 Darstellung)
 - [x] 4. Route `/`, Redirects, `web --db` (AK1, AK9, AK10), Server- und CLI-Tests
-- [ ] 5. Browser-Prüfung (AK11), Doku: ARCHITEKTUR, README, `CLAUDE.md`-Regel präzisieren (ADR-0016), STAND
+- [x] 5. Browser-Prüfung (AK11), Doku: ARCHITEKTUR, README, `CLAUDE.md`-Regel präzisieren (ADR-0016), STAND
 
 ## Risiken & offene Fragen
 - WAL und `mode=ro`: Der Leser braucht Schreibrecht auf `-shm`; auf dem Server muss der Web-Prozess als
@@ -101,6 +101,13 @@ was zuletzt entschieden wurde und warum, was GPT heute gekostet hat und welche v
 ---
 
 ## Verlauf
+- 2026-11-06: Schritte 1–5 umgesetzt. `budget._day_bounds` öffentlich als `day_bounds` (Übersicht zählt Anfragen über
+  dieselben UTC-Grenzen wie die Budgetsperre); `pages._euro` als `budget_value` wiederverwendet. Nach Login und
+  Ersteinrichtung geht es jetzt zu `/` statt `/settings` (bestehende Tests angepasst).
+- 2026-11-06: Browser-Prüfung mit der Paper-DB aus dem Live-Test von Spec 005 (2 Zyklen): Lebenszeichen, GPT heute,
+  Depots mit Abstand zu Buy & Hold, Equity-Chart, Entscheidungen mit LLM-Begründungen, Trades; 1280 px und 375 px
+  ohne seitliches Scrollen (breite Tabellen scrollen in ihrem Panel). Lesen während eines laufenden Schreibers ist
+  per Test belegt (`test_reader_sees_the_last_committed_state_while_the_bot_writes`); der Nutzer prüft AK11 noch selbst.
 
 ## Ergebnis
 - **Erreicht:** …

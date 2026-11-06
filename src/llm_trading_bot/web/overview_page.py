@@ -200,7 +200,8 @@ def _llm(rows: Sequence[LlmToday]) -> str:
         )
         cards.append(
             f'<div class="llm-card{" over" if r.exceeded else ""}">'
-            f'<div class="llm-top"><b>{escape(r.agent)}</b><span>{r.requests} Anfragen</span></div>'
+            f'<div class="llm-top"><b>{escape(r.agent)}</b>'
+            f"<span>{r.requests} {'Anfrage' if r.requests == 1 else 'Anfragen'}</span></div>"
             f'<svg class="meter" viewBox="0 0 200 8" role="img" aria-label="Budget verbraucht">'
             f'<rect class="meter-bed" width="200" height="8"/>'
             f'<rect class="meter-fill" width="{round(used * 200, 1)}" height="8"/></svg>'

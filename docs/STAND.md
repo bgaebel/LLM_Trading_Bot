@@ -1,6 +1,6 @@
 # Stand
 
-**Aktualisiert:** 2026-11-06 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-06 · **Branch:** `feat/s007-uebersicht` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
 - Spec 005 GPT-Depots und Spec 006 Weboberfläche sind gemergt (PR #5, #6, Chart-Hintergrund #7); alle manuellen
@@ -10,11 +10,11 @@
 
 ## Nächster Schritt
 1. `/abschluss 005` und `/abschluss 006` (Nutzer startet; Prüfer, Ergebnis-Abschnitt, Status „fertig").
-2. Spec 007 Übersicht (freigegeben, ADR-0016): `/umsetzen 007` auf `feat/s007-uebersicht`.
+2. Spec 007 Übersicht (ADR-0016): alle Plan-Schritte umgesetzt, PR offen; Nutzer prüft AK11 im Browser, dann `/abschluss 007`.
 3. Dann nächste M1-Spec laut `docs/ROADMAP.md` (Dauerbetrieb/Deploy auf Hetzner).
 
 ## In Arbeit
-- Spec: 005, 006 (alle AKs erfüllt, Abschluss offen), 007 (freigegeben)
+- Spec: 005, 006 (alle AKs erfüllt, Abschluss offen), 007 (in Arbeit, nur AK11 offen)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
