@@ -20,6 +20,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "deploy" / "release.sh"
+_PINNED = re.search(r'^UV_VERSION="([\d.]+)"', SCRIPT.read_text(encoding="utf-8"), re.M)
+assert _PINNED, "release.sh pins no uv version"
+UV_VERSION = _PINNED.group(1)
 UNITS = [
     "llm-trading-bot.service",
     "llm-trading-bot-web.service",
@@ -87,7 +90,7 @@ esac
 
 FAKE_UV = r"""#!/usr/bin/env bash
 echo "uv $*" >>"$FAKE_STATE/calls"
-if [ "$1" = "--version" ]; then echo "uv 0.13.5"; exit 0; fi
+if [ "$1" = "--version" ]; then echo "uv $FAKE_UV_VERSION"; exit 0; fi
 [ "$1" = sync ] || exit 1
 [ -e "$FAKE_STATE/bad-sync" ] && exit 1
 mkdir -p .venv/bin
@@ -201,6 +204,7 @@ def box(tmp_path: Path) -> Iterator[Sandbox]:
         "LTB_POLL_SECONDS": "0.2",
         "FAKE_STATE": str(state),
         "FAKE_ROOT": str(root),
+        "FAKE_UV_VERSION": UV_VERSION,
         "HOME": str(tmp_path),
     }
     yield Sandbox(root, state, env)
@@ -213,7 +217,7 @@ def installed(box: Sandbox) -> Sandbox:
 
 def test_install_creates_the_layout_and_uv_and_is_idempotent(box: Sandbox) -> None:
     first = box.run("install", "botsvc").stdout
-    assert "installed  uv 0.13.5" in first and "enabled    systemd-time-wait-sync" in first
+    assert f"installed  uv {UV_VERSION}" in first and "enabled    systemd-time-wait-sync" in first
     for path, mode in [
         (box.app, 0o755),
         (box.app / "releases", 0o755),
