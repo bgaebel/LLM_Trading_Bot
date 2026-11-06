@@ -87,7 +87,7 @@ ORM/SQLAlchemy (neue Abhängigkeit für vier Tabellen). Migrationen (es gibt kei
 ## Plan
 - [x] 1. `db.py` + `lock.py` + Tests (AK1, AK2, AK3)
 - [x] 2. Generator für Ausführungs-Fixtures (Folgen + Grenzfälle) gegen die Arena
-- [ ] 3. `execution.py`: `trade_to_target`, `record_decision`, Kosten + Golden-Tests (AK4, AK5, AK8)
+- [x] 3. `execution.py`: `trade_to_target`, `record_decision`, Kosten + Golden-Tests (AK4, AK5, AK8)
 - [ ] 4. Quotes/Fail-closed + Buy & Hold (AK6, AK7)
 - [ ] 5. `cycle.py` + CLI `paper-cycle` (AK9)
 - [ ] 6. Mutationstest um Ausführung erweitern; Doku (ARCHITEKTUR, README)
@@ -103,6 +103,14 @@ ORM/SQLAlchemy (neue Abhängigkeit für vier Tabellen). Migrationen (es gibt kei
 ---
 
 ## Verlauf
+- 2026-11-06: Die Arena ruft in `record_decision` nach jedem Trade `mark_and_risk` auf (Peak, Equity,
+  10-%-Drawdown-Stopp). Portiert ist es als `mark` ohne Stopp (der gehört zu Nr. 4); der Generator prüft, dass
+  kein Szenario den Stopp der Arena auslöst, und überspringt solche Kursverläufe (bisher keiner).
+- 2026-11-06: Mutationstest Ausführung 40/40. Drei Mutationen sind nachweislich wirkungslos und als gleichwertig
+  vermerkt: die Cash-Grenze beim Kauf (bei Cash ≥ 0 und Gebühr ≤ 5 % ist die 90-%-Grenze immer enger),
+  `MAX(0, …)` beim Verkauf (Menge nie größer als der Bestand) und `max(0, …)` beim Spielraum (negativ endet wie 0
+  unter 50 EUR). Gefunden und geschlossen: direkte Trades mit negativem Ziel fehlten (neuer Fuzz-Modus `direct`).
+- 2026-11-06: `allow_buy` aus `trade_to_target` nicht übernommen; die Arena ruft es nie mit `False` auf.
 
 ## Ergebnis
 - **Erreicht:** …
