@@ -48,6 +48,14 @@ uv run trading-bot web --data-dir <pfad>
 
 Ohne Key nur mit klassischen Strategien, z. B. `BOT_AGENTS=trend uv run trading-bot paper-cycle --db <pfad>/bot.db`.
 
+Dauerbetrieb: `run` führt jede Minute (5 s nach dem Minutenwechsel) einen Paper-Zyklus aus, bis Strg+C bzw. SIGTERM.
+Einstellungen aus der Weboberfläche greifen ab der nächsten Runde; je Runde eine Logzeile, Stufe per `LOG_LEVEL`.
+Die Übersicht zeigt das Lebenszeichen „Dienst“. Auf dem Server läuft das später als systemd-Dienst (`deploy/`):
+
+```bash
+uv run trading-bot run --db <pfad>/bot.db
+```
+
 Tests gegen die echten APIs sind standardmäßig aus: `uv run pytest -m net` (der OpenAI-Test nur mit Key, < 0,01 $).
 
 Konfiguration per Umgebungsvariablen: `TRADING_MODE` (Standard `paper`; `live` wird abgelehnt), `BOT_AGENTS`

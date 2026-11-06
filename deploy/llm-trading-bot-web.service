@@ -1,0 +1,46 @@
+# Origin: LLM-Trading-Arena@7563724 deploy unit options (adapted)
+# The web UI (Spec 006/007): only on 127.0.0.1, reached through an SSH tunnel (ADR-0005, ADR-0015).
+# It reads the bot database read-only (ADR-0016) and writes only secrets.env and its login file.
+# Installed with roadmap Nr. 6: replace __SERVICE_USER__, __APP_DIR__ and __DATA_DIR__, copy to
+# /etc/systemd/system/. Real user names and paths never go into this file: the repo is public.
+[Unit]
+Description=LLM Trading Bot - web UI on 127.0.0.1
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# The same user as the service: secrets.env and the status file are mode 600.
+User=__SERVICE_USER__
+WorkingDirectory=__DATA_DIR__
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__APP_DIR__/.venv/bin/trading-bot web --data-dir __DATA_DIR__ --host 127.0.0.1 --port 8787
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=20
+LogNamespace=llm-trading-bot
+
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# Read-only WAL readers still create the -shm/-wal files next to the database (ADR-0016).
+ReadWritePaths=__DATA_DIR__
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
