@@ -4,13 +4,14 @@
 
 ## Fokus
 - Spec 006 Weboberfläche: Login mit Einrichtungscode, Eingabe von OpenAI-Key und GPT-Einstellungen, nur 127.0.0.1
-  (ADR-0015). Schritte 1–4 umgesetzt; unabhängige Prüfung durchgeführt, Befunde werden behoben.
+  (ADR-0015). Schritte 1–4 umgesetzt; Prüfung und Nachprüfung durchgeführt, Befunde behoben. Auf Wunsch des
+  Nutzers im dunklen Trading-Terminal-Look neu gestaltet (Leiterbahnen, Kerzenchart, Radar, Budget-Balken).
 - Spec 005 GPT-Depots (`gpt-luna` Haupt, `gpt-sol` Gegenprobe, ADR-0012/0013): umgesetzt, Prüfbefunde behoben
   (auf `feat/s005-llm-strategie`, hier zusammengeführt); offen nur AK10 (Live-Test mit echtem Key).
 - Fertig davor: Spec 004 (PR #4), 003 (PR #3), 001 (PR #2), 002 (PR #1).
 
 ## Nächster Schritt
-1. Web-Befunde beheben, dann PRs für 005 und 006 (CI), Merge nach Freigabe durch den Nutzer.
+1. CI auf PR #5 (005) und #6 (006) grün → Merge nach Freigabe durch den Nutzer (erst #5, dann #6).
 2. Nutzer: Key über die Seite eintragen (Passwort ist bereits gesetzt), dann AK10 (005) und AK9 (006).
 
 ## In Arbeit
