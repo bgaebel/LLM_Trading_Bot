@@ -154,8 +154,14 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 ### web
 - **Zweck:** Betreiber loggt sich ein und pflegt OpenAI-Key und Einstellungen; `paper-cycle` liest sie (ADR-0015).
 - **Schnittstelle:**
-  - `app`: `WebApp(data_dir, key_check=)` mit `handle(method, path, cookie, form)`, `make_server(app, host, port)`
-    (nur 127.0.0.1), `serve(...)`; Routen `/setup`, `/login`, `/logout`, `/settings`, `/settings/test`, `/app.css`
+  - `app`: `WebApp(data_dir, db=, key_check=)` mit `handle(method, path, cookie, form)` (für den Verbindungstest ein
+    `KeyCheck`, den der Handler außerhalb der App-Sperre ausführt und mit `key_checked` beendet),
+    `make_server(app, host, port)` (nur 127.0.0.1), `serve(...)`; Routen `/` (Übersicht), `/setup`, `/login`,
+    `/logout`, `/settings`, `/settings/test`, `/app.css`
+  - `readonly`: `reading(db)` – ein Lese-Snapshot je Seitenaufruf (`mode=ro`, `query_only`, ADR-0016), sonst
+    `DbUnavailable`
+  - `overview`: `load(con, now, shares, service=)` → `Overview` (Depots, Equity-Reihen über den Index ausgedünnt,
+    Lebenszeichen, Entscheidungen, GPT heute, Trades, Kurse); `service_pulse(status, now)`
   - `auth`: `PasswordStore` (scrypt), `LoginGuard` (5 Fehlversuche → 60 s), `Sessions` (12 h, im Speicher)
   - `credentials`: `SecretsFile.update(form, agents=, clear_key=)` (prüft mit `load_config`), `load_env_file`, `mask`
   - `files`: `write_private` (atomar, 600)
