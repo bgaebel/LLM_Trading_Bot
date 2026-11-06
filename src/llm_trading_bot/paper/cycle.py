@@ -157,7 +157,11 @@ def paper_cycle(
             raise ValueError("GPT depots configured but no model client given")
 
         def refresh() -> Quotes | None:
-            return _store_quotes(con, client, clock)[0]
+            # Fail closed: a failed fetch must not fall back to the quotes stored before the
+            # request - the drift check would then compare two prices from the same moment
+            # and trade at a price from before the answer (Spec 005 AK6).
+            fresh, error = _store_quotes(con, client, clock)
+            return None if error else fresh
 
         for outcome, results in run_llm_depots(
             con,

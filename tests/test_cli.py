@@ -134,6 +134,15 @@ def test_paper_cycle_refuses_bad_configuration(tmp_path: Path, env: dict[str, st
     assert not (tmp_path / "bot.db").exists()
 
 
+def test_default_gpt_depots_without_a_key_create_no_database(tmp_path: Path) -> None:
+    # Spec 005 AK9: the standard depots need OPENAI_API_KEY; refuse before the DB is touched.
+    out = io.StringIO()
+    code = run_paper_cycle(tmp_path / "bot.db", ScenarioClient(), env={}, out=out)
+    assert code == EXIT_INVALID
+    assert "OPENAI_API_KEY is required for the GPT depots" in out.getvalue()
+    assert not (tmp_path / "bot.db").exists()
+
+
 def test_paper_cycle_exit_2_without_quotes(tmp_path: Path) -> None:
     client = ScenarioClient()
     client.fail_quotes = True

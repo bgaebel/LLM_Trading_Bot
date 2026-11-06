@@ -1,6 +1,6 @@
 # Spec 005: LLM-Strategie (GPT) mit Modellvergleich, Budgetsperre und Provenienz
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s005-llm-strategie` · **Meilenstein:** M1 (Nr. 3a)
 - **Erstellt:** 2026-11-06
 
@@ -14,56 +14,56 @@ Eingaben, Modell, Token-Nutzung und Kosten gespeichert. Ungültige Antworten, Fe
 nie zu einem Trade. So lässt sich messen, ob das teurere Reasoning sein Geld wert ist.
 
 ## Akzeptanzkriterien
-- [ ] AK1: Prompt v1 (`llm-v1`) ist versioniert: Systemprompt und Antwortschema sind festgeschrieben (SHA-256 im
+- [x] AK1: Prompt v1 (`llm-v1`) ist versioniert: Systemprompt und Antwortschema sind festgeschrieben (SHA-256 im
   Test). Die Benutzer-Nachricht ist kompaktes JSON `{"markets": {"BTC-EUR": …, "ETH-EUR": …}}`; der Inhalt je
   Markt ist der Arena-Kontext `feature_payload` (Spec 003, inkl. Referenzsignale der klassischen Strategien,
   Depotgewicht, Kosten). Ein Markt ohne gültigen Snapshot fehlt in Anfrage und Schema. — Nachweis:
   `uv run pytest tests/llm/test_contract.py`, `tests/llm/test_llm_cycle.py::test_missing_eth_snapshot_asks_about_btc_only`
-- [ ] AK2: Strenge Prüfung je Markt nach Arena-Regeln: genau die Felder `action`, `target_fraction` ∈ {0, 0.25,
+- [x] AK2: Strenge Prüfung je Markt nach Arena-Regeln: genau die Felder `action`, `target_fraction` ∈ {0, 0.25,
   0.45}, `confidence` ∈ [0, 1], `market_regime` ∈ {UPTREND, DOWNTREND, SIDEWAYS}, `reason` (nicht leer); BUY nur
   0.25/0.45, SELL nur 0; genau die angefragten Märkte. Ist ein Teil ungültig, wird die ganze Antwort verworfen.
   `incomplete`, Ablehnung (`refusal`), fehlender Text oder ungültiges JSON → Versuch `ERROR`, keine Entscheidung.
   — Nachweis: `uv run pytest tests/llm/test_response.py` (Grenzfälle an jeder Regel),
   `tests/llm/test_openai_client.py` (`problem()`) und `tests/llm/test_llm_cycle.py` (`test_unusable_answers_trade_nothing`)
-- [ ] AK3: Takt je Depot (ADR-0013): regulär alle 60 min (`LLM_MIN_INTERVAL_SECONDS`, min. 900); Ereignis
+- [x] AK3: Takt je Depot (ADR-0013): regulär alle 60 min (`LLM_MIN_INTERVAL_SECONDS`, min. 900); Ereignis
   frühestens 10 min nach dem letzten Versuch (`LLM_EVENT_COOLDOWN_SECONDS`, min. 300), wenn sich ein Markt seit dem
   letzten Versuch um ≥ 1,8 % bewegt hat (`LLM_EVENT_MOVE_THRESHOLD`, min. 0,5 %) oder ein Referenzsignal
   (`trend`/`breakout`/`meanrev`) eines Marktes gewechselt hat – verglichen werden die Signale nur aus Marktsicht
   (Gewicht 0), damit eigene Trades keinen neuen Aufruf auslösen; höchstens 4 Versuche je rollierender Stunde
   (`LLM_MAX_CALLS_PER_HOUR`). — Nachweis: `uv run pytest tests/llm/test_due.py` (Grenzfälle an jeder Schwelle),
   `tests/llm/test_llm_cycle.py::test_own_trades_do_not_trigger_another_request`
-- [ ] AK4: Budgetsperre (ADR-0013): Vor jedem Aufruf wird eine Reservierung committet = schlimmster Fall aus den
+- [x] AK4: Budgetsperre (ADR-0013): Vor jedem Aufruf wird eine Reservierung committet = schlimmster Fall aus den
   Preisen (Eingabezeichen als Tokens plus `max_output_tokens`). Nicht gesendet wird (`BUDGET_BLOCKED`), wenn danach
   die Tagesgrenze des Depots (ADR-0012: `gpt-luna` 0,50 €, `gpt-sol` 2,50 €) oder die Gesamtgrenze
   (`LLM_DAILY_BUDGET_EUR`, 3 €) überschritten wäre. Unbekannte Kosten zählen mit ihrer Reservierung; Kosten über
   der Reservierung sperren das Depot für den Rest des Tages; ein Modell ohne Preise wird nie aufgerufen.
   Rechnen in `Decimal`. — Nachweis: `uv run pytest tests/llm/test_budget.py`
-- [ ] AK5: Provenienz: Jeder Versuch hat eine Zeile in `llm_calls` (Zeit, Depot, Märkte, Referenzkurse, Modell,
+- [x] AK5: Provenienz: Jeder Versuch hat eine Zeile in `llm_calls` (Zeit, Depot, Märkte, Referenzkurse, Modell,
   Prompt-Version und -SHA-256, `max_output_tokens`, Effort, Kontext, Antwort-ID, Input-/Output-/Reasoning-/
   Cache-Tokens, Kosten, Reservierung, Dauer, Status, Fehlertyp). Jede Entscheidung verweist auf ihren Versuch und
   speichert `market_regime`. Der API-Key steht nie in DB, Ausgabe oder Fehlermeldung. — Nachweis:
   `uv run pytest tests/llm/test_provenance.py` (sucht den Test-Key in allen Zeilen und der CLI-Ausgabe)
-- [ ] AK6: Fail closed wie Arena-`llm_cycle`: kein Aufruf ohne frische Quotes beider Märkte oder mit einem
+- [x] AK6: Fail closed wie Arena-`llm_cycle`: kein Aufruf ohne frische Quotes beider Märkte oder mit einem
   Snapshot älter als 120 s. Nach der Antwort je Markt: Quotes nicht frisch (> 20 s) oder Mittelkurs > 2 % vom
   Snapshot entfernt → Entscheidung `STALE_QUOTE`, kein Trade. Frische Quotes werden vor jeder Anfrage geprüft, die
   Quotes nach der Antwort neu geholt. — Nachweis: `uv run pytest tests/llm/test_llm_cycle.py` (Grenzfälle 120/121 s
   vor und nach der Antwort, Drift 1,99/2,01 %, Quotes 21 s alt, Abruf nach der Antwort verdrahtet)
-- [ ] AK7: Isolation: Fehler, Timeout oder Budgetsperre eines Depots blockieren weder die anderen Depots noch
+- [x] AK7: Isolation: Fehler, Timeout oder Budgetsperre eines Depots blockieren weder die anderen Depots noch
   Buy & Hold (die Anfragen der Depots laufen gleichzeitig mit demselben Snapshot); fehlt der Snapshot eines
   Marktes, wird nur der andere angefragt. Jede HTTP-Anfrage hat 60 s Timeout; wiederholt wird höchstens 2-mal und
   nur bei 429/5xx (kurze Pause), nie nach einem Timeout; die Reservierung deckt alle möglichen Anfragen, jede
   zusätzliche Anfrage wird im schlimmsten Fall abgerechnet. — Nachweis: `uv run pytest tests/llm/test_llm_cycle.py
   tests/llm/test_openai_client.py`
-- [ ] AK8: Schema v2 (`PRAGMA user_version = 2`) mit Tabelle `llm_calls`; eine v1-DB wird mit klarer Meldung
+- [x] AK8: Schema v2 (`PRAGMA user_version = 2`) mit Tabelle `llm_calls`; eine v1-DB wird mit klarer Meldung
   abgelehnt, nicht migriert (ADR-0012). — Nachweis: `uv run pytest tests/paper/test_db.py`
-- [ ] AK9: Konfiguration: `BOT_AGENTS` (Standard `gpt-luna,gpt-sol`; klassische Agenten wählbar) ersetzt
+- [x] AK9: Konfiguration: `BOT_AGENTS` (Standard `gpt-luna,gpt-sol`; klassische Agenten wählbar) ersetzt
   `BOT_AGENT`. Ein GPT-Depot ohne `OPENAI_API_KEY` ist ein Konfigurationsfehler ohne DB-Änderung. `LLM_EFFORT`
   Standard `low`. Ein abweichendes Modell (`OPENAI_MODEL_<DEPOT>`) braucht eigene Preise. — Nachweis:
   `uv run pytest tests/llm/test_config.py`
 - [x] AK10: [manuell] Mit echtem Key zweimal `uv run trading-bot paper-cycle --db <pfad>`: Lauf 1 fragt jedes Depot
   einmal und zeigt je Depot Signale, Tokens (inkl. Reasoning) und Kosten; Lauf 2 kurz danach fragt nicht.
   Gemessene Tokens und Kosten je Modell kommen in den „Verlauf" und prüfen die Schätzung.
-- [ ] AK11: Lint, Format, `mypy src tests tools`, CI grün; kein Key im Repo (`git grep -n "sk-"` ohne Treffer
+- [x] AK11: Lint, Format, `mypy src tests tools`, CI grün; kein Key im Repo (`git grep -n "sk-"` ohne Treffer
   außer Test-Platzhaltern). — Nachweis: Befehle aus `CLAUDE.md`, CI im PR
 
 ## Abgrenzung
@@ -197,10 +197,35 @@ Claude Haiku 5.5 (gleicher Preis wie luna; ADR-0012), Raspberry Pi (ADR-0005 ble
   Hochgerechnet auf das Maximum von 96 Anfragen/Tag: luna ~0,03 €, sol ~0,55 € – deutlich unter 0,50 / 2,50 €;
   die Anteile bleiben. Strict Mode akzeptiert das Schema (Zahlen-Enum, Markt-Schlüssel mit Bindestrich).
   Hinweis: „attempt N" in der CLI ist die `llm_calls`-Zeilennummer, keine Wiederholung (sol zeigte „attempt 2").
+- 2026-11-06: `/abschluss`-Prüfung (`pruefer`) auf main 69a6fa4: bereit, kein Blocker, Mutationstest LLM 51/51
+  bestätigt. Behoben (Branch `fix/s005-quote-refresh`): Scheiterte der Quote-Abruf nach den Antworten, fiel der
+  Zyklus auf die beim Zyklusbeginn gespeicherten Quotes zurück (noch ≤ 20 s alt) – der Drift-Check verglich dann
+  zwei Preise aus demselben Moment und gehandelt wurde zu einem Kurs von vor der Antwort. Jetzt gibt ein
+  gescheiterter Abruf keine Quotes, beide Depots `STALE_QUOTE` (Test
+  `test_a_failed_fetch_after_the_answers_trades_nothing`). Dazu Test des Depotgewichts im Prompt mit einem Depot,
+  das Coins hält (vorher nur Gewicht 0 geprüft) samt Mutation „llm depot weight in prompt" (LLM 52/52), Test
+  „Standard-Depots ohne Key → keine DB-Datei" (AK9), Beschreibung des Markers `net` nennt OpenAI.
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Zwei GPT-Depots (`gpt-luna` mit `gpt-6-luna` als Haupt-Trader, `gpt-sol` mit `gpt-6.1-sol` als
+  Gegenprobe) handeln neben den Referenzen und Buy & Hold im Paper-Modus: eine gemeinsame Anfrage für BTC+ETH mit
+  versioniertem Prompt `llm-v1` und strengem JSON-Schema, Prüfung je Markt nach Arena-Regeln, Abfragen nur bei Bedarf
+  (stündlich, ≥ 1,8 % Bewegung oder Signalwechsel, max. 4/h), hartes EUR-Budget je Depot und gesamt mit
+  Reservierung vor jedem Aufruf, Provenienz jedes Versuchs in `llm_calls`, Fail closed vor und nach der Antwort,
+  Isolation der Depots. Umgesetzt in PR #5 (Squash 254afb8), Fix aus dem Abschluss in `fix/s005-quote-refresh`.
+- **Abweichungen vom Plan:** Die erste Fassung (Arena-Prompt je Markt, ein Depot, ADR-0009) wurde nach drei
+  Umsteuerungen des Nutzers ersetzt (ADR-0011 → 0012 → 0013, siehe Verlauf). Die im Verlauf genannten Einzel-Commits
+  (381f617, f4e4204, 98a8b34, 69da905) liegen wegen des Squash-Merges nicht auf `main`; maßgeblich ist 254afb8.
+  AK11: `git grep -n "sk-"` trifft außer Test-Platzhaltern auch die Redaktions-Muster (`service/logs.py`,
+  `web/credentials.py`) und Doku-Erwähnungen – gemeint und erfüllt ist „kein echter Key im Repo".
+- **Nachweise:** `uv run pytest` 1067 passed, 5 skipped (POSIX-Rechte, Unix-Sockets unter Windows); ruff, ruff
+  format, mypy strict, shellcheck ohne Befund; CI grün; Mutationstest LLM 52/52; AK10 live mit Messwerten (Verlauf).
+  Unabhängige Prüfung: bereit, AK1–AK9 und AK11 mit Testnachweis.
+- **Offen / Folgearbeit:**
+  - Kommt nach einer Wiederholung (429/5xx) ein sofort abgelehnter Fehler (4xx), wird der Versuch mit 0 € abgerechnet,
+    obwohl die vorige Anfrage bezahlt sein kann (AK7, letzter Satz). Selten und klein; Ausgabenlimit im OpenAI-Konto
+    deckt es ab. Beheben, wenn die Wiederholungslogik ohnehin angefasst wird.
+  - Tests importieren `httpx2` direkt, das nur über `openai` installiert wird – bei Gelegenheit als Dev-Abhängigkeit
+    deklarieren.
+- **Neue ADRs / Learnings:** ADR-0009 bis ADR-0013 (0012 und 0013 gültig); Learnings zum flaky Lock-Test unter
+  Windows (#windows) und zur eingeengten Fehlerliste.
