@@ -105,7 +105,7 @@ halb gültiger Antworten, feste Reservierung, Vergleich in eigener Spec (Nutzer,
 - [x] 2. Budget-Grundlage: Reservierung und Abrechnung in der DB – wird in Schritt 3 erweitert
 - [x] 3. Prompt v1, Schema und Prüfung je Markt, Takt je Depot; Arena-Vertrag je Markt entfernen; `llm_calls` und
   Budget auf Depots, Gesamtgrenze und berechnete Reservierung umstellen (AK1–AK4, AK8)
-- [ ] 4. `uv add openai`, `openai_client.py` mit Fake-Tests und `net`-Test (AK2, AK5, AK7)
+- [x] 4. `uv add openai`, `openai_client.py` mit Fake-Tests und `net`-Test (AK2, AK5, AK7)
 - [ ] 5. `agents.py`, `llm_cycle`, mehrere Depots in `paper-cycle`, Konfiguration (AK5–AK7, AK9)
 - [ ] 6. Mutationstest erweitern, Doku (ARCHITEKTUR, README, `docs/betrieb/`), manueller Live-Test (AK10)
 
