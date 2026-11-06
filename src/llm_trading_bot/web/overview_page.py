@@ -10,8 +10,10 @@ from llm_trading_bot.paper.db import START_CASH
 from llm_trading_bot.paper.execution import BUYHOLD
 from llm_trading_bot.web import pages
 from llm_trading_bot.web.overview import (
+    CYCLE_LABEL,
     DELAYED,
     RUNNING,
+    SERVICE_LABEL,
     DecisionRow,
     DepotRow,
     LlmToday,
@@ -21,7 +23,9 @@ from llm_trading_bot.web.overview import (
     TradeRow,
 )
 
-REFRESH_SECONDS = 60
+REFRESH_SECONDS = 15
+"""Several reloads per service round: at 60 s the reload ran in lockstep with the 60-s rounds
+(Spec 008), so every load showed the same age and the page looked frozen. No script (CSP)."""
 CHART_W, CHART_H = 800, 260
 PLOT = (64, 16, 788, 222)
 """Left, top, right, bottom of the plot area inside the chart's viewBox."""
@@ -36,10 +40,10 @@ def signed(value: float, unit: str, places: int = 2) -> str:
     return f"{value:+,.{places}f}".replace(",", NBSP) + unit
 
 
-def when(ts: str | None) -> str:
+def when(ts: str | None, *, seconds: bool = False) -> str:
     if ts is None:
         return "–"
-    return datetime.fromisoformat(ts).strftime("%Y-%m-%d %H:%M UTC")
+    return datetime.fromisoformat(ts).strftime(f"%Y-%m-%d %H:%M{':%S' if seconds else ''} UTC")
 
 
 def age(seconds: float | None) -> str:
@@ -71,7 +75,9 @@ def _table(head: Sequence[str], rows: Sequence[Sequence[str]], cls: str = "") ->
 def _pulses(pulses: Sequence[Pulse]) -> str:
     items = "".join(
         f'<div class="pulse-row {_tone(p.level)}"><i class="led"></i><span>{escape(p.label)}</span>'
-        f"<b>{escape(p.level)}</b><small>{escape(when(p.at))} · {escape(age(p.age_seconds))}"
+        # Seconds: a round a minute later must show as a new time, not as the same minute.
+        f"<b>{escape(p.level)}</b><small>{escape(when(p.at, seconds=True))} · "
+        f"{escape(age(p.age_seconds))}"
         + (f" · {escape(p.note)}" if p.note else "")
         + "</small></div>"
         for p in pulses
@@ -242,12 +248,15 @@ def _trades(rows: Sequence[TradeRow]) -> str:
 
 
 def _readouts(view: Overview) -> str:
-    cycle = view.pulses[0] if view.pulses else None
+    # By label, not position: the service pulse (Spec 008) comes first when there is a status file.
+    cycle = next((p for p in view.pulses if p.label == CYCLE_LABEL), None)
+    service = next((p for p in view.pulses if p.label == SERVICE_LABEL), None)
+    bot = service or cycle
     leader = max((d for d in view.depots if not d.reference), key=lambda d: d.value, default=None)
     charged = sum((r.charged for r in view.llm), start=0) if view.llm else 0
     budget = sum((r.share for r in view.llm), start=0) if view.llm else 0
     cells = [
-        ("Bot", cycle.level if cycle else "–", "" if cycle and cycle.level == RUNNING else "off"),
+        ("Bot", bot.level if bot else "–", "" if bot and bot.level == RUNNING else "off"),
         ("Letzter Zyklus", age(cycle.age_seconds) if cycle else "–", ""),
         (
             "Bestes Depot",

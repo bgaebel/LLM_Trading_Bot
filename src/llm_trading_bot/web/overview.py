@@ -126,6 +126,10 @@ def equity_series(con: sqlite3.Connection, limit: int = MAX_POINTS) -> list[Seri
     return sorted(series, key=lambda s: (s.agent == BUYHOLD, s.agent))
 
 
+CYCLE_LABEL = "Letzter Zyklus"
+SERVICE_LABEL = "Dienst"
+
+
 def level(age_seconds: float | None) -> str:
     if age_seconds is None or age_seconds > DELAYED_SECONDS:
         return STOPPED
@@ -148,7 +152,7 @@ class Pulse:
 
 def service_pulse(status: ServiceStatus | None, now: float, *, problem: str = "") -> Pulse:
     """Spec 008 AK8: from ``service-status.json`` - is the service doing its rounds?"""
-    label = "Dienst"
+    label = SERVICE_LABEL
     if problem:
         return Pulse(label, None, None, STOPPED, problem)
     if status is None:
@@ -176,7 +180,7 @@ def service_pulse(status: ServiceStatus | None, now: float, *, problem: str = ""
 def liveness(con: sqlite3.Connection, now: float) -> list[Pulse]:
     """Last cycle (newest equity point) and the last stored quote of each market."""
     last = con.execute("SELECT MAX(ts) FROM equity").fetchone()[0]
-    pulses = [Pulse("Letzter Zyklus", last, None if last is None else max(0.0, now - epoch(last)))]
+    pulses = [Pulse(CYCLE_LABEL, last, None if last is None else max(0.0, now - epoch(last)))]
     stored = {r["symbol"]: r["ts"] for r in con.execute("SELECT symbol, ts FROM market")}
     for symbol in Symbol:
         ts = stored.get(symbol.name)

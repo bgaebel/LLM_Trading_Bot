@@ -120,6 +120,10 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
   `sleep` + `is_set`, Regressionstest im Unterprozess, Learning #signal); fehlender Test „Stopp während des
   Wartens“ (AK5); ARCHITEKTUR nannte noch `/etc/llm-trading-bot/env`. Dazu Tests für GPT-Kosten in der Rundenzeile
   (AK9) und READY erst nach geöffneter DB (AK6).
+- 2026-11-06: AK11-Test beim Nutzer: „Letzter Zyklus“ schien eingefroren. Ursache: Die Übersicht lud sich alle
+  60 s neu (Spec 007 AK9), also im Gleichtakt mit den 60-s-Runden – jedes Laden zeigte dasselbe Alter. Jetzt Neuladen
+  alle 15 s, Lebenszeichen mit Sekunden, die Kennzahl „Letzter Zyklus“ wird per Beschriftung statt Position gewählt
+  (seit dem Dienst-Lebenszeichen stand dort an Position 0 der Dienst).
 
 ## Ergebnis
 - **Erreicht:** …

@@ -17,6 +17,7 @@ from llm_trading_bot.service.status import ServiceStatus, write_status
 from llm_trading_bot.web.app import COOKIE, PRE_COOKIE, WebApp, make_server, parse_cookies
 from llm_trading_bot.web.auth import MAX_FAILURES
 from llm_trading_bot.web.credentials import load_env_file
+from llm_trading_bot.web.overview_page import REFRESH_SECONDS
 
 PASSWORD = "ein-langes-Passwort-2026"
 KEY = "sk-test-not-a-real-key-0000abcd"
@@ -506,7 +507,8 @@ def test_overview_reads_an_explicit_db_path(tmp_path: Path) -> None:
 
 def test_overview_refreshes_itself_settings_page_does_not(running: Running) -> None:
     setup(running)
-    assert '<meta http-equiv="refresh" content="60">' in running.browser.request("GET", "/")[2]
+    page = running.browser.request("GET", "/")[2]
+    assert f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">' in page
     assert "http-equiv" not in running.browser.request("GET", "/settings")[2]
 
 
