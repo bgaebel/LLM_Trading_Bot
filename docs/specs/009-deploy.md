@@ -1,6 +1,6 @@
 # Spec 009: Deploy auf Hetzner – Installation, Update/Rollback, Backup und Wiederherstellung
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s009-deploy` · **Meilenstein:** M1 (Nr. 6)
 - **Erstellt:** 2026-11-06
 
@@ -105,7 +105,7 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
 - Verworfen: siehe ADR-0018 (git auf dem Server, In-Place-Checkout, Docker, Off-Site-Backups, Daten-Rollback).
 
 ## Plan
-- [ ] 1. ADR-0018 annehmen; `ops/backup.py` + CLI `backup`, `verify-db`, `restore` mit Tests (AK1, AK2)
+- [x] 1. ADR-0018 annehmen; `ops/backup.py` + CLI `backup`, `verify-db`, `restore` mit Tests (AK1, AK2)
 - [ ] 2. Uhrsprung im Dienst + Test (AK3)
 - [ ] 3. Units: `RestartPreventExitStatus=3`, Backup-Service und -Timer; `check-units.sh` und Datei-Tests (AK4)
 - [ ] 4. `deploy/release.sh` + Sandbox-Tests in der CI (AK5)

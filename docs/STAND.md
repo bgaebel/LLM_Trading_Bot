@@ -1,9 +1,9 @@
 # Stand
 
-**Aktualisiert:** 2026-11-06 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-06 · **Branch:** `feat/s009-deploy` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-- Spec 009 Deploy (ADR-0018): freigegeben, Umsetzung beginnt. Release je Commit per SSH mit automatischem
+- Spec 009 Deploy (ADR-0018): in Arbeit. Release je Commit per SSH mit automatischem
   Code-Rollback, DB-Backups täglich nur auf dem Server (14 Tage), Wiederherstellungsprobe, Neustart-Test.
 - Specs 001–008 fertig.
 
@@ -13,7 +13,7 @@
 3. Danach Nr. 4 Risiko-Grenzen.
 
 ## In Arbeit
-- Spec: 009 (freigegeben)
+- Spec: 009 (in Arbeit)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
