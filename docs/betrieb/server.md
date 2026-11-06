@@ -95,3 +95,9 @@ ssh -N -L 8787:127.0.0.1:8787 <alias>
 Der lokale Port ist frei wählbar (z. B. `-L 8899:127.0.0.1:8787`, wenn lokal schon die Arena auf 8787 läuft) – die
 Seite prüft nur den Hostnamen `127.0.0.1`/`localhost`, nicht den Port.
 Beim ersten Start steht der einmalige Einrichtungscode im Terminal bzw. Journal des Web-Prozesses.
+
+**Passwort vergessen:** Web-Prozess stoppen, `web-auth.json` im Datenverzeichnis beiseitelegen, Web-Prozess neu
+starten – erst beim Start entsteht ein neuer Einrichtungscode (im Terminal bzw. Journal). Die Datei bei laufendem
+Prozess zu entfernen reicht nicht: Ohne Neustart gibt es keinen Code, jeder Versuch zählt als Fehlversuch.
+`secrets.env` bleibt dabei unberührt. Die Seite prüft beim Absenden von Formularen, dass `Origin` denselben Port
+nennt wie der Host, den der Browser aufruft – das passt bei jedem Tunnel-Port.

@@ -1,6 +1,6 @@
 # Spec 006: Weboberfläche mit Login für Zugangsdaten und Einstellungen
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s006-web` (baut auf `feat/s005-llm-strategie` auf) · **Meilenstein:** M1 (Nr. 7, Teil)
 - **Erstellt:** 2026-11-06
 
@@ -11,31 +11,31 @@ danach loggt er sich ein und trägt den OpenAI-Key und die Einstellungen der GPT
 diese Werte. Keys verlassen den Rechner nicht, werden nie wieder vollständig angezeigt und stehen nie im Repo.
 
 ## Akzeptanzkriterien
-- [ ] AK1: Der Server bindet nur an `127.0.0.1`; eine andere Adresse wird mit Fehler abgelehnt. — Nachweis:
+- [x] AK1: Der Server bindet nur an `127.0.0.1`; eine andere Adresse wird mit Fehler abgelehnt. — Nachweis:
   `uv run pytest tests/web/test_server.py`
-- [ ] AK2: Ersteinrichtung nur mit dem beim Start gedruckten Einrichtungscode; Passwort ≥ 8 Zeichen (ADR-0015); danach ist
+- [x] AK2: Ersteinrichtung nur mit dem beim Start gedruckten Einrichtungscode; Passwort ≥ 8 Zeichen (ADR-0015); danach ist
   `/setup` gesperrt. Gespeichert wird nur ein `scrypt`-Hash mit Salt (Datei 600). — Nachweis:
   `uv run pytest tests/web/test_auth.py tests/web/test_server.py`
-- [ ] AK3: Login mit falschem Passwort scheitert; nach 5 Fehlversuchen 60 s Sperre; Sitzungs-Cookie `HttpOnly`,
+- [x] AK3: Login mit falschem Passwort scheitert; nach 5 Fehlversuchen 60 s Sperre; Sitzungs-Cookie `HttpOnly`,
   `SameSite=Strict`, 12 h; Logout beendet die Sitzung; ohne Sitzung leiten alle Seiten zum Login. — Nachweis:
   `uv run pytest tests/web/test_server.py`
-- [ ] AK4: Formulare ohne gültiges CSRF-Token werden abgelehnt (403) – nach dem Login das Token der Sitzung, auf
+- [x] AK4: Formulare ohne gültiges CSRF-Token werden abgelehnt (403) – nach dem Login das Token der Sitzung, auf
   Login und Ersteinrichtung ein Token per Double-Submit-Cookie (`SameSite=Strict`); zusätzlich werden POSTs mit
   fremdem `Origin` oder `Sec-Fetch-Site: cross-site` abgelehnt, ohne als Fehlversuch zu zählen. — Nachweis:
   `uv run pytest tests/web/test_server.py`
-- [ ] AK5: Einstellungen speichern: `OPENAI_API_KEY` und die Spec-005-Werte (`BOT_AGENTS`, `LLM_DAILY_BUDGET_EUR`,
+- [x] AK5: Einstellungen speichern: `OPENAI_API_KEY` und die Spec-005-Werte (`BOT_AGENTS`, `LLM_DAILY_BUDGET_EUR`,
   Anteile je Depot, `LLM_EFFORT`) werden wie in `load_config` geprüft, atomar in `secrets.env` (600) geschrieben;
   ein gespeicherter Key erscheint nie mehr vollständig im HTML (nur `…abcd`); leeres Key-Feld = unverändert;
   „Key löschen" entfernt ihn. Unbekannte Felder werden verworfen. — Nachweis: `uv run pytest tests/web/test_credentials.py
   tests/web/test_server.py`
-- [ ] AK6: „Verbindung testen" ruft nur die kostenlose Modell-Abfrage auf und zeigt Erfolg oder den Fehlertyp, nie
+- [x] AK6: „Verbindung testen" ruft nur die kostenlose Modell-Abfrage auf und zeigt Erfolg oder den Fehlertyp, nie
   den Key. — Nachweis: `uv run pytest tests/web/test_server.py` (Fake-Client)
-- [ ] AK7: `paper-cycle --secrets <datei>` (Standard: `secrets.env` neben der DB) nutzt die gespeicherten Werte;
+- [x] AK7: `paper-cycle --secrets <datei>` (Standard: `secrets.env` neben der DB) nutzt die gespeicherten Werte;
   gesetzte Umgebungsvariablen gehen vor. — Nachweis: `uv run pytest tests/test_cli.py`
-- [ ] AK8: Sicherheits-Header auf jeder Antwort (CSP `default-src 'self'`, kein Inline-Skript, `X-Frame-Options:
+- [x] AK8: Sicherheits-Header auf jeder Antwort (CSP `default-src 'self'`, kein Inline-Skript, `X-Frame-Options:
   DENY`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`). — Nachweis: `uv run pytest tests/web/test_server.py`
 - [x] AK9: [manuell] Seite im Browser: Ersteinrichtung, Login, Key eintragen, Verbindung testen, Logout.
-- [ ] AK10: Lint, Format, `mypy src tests tools`, CI grün; kein Secret im Repo. — Nachweis: Befehle aus `CLAUDE.md`
+- [x] AK10: Lint, Format, `mypy src tests tools`, CI grün; kein Secret im Repo. — Nachweis: Befehle aus `CLAUDE.md`
 
 ## Abgrenzung
 - Nicht Teil dieser Spec: Status-/Depot-Ansicht und Charts (Rest von Nr. 7), Starten/Stoppen des Bots über die
@@ -67,7 +67,7 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
 - [x] 3. `app.py` + `web`-Befehl + Server-Tests (AK1–AK6, AK8)
 - [x] 4. `paper-cycle --secrets` (AK7)
 - [x] 5. Doku (ARCHITEKTUR, README, `docs/betrieb/`), Seite im Browser zeigen – die Prüfung durch den Nutzer ist
-  AK9 und noch offen
+  AK9 (erledigt, siehe Verlauf)
 
 ## Risiken & offene Fragen
 - Freigabe: Der Nutzer hat am 2026-11-06 angewiesen, autonom weiterzuarbeiten, bis er die Webseite sieht; Spec und
@@ -135,9 +135,33 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
   Preisraster im Zoom macht das Skalieren sichtbar. Tests: keine sichtbare Kerze außerhalb des Bands, Zoom rein und
   raus, Gegen-Skalierung = 1. Im Browser gemessen: Maßstab ändert sich laufend, Produkt Zoom × Gegen-Skalierung ≈ 1.
 
+- 2026-11-06: `/abschluss`-Prüfung (`pruefer`) auf main c825989: bereit, kein Blocker. Behoben (Branch
+  `fix/s006-abschluss`): Cookies auf 127.0.0.1 gelten für jeden Port – eine Seite auf einem anderen lokalen Port
+  konnte das Vorab-Cookie setzen, das passende Token posten und (bei Browsern ohne `Sec-Fetch-Site`) mit fünf
+  Versuchen den Besitzer 60 s aussperren. Jetzt muss `Origin` denselben Port nennen wie der `Host`, den der Browser
+  aufruft (jeder Tunnel-Port passt weiter). Der Verbindungstest läuft außerhalb der globalen Sperre, damit die
+  Übersicht während der bis zu 15 s nicht hängt. ARCHITEKTUR beschrieb `secrets.env` als Ort aller Variablen – dort
+  stehen nur Key, Depots, Effort und Budgets. Ablauf „Passwort vergessen" in `docs/betrieb/server.md` (Neustart nötig,
+  sonst kein neuer Code). Tests: anderer lokaler Port und Standardport abgelehnt, langsamer Verbindungstest blockiert
+  andere Seiten nicht, Key löschen und unbekannte Felder über HTTP.
+
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** `trading-bot web` – Weboberfläche nur auf 127.0.0.1 (Zugriff per SSH-Tunnel): Ersteinrichtung mit
+  einmaligem Code, Passwort-Login (≥ 8 Zeichen, scrypt, Sperre 5/60 s, Sitzung 12 h), CSRF-Schutz für alle
+  Formulare plus Origin-/`Sec-Fetch-Site`-Prüfung, Sicherheits-Header mit strenger CSP, Pflege von Key, Depots,
+  Effort und Budgets in `secrets.env` (600, atomar), Verbindungstest nur über die kostenlose Modellabfrage;
+  `paper-cycle` (und später `run`) lesen die Datei, Umgebung gewinnt. Umgesetzt in PR #6 (c778ea5), Gestaltung in
+  #7 (a15c7f1), Kostentabelle in #8 (f7b6b2f), Backdrop-Chart in #10 (40211ec), Fixes aus dem Abschluss in
+  `fix/s006-abschluss`.
+- **Abweichungen vom Plan:** Auf Wunsch des Nutzers über die Spec hinaus: dunkles Terminal-Design mit animiertem
+  Hintergrund-Chart (erfundene Kurse und Signale, als „DEMO" gekennzeichnet, nur CSS) und eine Kostentabelle je
+  Modell im Reasoning-Bereich – die Abgrenzung schloss „Charts" aus, gemeint waren echte Daten (folgten mit Spec 007).
+  Passwortlänge 8 statt 12 (ADR-0015 löst 0014 ab). `ThreadingHTTPServer` statt einfädigem Server (Learning).
+- **Nachweise:** `uv run pytest` 1071 passed, 5 skipped (Windows); CI grün inkl. POSIX-Dateirechte; ruff,
+  mypy strict ohne Befund; unabhängige Prüfung: bereit, AK1–AK8 und AK10 mit Testnachweis; AK9 vom Nutzer (Verlauf).
+- **Offen / Folgearbeit:**
+  - Ausgabe des Einrichtungscodes in `serve` und `paper-cycle --secrets` über `main()` sind nur durch den Code
+    belegt (die Verdrahtung ist eindeutig; ein Test bräuchte einen echten Server- bzw. Netzaufruf).
+  - Bei Nr. 6: Variablen außerhalb von `secrets.env` (Gebühren, Takt-Parameter) per Unit bzw. Drop-in setzen.
+- **Neue ADRs / Learnings:** ADR-0014 (abgelöst), ADR-0015; Learning „Formular-POST hängt: einfädiger HTTPServer
+  wartet auf leere Browser-Verbindung".
