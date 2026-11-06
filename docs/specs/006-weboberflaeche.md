@@ -111,6 +111,14 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
   pausiert sie, Inhalte blieben sonst unsichtbar). Im Browser geprüft: Desktop und 375 px ohne seitliches
   Scrollen, Einrichtung → Login → Einstellungen mit separatem Test-Datenverzeichnis.
 - 2026-11-06: Nutzer: weniger Blau, mehr Schwarz → Grundfarben neutral schwarz/grau, Neon-Akzente bleiben.
+- 2026-11-06: Nutzer: Charts sollen durchs Bild laufen, regelmäßig mit Fake-Signalen; der Chart soll erst
+  „entstehen" (kein Blick in die Zukunft) und zufälliger verlaufen. `web/chart.py`: Kerzen aus einem gesetzten
+  Random Walk mit wechselnder Volatilität und seltenen Sprüngen, als Brücke geschlossen (Schleife ohne Sprung,
+  180 Kerzen, eine pro Sekunde), dazu eine langsamere ETH-Linie. Alles rechts der Scan-Linie ist per Clip-Pfad
+  ausgeblendet; ein Kurspunkt auf der Linie folgt der entstehenden Kerze. Erfundene BUY/SELL-Signale an
+  Wendepunkten erscheinen mit ihrer Kerze (alle 7–19 s), blinken auf und zeigen eine Log-Zeile. Ohne Skript:
+  Zeitpunkte als erzeugte CSS-Klassen mit negativem Delay bzw. erzeugte Keyframes. Im Bild als „DEMO" und
+  „erfundene Kurse und Signale" gekennzeichnet. Tests für Schleife, Clip, Signalabstand und -zeitpunkt, Kurspunkt.
 
 ## Ergebnis
 - **Erreicht:** …
