@@ -1,22 +1,23 @@
 # Stand
 
-**Aktualisiert:** 2026-11-06 · **Branch:** `feat/s003-strategien` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-06 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-Spec 002 (Server-Härtung) ist fertig und gemergt (PR #1). Spec 001 (Marktdaten) ist fertig und gemergt (PR #2): Bitvavo-Quotes und Kerzen, geprüfte Snapshots, `trading-bot market`. Der Server ist zu: nur Key-Login über den Admin-Benutzer, kein Root-
-oder Passwort-Login, ufw nur SSH, automatische Sicherheitsupdates. Neustart und zweiter Lauf sind geprüft.
-Zugangsdaten stehen nur lokal (`~/.ssh/config`, Alias), nicht im Repo.
+Fertig und gemergt: Spec 002 Server-Härtung (PR #1), Spec 001 Marktdaten (PR #2), Spec 003 Indikatoren,
+klassische Strategien und LLM-Kontext identisch zu Arena v0.3.1 (PR #3; Golden-Fixtures mit Grenzfällen,
+Mutationstest 51/51). Diagnose: `uv run trading-bot market`, `uv run trading-bot signals`.
 
 ## Nächster Schritt
-1. PR #3 (Spec 003) mergen, wenn die CI grün ist.
-2. Danach Nr. 3 (Paper-Ausführung + SQLite), dann 3a LLM-Strategie (vom Nutzer für M1 gewählt).
+1. Spec 004 (Paper-Ausführung + SQLite, Entwurf) und ADR-0008 (vorgeschlagen) durchsehen und freigeben.
+   Zu bestätigen: Startkapital 10.000 EUR, Slippage 0,05 %, aktiver Agent `trend` bis zur LLM-Strategie.
+2. Danach `/umsetzen 004`, dann Spec für 3a LLM-Strategie (Budgetsperre, Provenienz).
 
 ## In Arbeit
-- Spec: 003 (fertig, PR #3 offen)
+- Spec: 004 (Entwurf, wartet auf Freigabe)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
-- –
+- Freigabe von Spec 004 / ADR-0008 durch den Nutzer.
 
 ## Offen – manuell prüfen
 - Optional in der Hetzner-Oberfläche: Cloud-Firewall als zweite Schicht, Backups/Snapshot (siehe `docs/betrieb/server.md`).

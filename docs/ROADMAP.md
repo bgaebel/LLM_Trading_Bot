@@ -15,7 +15,7 @@ Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft,
 |---|---|---|---|
 | 1 | Marktdaten aus der Arena übernehmen (Bitvavo-Quotes, abgeschlossene Kerzen, Lückenbehandlung) | [001](specs/001-marktdaten.md) | – |
 | 2 | Indikatoren + klassische Strategien + LLM-Kontext aus der Arena (identisch zu v0.3.1) | [003](specs/003-strategien.md) | – |
-| 3 | Paper-Ausführung + SQLite-Persistenz (Gebühren, Slippage, Idempotenz, Single-Writer) | – | – |
+| 3 | Paper-Ausführung + SQLite-Persistenz (Gebühren, Slippage, Idempotenz, Single-Writer) | [004](specs/004-paper-ausfuehrung.md) | – |
 | 3a | LLM-Strategie (Claude/GPT) – vom Nutzer für M1 gewählt: API-Aufruf, strenges JSON-Schema, Budgetsperre, Provenienz | – | – |
 | 4 | Risiko-Grenzen und Fail-closed (veraltete Kurse, Feed-/LLM-Ausfall, BTC/ETH entkoppelt) | – | – |
 | 5 | Dienst: Worker-Schleife, sauberer Shutdown, Health, Logging | – | – |
