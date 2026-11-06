@@ -27,7 +27,7 @@ from llm_trading_bot.web.auth import (
     new_setup_code,
     same,
 )
-from llm_trading_bot.web.credentials import SecretsFile
+from llm_trading_bot.web.credentials import SecretsFile, mask
 from llm_trading_bot.web.overview_page import overview_page
 from llm_trading_bot.web.readonly import DbUnavailable, reading
 
@@ -89,6 +89,28 @@ def is_local_host(host: str) -> bool:
     """Host or Origin host must be 127.0.0.1/localhost; the port is free (SSH tunnel)."""
     name = host.rsplit(":", 1)[0] if host.count(":") == 1 or host.startswith("[") else host
     return name in LOCAL_NAMES
+
+
+@dataclass(frozen=True)
+class KeyCheck:
+    """The connection test is due: ``key`` must be looked up, then ``WebApp.key_checked``."""
+
+    session: Session
+    key: str
+
+    def __repr__(self) -> str:
+        return f"KeyCheck(session=..., key={mask(self.key)!r})"
+
+
+def same_port(origin_netloc: str, host: str) -> bool:
+    """Cookies on 127.0.0.1 are shared by every port, so a page on another local port could plant
+    the pre-session cookie and post a matching token: its Origin must name our port."""
+    try:
+        theirs = urlsplit(f"//{origin_netloc}").port or 80
+        ours = urlsplit(f"//{host}").port or 80
+    except ValueError:
+        return False
+    return theirs == ours
 
 
 class WebApp:
@@ -173,7 +195,10 @@ class WebApp:
 
     # -- routing -----------------------------------------------------------------------------
 
-    def handle(self, method: str, path: str, cookies: Mapping[str, str], form: Form) -> Response:
+    def handle(
+        self, method: str, path: str, cookies: Mapping[str, str], form: Form
+    ) -> Response | KeyCheck:
+        """A ``KeyCheck`` asks the caller to run ``key_check`` and then ``key_checked``."""
         if path == "/app.css" and method == "GET":
             return Response(200, pages.CSS, "text/css; charset=utf-8")
         if not self.passwords.is_set():
@@ -262,11 +287,14 @@ class WebApp:
             return self._settings(session, f"Nicht gespeichert: {exc}", ok=False, status=400)
         return self._settings(session, "Gespeichert.")
 
-    def _test(self, session: Session) -> Response:
+    def _test(self, session: Session) -> Response | KeyCheck:
         key = self.credentials.read().get("OPENAI_API_KEY")
         if not key:
             return self._settings(session, "Kein API-Key gespeichert.", ok=False)
-        problem = self.key_check(key)
+        return KeyCheck(session, key)
+
+    def key_checked(self, session: Session, problem: str) -> Response:
+        """Second half of the connection test, after ``key_check`` ran outside the app lock."""
         if problem:
             return self._settings(session, f"Verbindung fehlgeschlagen: {problem}", ok=False)
         return self._settings(session, "Verbindung zu OpenAI in Ordnung (gpt-6-luna erreichbar).")
@@ -307,7 +335,8 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
 
         def _dispatch(self, method: str) -> None:
             # A foreign Host header means DNS rebinding or a misrouted request: refuse it.
-            if not is_local_host(self.headers.get("Host", "")):
+            host = self.headers.get("Host", "")
+            if not is_local_host(host):
                 self._plain(421, "wrong host")
                 return
             form: dict[str, list[str]] = {}
@@ -316,9 +345,11 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 # "null" comes from privacy contexts (sandbox, redirects) and proves nothing, so
                 # Sec-Fetch-Site and the form tokens decide - refusing it would lock the owner out.
                 origin = self.headers.get("Origin")
-                if origin and origin != "null" and not is_local_host(urlsplit(origin).netloc):
-                    self._plain(403, "cross-site request")
-                    return
+                if origin and origin != "null":
+                    netloc = urlsplit(origin).netloc
+                    if not is_local_host(netloc) or not same_port(netloc, host):
+                        self._plain(403, "cross-site request")
+                        return
                 if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
                     self._plain(403, "cross-site request")
                     return
@@ -337,6 +368,12 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             cookies = parse_cookies(self.headers.get("Cookie"))
             with app_lock:
                 response = app.handle(method, path, cookies, form)
+            if isinstance(response, KeyCheck):
+                # The OpenAI lookup takes up to 15 s: outside the lock, so the overview and the
+                # other pages keep answering meanwhile.
+                problem = app.key_check(response.key)
+                with app_lock:
+                    response = app.key_checked(response.session, problem)
             self._send(response)
 
         def do_GET(self) -> None:
