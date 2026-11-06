@@ -99,6 +99,17 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
   GPT-Einstellungen auch bei rein klassischen Depots geprüft; alle Effort-Stufen auswählbar; belegter Port im
   `web`-Befehl als Meldung. Tests für jeden Befund ergänzt (Logout serverseitig, POST ohne Sitzung, `--secrets`
   mit Key bis zum Modell, `web --host`).
+- 2026-11-06: Nachprüfung der Fixes (Workflow mit Kritiker). Nachgebessert: `Origin: null` (Sandbox, Weiterleitung)
+  zählt wie ein fehlender Origin – sonst sperrte sich der Besitzer aus; `Sec-Fetch-Site` und Formular-Token
+  entscheiden. `Content-Length` nur noch ASCII-Ziffern (`isdigit()` ließ `²` durch → 500). Temporärdateien der
+  atomaren Schreibvorgänge in `.gitignore`.
+- 2026-11-06: Nutzer: Oberfläche nicht im Standard-Look, sondern dunkel, verspielter, mit Technik-Elementen.
+  Neu gestaltet (`web/style.py`, `pages.py`): Trading-Terminal-Look mit Leiterbahnen und Kerzenchart als
+  Hintergrund-SVG, Laufband, Radar und Statuskonsole auf Login/Einrichtung, Kennzahlen-Kacheln, Depot-Kacheln,
+  Budget-Balken je Depot. Weiter ohne Skript, Inline-Style und externe Ressourcen (CSP unverändert); Animationen
+  nur per CSS, aus bei `prefers-reduced-motion`; Einblend-Animation nur per Transform (in einem Hintergrund-Tab
+  pausiert sie, Inhalte blieben sonst unsichtbar). Im Browser geprüft: Desktop und 375 px ohne seitliches
+  Scrollen, Einrichtung → Login → Einstellungen mit separatem Test-Datenverzeichnis.
 
 ## Ergebnis
 - **Erreicht:** …

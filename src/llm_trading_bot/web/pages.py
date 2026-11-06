@@ -1,47 +1,142 @@
 """HTML of the web UI. Every dynamic value goes through ``html.escape``; no inline script or style
-(the CSP forbids both), so injected markup cannot run."""
+(the CSP forbids both), so injected markup cannot run. Decoration is inline SVG with presentation
+attributes and classes from ``/app.css``."""
 
+import math
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from html import escape
 
 from llm_trading_bot.llm.agents import LLM_DEFAULTS
 from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.web.credentials import AGENT_CHOICES, mask
+from llm_trading_bot.web.style import CSS
 
-CSS = """
-:root { --bg: #f6f7f9; --card: #fff; --text: #1d2430; --muted: #5d6878; --line: #d9dee6;
-  --accent: #1f6feb; --ok: #1a7f37; --bad: #c62828; }
-@media (prefers-color-scheme: dark) {
-  :root { --bg: #0f141b; --card: #171e27; --text: #e6ebf2; --muted: #9aa6b5; --line: #2a3442;
-    --accent: #4c8dff; --ok: #3fb950; --bad: #ff6b6b; } }
-* { box-sizing: border-box; }
-body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
-  background: var(--bg); color: var(--text); }
-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 20px;
-  border-bottom: 1px solid var(--line); background: var(--card); }
-header h1 { font-size: 17px; margin: 0; }
-header form { margin: 0; }
-main { max-width: 720px; margin: 24px auto; padding: 0 16px; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
-  padding: 20px; margin-bottom: 18px; }
-h2 { font-size: 16px; margin: 0 0 12px; }
-label { display: block; font-weight: 600; margin: 12px 0 4px; }
-.hint { color: var(--muted); font-size: 13px; margin: 2px 0 0; }
-input[type=text], input[type=password], input[type=number], select { width: 100%; padding: 9px 10px;
-  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text);
-  font: inherit; }
-.row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-.check { display: flex; gap: 8px; align-items: center; font-weight: 400; margin: 6px 0; }
-button { margin-top: 16px; padding: 9px 16px; border: 0; border-radius: 6px;
-  background: var(--accent); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
-button.quiet { background: transparent; color: var(--accent); border: 1px solid var(--line);
-  margin-top: 0; }
-.msg { padding: 10px 12px; border-radius: 6px; margin-bottom: 16px; border: 1px solid var(--line); }
-.msg.ok { border-color: var(--ok); color: var(--ok); }
-.msg.bad { border-color: var(--bad); color: var(--bad); }
-code { font-size: 13px; }
-.sep { margin-top: 22px; }
-"""
+__all__ = ["CSS", "login_page", "settings_page", "setup_page"]
+
+TICKER = (
+    ("BTC/EUR", "ETH/EUR"),
+    ("Modus", "Paper – kein Echtgeld"),
+    ("Kerzen", "nur abgeschlossene"),
+    ("gpt-luna", "Haupt-Trader"),
+    ("gpt-sol", "Gegenprobe"),
+    ("Buy & Hold", "Referenz"),
+    ("GPT", "nur bei Bedarf · max. 4/h"),
+    ("Budget", "hartes EUR-Tageslimit"),
+    ("Fail closed", "keine Order ohne frische Kurse"),
+    ("Zugang", "127.0.0.1 · SSH-Tunnel"),
+)
+
+
+def _candles() -> str:
+    """A fixed, made-up price walk for the backdrop - decoration, not market data."""
+    parts: list[str] = []
+    closes: list[tuple[float, float]] = []
+    value = 62.0
+    for i in range(40):
+        close = 60 + 9 * math.sin(i * 0.42) + 4 * math.sin(i * 1.63) + i * 0.55
+        high = max(value, close) + 1.5 + (i * 7 % 5) * 0.6
+        low = min(value, close) - 1.5 - (i * 3 % 4) * 0.6
+        x = 790 + i * 16
+
+        def y(v: float) -> float:
+            return round(905 - (v - 38) * 5.6, 1)
+
+        kind = "up" if close >= value else "down"
+        top, bottom = y(max(value, close)), y(min(value, close))
+        parts.append(
+            f'<line class="wick-{kind}" x1="{x + 5}" x2="{x + 5}" y1="{y(high)}" y2="{y(low)}"/>'
+            f'<rect class="candle-{kind}" x="{x}" y="{top}" width="10" '
+            f'height="{max(round(bottom - top, 1), 1.5)}"/>'
+        )
+        closes.append((x + 5, y(close)))
+        value = close
+    line = " ".join(f"{x},{yy}" for x, yy in closes)
+    return "".join(parts) + f'<polyline class="price" points="{line}"/>'
+
+
+_TRACES = (
+    ("", "M-10 140 H220 L270 190 H520 L560 150 H760"),
+    ("warm", "M1450 90 H1180 L1130 140 H960 L920 100 H820"),
+    ("", "M-10 420 H120 L170 470 V640 L210 680 H420"),
+    ("warm", "M1450 360 H1300 L1250 410 V500 L1210 540 H1100"),
+    ("", "M300 -10 V60 L340 100 H460"),
+    ("", "M60 910 V820 L110 770 H300 L340 730 H520"),
+    ("warm", "M640 910 V860 L680 820 H760"),
+)
+_NODES = (
+    ("hot", 760, 150),
+    ("", 220, 140),
+    ("", 520, 190),
+    ("warm", 820, 100),
+    ("", 960, 140),
+    ("", 420, 680),
+    ("hot", 170, 470),
+    ("warm", 1100, 540),
+    ("", 460, 100),
+    ("", 520, 730),
+    ("warm", 1250, 410),
+    ("", 760, 820),
+)
+
+
+def _backdrop() -> str:
+    traces = "".join(
+        f'<path class="trace {kind}" d="{d}"/><path class="pulse {kind}{" slow" * (i % 3 == 2)}"'
+        f' d="{d}"/>'
+        for i, (kind, d) in enumerate(_TRACES)
+    )
+    nodes = "".join(f'<circle class="node {k}" cx="{x}" cy="{y}" r="4"/>' for k, x, y in _NODES)
+    pins = "".join(
+        f'<line class="chip-pin" x1="{x}" y1="236" x2="{x}" y2="248"/>'
+        f'<line class="chip-pin" x1="{x}" y1="312" x2="{x}" y2="324"/>'
+        for x in range(1252, 1340, 14)
+    )
+    chip = f'<rect class="chip-pad" x="1240" y="248" width="104" height="64" rx="4"/>{pins}'
+    axes = "".join(
+        f'<line class="axis" x1="770" x2="1440" y1="{y}" y2="{y}"/>' for y in (560, 660, 760, 860)
+    )
+    return (
+        '<svg class="backdrop" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" '
+        f'aria-hidden="true" focusable="false">{axes}{traces}{nodes}{chip}{_candles()}</svg>'
+    )
+
+
+BACKDROP = _backdrop()
+
+LOGO = (
+    '<svg viewBox="0 0 40 40" aria-hidden="true" focusable="false">'
+    '<circle class="logo-ring" cx="20" cy="20" r="18.5"/>'
+    '<path class="logo-hex" d="M20 4 L34 12 V28 L20 36 L6 28 V12 Z"/>'
+    '<line class="logo-wick" x1="14" y1="13" x2="14" y2="27"/>'
+    '<rect class="logo-up" x="12" y="16" width="4" height="8"/>'
+    '<line class="logo-wick" x1="20" y1="11" x2="20" y2="25"/>'
+    '<rect class="logo-down" x="18" y="13" width="4" height="9"/>'
+    '<line class="logo-wick" x1="26" y1="10" x2="26" y2="24"/>'
+    '<rect class="logo-up" x="24" y="12" width="4" height="9"/></svg>'
+)
+
+RADAR = (
+    '<svg class="radar" viewBox="0 0 240 240" role="img" '
+    'aria-label="Dekorativer Radar-Scanner">'
+    '<defs><radialGradient id="sweep" cx="120" cy="120" r="100" gradientUnits="userSpaceOnUse">'
+    '<stop offset="0" stop-color="#2de2e6" stop-opacity="0"/>'
+    '<stop offset="1" stop-color="#2de2e6" stop-opacity="0.45"/></radialGradient></defs>'
+    '<circle class="outer" cx="120" cy="120" r="114"/>'
+    '<circle class="ring" cx="120" cy="120" r="100"/>'
+    '<circle class="ring dash" cx="120" cy="120" r="75"/>'
+    '<circle class="ring" cx="120" cy="120" r="50"/>'
+    '<circle class="ring dash" cx="120" cy="120" r="25"/>'
+    '<line class="cross" x1="20" y1="120" x2="220" y2="120"/>'
+    '<line class="cross" x1="120" y1="20" x2="120" y2="220"/>'
+    '<path class="sweep" fill="url(#sweep)" d="M120 120 L120 20 A100 100 0 0 1 190.7 49.3 Z"/>'
+    '<circle class="blip" cx="158" cy="86" r="3"/><circle class="ping" cx="158" cy="86" r="3"/>'
+    '<circle class="blip warm" cx="84" cy="150" r="3"/>'
+    '<circle class="ping warm" cx="84" cy="150" r="3"/>'
+    '<circle class="blip" cx="140" cy="172" r="2"/>'
+    '<text x="126" y="31">BTC</text><text x="196" y="117">ETH</text>'
+    '<text x="126" y="216">EUR</text></svg>'
+)
 
 
 def _page(title: str, body: str, *, csrf: str | None = None) -> str:
@@ -52,13 +147,25 @@ def _page(title: str, body: str, *, csrf: str | None = None) -> str:
         if csrf
         else ""
     )
+    items = "".join(f"<span><b>{escape(head)}</b>{escape(text)}</span>" for head, text in TICKER)
     return (
         '<!doctype html><html lang="de"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta name="color-scheme" content="dark">'
         f"<title>{escape(title)} · LLM Trading Bot</title>"
         '<link rel="stylesheet" href="/app.css"></head><body>'
-        f"<header><h1>LLM Trading Bot · Paper</h1>{logout}</header>"
-        f"<main>{body}</main></body></html>"
+        + BACKDROP
+        + f'<header><div class="brand">{LOGO}<div><p class="brand-name">LLM <span>Trading</span>'
+        ' Bot</p><div class="brand-sub">Paper-Terminal · BTC/EUR · ETH/EUR</div></div></div>'
+        '<div class="status"><span class="chip ok"><i class="led"></i>Paper</span>'
+        '<span class="chip lock"><i class="led"></i>Echtgeld gesperrt</span>'
+        f'<span class="chip net">127.0.0.1</span>{logout}</div></header>'
+        # The track holds the items twice so the loop has no visible seam.
+        f'<div class="ticker" aria-hidden="true"><div class="ticker-track">{items}{items}</div>'
+        f"</div><main>{body}</main>"
+        "<footer><span>Paper-Modus · kein Echtgeld (ADR-0004)</span>"
+        "<span>nur 127.0.0.1 · Zugriff per SSH-Tunnel (ADR-0005)</span>"
+        "<span>Zugangsdaten in secrets.env (600)</span></footer></body></html>"
     )
 
 
@@ -72,36 +179,107 @@ def _message(message: str, ok: bool) -> str:
     return f'<div class="msg {"ok" if ok else "bad"}" role="status">{escape(message)}</div>'
 
 
+def _head(tag: str, title: str, tone: str = "") -> str:
+    return (
+        f'<div class="panel-head"><span class="tag {tone}">{escape(tag)}</span>'
+        f'<h2>{escape(title)}</h2><span class="leds"><i></i><i></i><i></i></span></div>'
+    )
+
+
+def _auth(title: str, form: str, lines: tuple[tuple[str, str, str], ...]) -> str:
+    console = "".join(
+        f'<div>{escape(k)}<span class="dots"></span><b class="{tone}">{escape(v)}</b></div>'
+        for k, v, tone in lines
+    )
+    return (
+        f'<div class="auth"><div class="scope">{RADAR}<div class="console">{console}'
+        f'<div class="cursor">bereit</div></div></div>'
+        f'<div class="panel">{_head("Zugang", title)}{form}</div></div>'
+    )
+
+
+_CONSOLE = (
+    ("verbindung", "lokal", ""),
+    ("handelsmodus", "paper", ""),
+    ("echtgeld", "gesperrt", "amber"),
+)
+
+
 def setup_page(message: str = "", *, csrf: str) -> str:
-    return _page(
-        "Einrichtung",
-        _message(message, False) + '<div class="card"><h2>Ersteinrichtung</h2>'
-        '<p class="hint">Der Einrichtungscode steht im Terminal, in dem '
+    form = (
+        _message(message, False) + '<p class="lead">Der Einrichtungscode steht im Terminal, in dem '
         "<code>trading-bot web</code> läuft. Er gilt nur, bis ein Passwort festgelegt ist.</p>"
         '<form method="post" action="/setup">'
         + _hidden(csrf)
         + '<label for="code">Einrichtungscode</label>'
-        '<input id="code" name="code" type="text" autocomplete="off" required>'
+        '<input id="code" name="code" type="text" autocomplete="off" spellcheck="false" required>'
         '<label for="password">Neues Passwort (mindestens 8 Zeichen)</label>'
         '<input id="password" name="password" type="password" autocomplete="new-password" '
         'minlength="8" required>'
         '<label for="password2">Passwort wiederholen</label>'
         '<input id="password2" name="password2" type="password" autocomplete="new-password" '
         'minlength="8" required>'
-        '<button type="submit">Passwort festlegen</button></form></div>',
+        '<button type="submit">Passwort festlegen</button></form>'
     )
+    lines = (*_CONSOLE, ("passwort", "fehlt", "amber"))
+    return _page("Einrichtung", _auth("Ersteinrichtung", form, lines))
 
 
 def login_page(message: str = "", *, csrf: str) -> str:
-    return _page(
-        "Anmelden",
-        _message(message, False) + '<div class="card"><h2>Anmelden</h2>'
+    form = (
+        _message(message, False)
+        + '<p class="lead">Anmelden, um API-Key, Depots und Budget zu verwalten.</p>'
         '<form method="post" action="/login">'
         + _hidden(csrf)
         + '<label for="password">Passwort</label>'
         '<input id="password" name="password" type="password" autocomplete="current-password" '
         "required autofocus>"
-        '<button type="submit">Anmelden</button></form></div>',
+        '<button type="submit">Anmelden</button></form>'
+    )
+    return _page("Anmelden", _auth("Anmelden", form, (*_CONSOLE, ("sitzung", "keine", "amber"))))
+
+
+def _euro(values: Mapping[str, str], name: str, default: str) -> Decimal:
+    try:
+        amount = Decimal(values.get(name) or default)
+    except InvalidOperation:
+        amount = Decimal(default)
+    return amount if amount.is_finite() and amount >= 0 else Decimal(default)
+
+
+def _gauge(total: Decimal, luna: Decimal, sol: Decimal) -> str:
+    """Share of the daily budget per depot; drawn with SVG attributes because the CSP forbids
+    style attributes."""
+    scale = max(total, luna + sol, Decimal("0.01"))
+    width = 600
+
+    def w(part: Decimal) -> float:
+        return round(float(part / scale) * width, 1)
+
+    luna_w, sol_w = w(luna), w(sol)
+    free_w = max(round(width - luna_w - sol_w, 1), 0.0)
+    ticks = "".join(
+        f'<line class="tick" x1="{x}" x2="{x}" y1="24" y2="30"/>'
+        f'<text x="{x}" y="40" text-anchor="{anchor}">{q}%</text>'
+        for x, q, anchor in (
+            (1, 0, "start"),
+            (150, 25, "middle"),
+            (300, 50, "middle"),
+            (450, 75, "middle"),
+            (599, 100, "end"),
+        )
+    )
+    return (
+        '<svg class="gauge" viewBox="0 0 600 42" role="img" '
+        f'aria-label="Budgetaufteilung: gpt-luna {luna} €, gpt-sol {sol} € von {total} €">'
+        '<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" '
+        'patternTransform="rotate(45)"><rect width="6" height="6" fill="#02050b"/>'
+        '<rect width="2" height="6" fill="#2f4a78"/></pattern></defs>'
+        '<rect class="bed" x="0.5" y="0.5" width="599" height="21" rx="1"/>'
+        f'<rect class="luna" x="1" y="1" width="{max(luna_w - 1, 0)}" height="20"/>'
+        f'<rect class="sol" x="{luna_w}" y="1" width="{sol_w}" height="20"/>'
+        f'<rect fill="url(#hatch)" x="{luna_w + sol_w}" y="1" width="{free_w}" height="20"/>'
+        f"{ticks}</svg>"
     )
 
 
@@ -112,22 +290,30 @@ def settings_page(
     key_state = f"gespeichert ({escape(mask(key))})" if key else "nicht gesetzt"
     selected = values.get("BOT_AGENTS", ",".join(LLM_DEFAULTS)).split(",")
     labels = {
-        "gpt-luna": "gpt-luna – gpt-6-luna, Haupt-Trader",
-        "gpt-sol": "gpt-sol – gpt-6.1-sol, Gegenprobe",
-        "trend": "trend – klassisch",
-        "breakout": "breakout – klassisch",
-        "meanrev": "meanrev – klassisch",
-        "ensemble": "ensemble – klassisch",
+        "gpt-luna": ("gpt-6-luna · Haupt-Trader", "LLM"),
+        "gpt-sol": ("gpt-6.1-sol · Gegenprobe", "LLM"),
+        "trend": ("Trendfolge", "KLASSISCH"),
+        "breakout": ("Ausbruch", "KLASSISCH"),
+        "meanrev": ("Mean Reversion", "KLASSISCH"),
+        "ensemble": ("Mehrheitsentscheid", "KLASSISCH"),
     }
     depots = "".join(
-        f'<label class="check"><input type="checkbox" name="agents" value="{escape(a)}"'
-        f"{' checked' if a in selected else ''}> {escape(labels[a])}</label>"
+        f'<label class="tile"><input type="checkbox" name="agents" value="{escape(a)}"'
+        f"{' checked' if a in selected else ''}>"
+        f'<span class="tile-name">{escape(a)}</span>'
+        f'<span class="tile-sub">{escape(labels[a][0])}</span>'
+        f'<span class="badge{" llm" if labels[a][1] == "LLM" else ""}">'
+        f"{escape(labels[a][1])}</span></label>"
         for a in AGENT_CHOICES
     )
     effort = values.get("LLM_EFFORT", "low")
     efforts = "".join(
         f'<option value="{e}"{" selected" if e == effort else ""}>{e}</option>' for e in EFFORTS
     )
+    total = _euro(values, "LLM_DAILY_BUDGET_EUR", "3")
+    luna = _euro(values, "LLM_DAILY_BUDGET_EUR_GPT_LUNA", "0.50")
+    sol = _euro(values, "LLM_DAILY_BUDGET_EUR_GPT_SOL", "2.50")
+    active = [a for a in AGENT_CHOICES if a in selected]
 
     def amount(name: str, label: str, default: str) -> str:
         return (
@@ -136,36 +322,67 @@ def settings_page(
             f'value="{escape(values.get(name, ""))}" placeholder="{default}"></div>'
         )
 
-    hidden = f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
+    def readout(label: str, value: str, off: bool = False) -> str:
+        cls = ' class="off"' if off else ""
+        return f'<div class="readout"><small>{escape(label)}</small><b{cls}>{value}</b></div>'
+
+    hidden = _hidden(csrf)
+    readouts = (
+        '<div class="readouts">'
+        + readout("API-Key", escape(mask(key)) if key else "fehlt", off=not key)
+        + readout("Depots aktiv", f"{len(active)} / {len(AGENT_CHOICES)}", off=not active)
+        + readout("Tagesbudget", f"{escape(f'{total:.2f}')} €")
+        + readout("Reasoning", escape(effort))
+        + "</div>"
+    )
     body = (
-        _message(message, ok) + '<div class="card"><h2>OpenAI-Zugang</h2>'
-        f"<p>API-Key: <strong>{key_state}</strong></p>"
-        '<form method="post" action="/settings">'
+        _message(message, ok)
+        + readouts
+        + '<form method="post" action="/settings" class="grid">'
         + hidden
-        + '<label for="key">Neuer API-Key</label>'
+        + '<section class="panel span-7">'
+        + _head("01", "OpenAI-Zugang")
+        + f'<div class="keystate{"" if key else " off"}"><i class="led"></i>'
+        f"API-Key: <strong>{key_state}</strong></div>"
+        '<label for="key">Neuer API-Key</label>'
         '<input id="key" name="OPENAI_API_KEY" type="password" autocomplete="off" '
-        'placeholder="sk-… (leer lassen = unverändert)">'
+        'spellcheck="false" placeholder="sk-… (leer lassen = unverändert)">'
         '<p class="hint">Der Key wird nur in <code>secrets.env</code> im Datenverzeichnis '
         "gespeichert und nie wieder vollständig angezeigt. Bitvavo-Keys gibt es erst mit dem "
         "Echtgeld-Meilenstein.</p>"
         '<label class="check"><input type="checkbox" name="clear_key" value="1"> '
-        "gespeicherten Key löschen</label>"
-        '<h2 class="sep">Depots</h2>' + depots + '<h2 class="sep">Budget und Reasoning</h2>'
-        '<div class="row">'
+        "gespeicherten Key löschen</label></section>"
+        '<section class="panel span-5">'
+        + _head("02", "Reasoning", "amber")
+        + '<label for="effort">Reasoning-Effort</label>'
+        f'<select id="effort" name="LLM_EFFORT">{efforts}</select>'
+        '<p class="hint">Mehr Effort heißt mehr Reasoning-Tokens je Anfrage – und höhere '
+        "Kosten. Standard: <code>low</code>.</p></section>"
+        '<section class="panel span-12">'
+        + _head("03", "Depots", "warm")
+        + f'<div class="tiles">{depots}</div>'
+        '<p class="hint">Buy &amp; Hold läuft immer als Referenz mit.</p></section>'
+        '<section class="panel span-12">'
+        + _head("04", "Budget € / Tag")
+        + _gauge(total, luna, sol)
+        + '<div class="legend">'
+        f'<span class="l-luna">gpt-luna {escape(f"{luna:.2f}")} €</span>'
+        f'<span class="l-sol">gpt-sol {escape(f"{sol:.2f}")} €</span>'
+        f'<span class="l-free">Gesamtlimit {escape(f"{total:.2f}")} €</span></div>'
+        '<div class="fields">'
         + amount("LLM_DAILY_BUDGET_EUR", "Gesamt € / Tag", "3")
         + amount("LLM_DAILY_BUDGET_EUR_GPT_LUNA", "gpt-luna € / Tag", "0.50")
         + amount("LLM_DAILY_BUDGET_EUR_GPT_SOL", "gpt-sol € / Tag", "2.50")
-        + '<div><label for="effort">Reasoning-Effort</label>'
-        f'<select id="effort" name="LLM_EFFORT">{efforts}</select></div>'
-        "</div>"
-        '<p class="hint">Leere Felder nutzen die Standardwerte. Gespeichert wird nur, was die '
-        "Prüfung des Bots besteht.</p>"
-        '<button type="submit">Speichern</button></form></div>'
-        '<div class="card"><h2>Verbindung testen</h2>'
-        '<p class="hint">Fragt bei OpenAI nur ab, ob das Modell gpt-6-luna erreichbar ist – '
+        + "</div>"
+        '<div class="actions"><p class="hint">Leere Felder nutzen die Standardwerte. Gespeichert '
+        "wird nur, was die Prüfung des Bots besteht.</p>"
+        '<button type="submit">Speichern</button></div></section></form>'
+        '<section class="panel">'
+        + _head("05", "Verbindung testen", "warm")
+        + '<p class="hint">Fragt bei OpenAI nur ab, ob das Modell gpt-6-luna erreichbar ist – '
         "kostenlos, ohne Token-Verbrauch.</p>"
         '<form method="post" action="/settings/test">'
         + hidden
-        + '<button type="submit">Gespeicherten Key testen</button></form></div>'
+        + '<button class="alt" type="submit">Gespeicherten Key testen</button></form></section>'
     )
     return _page("Einstellungen", body, csrf=csrf)

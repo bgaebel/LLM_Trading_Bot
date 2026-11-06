@@ -34,7 +34,8 @@ class Browser:
         extra: Mapping[str, str] | None = None,
         cookie_header: str | None = None,
     ) -> tuple[int, dict[str, str], str]:
-        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        # Generous: scrypt on a machine busy with other test runs can take seconds.
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         headers = {"Host": host or f"127.0.0.1:{self.port}", **(extra or {})}
         if cookie_header is not None:
             headers["Cookie"] = cookie_header

@@ -279,7 +279,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             form: dict[str, list[str]] = {}
             if method == "POST":
                 # Cross-site posts (login lockout, guessing) are refused before anything else.
-                # "null" comes from privacy contexts (sandbox, redirects): no evidence either way, so
+                # "null" comes from privacy contexts (sandbox, redirects) and proves nothing, so
                 # Sec-Fetch-Site and the form tokens decide - refusing it would lock the owner out.
                 origin = self.headers.get("Origin")
                 if origin and origin != "null" and not is_local_host(urlsplit(origin).netloc):
