@@ -151,6 +151,9 @@ Claude Haiku 5.5 (gleicher Preis wie luna; ADR-0012), Raspberry Pi (ADR-0005 ble
 - 2026-11-06: Mutationstest LLM 41/41 wie erwartet. Gefunden und geschlossen: exakter Grenzfall der Bewegungs-
   schwelle, Grenze „Kosten knapp über Reservierung", Zeile ohne Betrag, totes Duplikat der Takt-Standardwerte.
   Gleichwertig: `isfinite` bei `confidence` (NaN/inf scheitern schon an 0 ≤ x ≤ 1).
+- 2026-11-06: Live ohne Key geprüft: alte v1-DB wird abgelehnt („schema version 1, expected 2"), `BOT_AGENTS=trend`
+  läuft, Standard-Depots ohne Key → Konfigurationsfehler. Offen bleibt nur AK10 (echter Key). Der Nutzer will Keys
+  über eine Weboberfläche eingeben → Spec 006, danach AK10 und `/abschluss` für 005.
 
 ## Ergebnis
 - **Erreicht:** …
