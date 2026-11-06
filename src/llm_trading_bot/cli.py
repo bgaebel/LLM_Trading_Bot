@@ -258,7 +258,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     web = commands.add_parser("web", help="local web UI for credentials (127.0.0.1 only)")
     web.add_argument("--data-dir", type=Path, required=True, help="where secrets.env is kept")
     web.add_argument("--port", type=int, default=8787)
-    web.add_argument("--host", default="127.0.0.1", help="must stay 127.0.0.1 (ADR-0014)")
+    web.add_argument("--host", default="127.0.0.1", help="must stay 127.0.0.1 (ADR-0015)")
     args = parser.parse_args(argv)
     # LEARNING(#windows): Umlaute in der Konsolenausgabe kaputt unter Windows
     # The Windows console defaults to cp1252; strategy reasons contain German umlauts.

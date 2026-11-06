@@ -1,4 +1,4 @@
-"""The credentials file (ADR-0014): KEY=VALUE lines, mode 600, outside the repository.
+"""The credentials file (ADR-0015): KEY=VALUE lines, mode 600, outside the repository.
 
 Only known fields are stored. Every change is validated with the same rules the bot uses
 (``load_config``) before it is written, so the bot never starts on a broken configuration.

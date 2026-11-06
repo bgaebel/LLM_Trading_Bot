@@ -1,4 +1,4 @@
-"""Routes and HTTP server of the local web UI (Spec 006, ADR-0014).
+"""Routes and HTTP server of the local web UI (Spec 006, ADR-0015).
 
 ``WebApp.handle`` is plain request -> response logic (tested without sockets); ``serve`` wraps it
 in a standard-library HTTP server bound to 127.0.0.1 only.
@@ -147,7 +147,7 @@ class WebApp:
         try:
             self.passwords.set(password)
         except ValueError:
-            return Response(400, pages.setup_page("Das Passwort braucht mindestens 12 Zeichen."))
+            return Response(400, pages.setup_page("Das Passwort braucht mindestens 8 Zeichen."))
         self.setup_code = None
         self.guard.succeeded()
         return self._login()

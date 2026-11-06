@@ -54,18 +54,18 @@ def test_password_file_is_private(tmp_path: Path) -> None:
     assert os.stat(store.path).st_mode & 0o777 == 0o600
 
 
-@pytest.mark.parametrize("password", ["", "kurz", "x" * 11])
+@pytest.mark.parametrize("password", ["", "kurz", "x" * 7])
 def test_short_passwords_are_refused(tmp_path: Path, password: str) -> None:
     store = PasswordStore(tmp_path / "web-auth.json")
-    with pytest.raises(ValueError, match="12"):
+    with pytest.raises(ValueError, match="8"):
         store.set(password)
     assert not store.is_set()
 
 
-def test_twelve_characters_are_enough(tmp_path: Path) -> None:
+def test_eight_characters_are_enough(tmp_path: Path) -> None:
     store = PasswordStore(tmp_path / "web-auth.json")
-    store.set("x" * 12)
-    assert store.verify("x" * 12)
+    store.set("x" * 8)
+    assert store.verify("x" * 8)
 
 
 def test_unset_store_verifies_nothing(tmp_path: Path) -> None:

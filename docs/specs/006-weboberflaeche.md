@@ -13,7 +13,7 @@ diese Werte. Keys verlassen den Rechner nicht, werden nie wieder vollständig an
 ## Akzeptanzkriterien
 - [ ] AK1: Der Server bindet nur an `127.0.0.1`; eine andere Adresse wird mit Fehler abgelehnt. — Nachweis:
   `uv run pytest tests/web/test_server.py`
-- [ ] AK2: Ersteinrichtung nur mit dem beim Start gedruckten Einrichtungscode; Passwort ≥ 12 Zeichen; danach ist
+- [ ] AK2: Ersteinrichtung nur mit dem beim Start gedruckten Einrichtungscode; Passwort ≥ 8 Zeichen (ADR-0015); danach ist
   `/setup` gesperrt. Gespeichert wird nur ein `scrypt`-Hash mit Salt (Datei 600). — Nachweis:
   `uv run pytest tests/web/test_auth.py tests/web/test_server.py`
 - [ ] AK3: Login mit falschem Passwort scheitert; nach 5 Fehlversuchen 60 s Sperre; Sitzungs-Cookie `HttpOnly`,

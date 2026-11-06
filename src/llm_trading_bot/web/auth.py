@@ -1,4 +1,4 @@
-"""Single-operator login for the web UI (ADR-0014): scrypt password hash, lockout, sessions."""
+"""Single-operator login for the web UI (ADR-0015): scrypt password hash, lockout, sessions."""
 
 import hashlib
 import hmac
@@ -11,7 +11,8 @@ from pathlib import Path
 
 from llm_trading_bot.web.files import write_private
 
-MIN_PASSWORD_LENGTH = 12
+# ADR-0015: the operator chose 8; scrypt, lockout and localhost-only binding carry the rest.
+MIN_PASSWORD_LENGTH = 8
 # ~16 MB and a few tens of ms per check: slow for guessing, fast enough for one operator.
 SCRYPT_N, SCRYPT_R, SCRYPT_P, KEY_LENGTH = 2**14, 8, 1, 32
 MAX_FAILURES = 5
@@ -88,7 +89,7 @@ class Session:
 
 
 class Sessions:
-    """In memory only: restarting the web server logs everybody out (ADR-0014)."""
+    """In memory only: restarting the web server logs everybody out (ADR-0015)."""
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self.clock = clock

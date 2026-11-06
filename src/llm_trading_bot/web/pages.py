@@ -76,12 +76,12 @@ def setup_page(message: str = "") -> str:
         '<form method="post" action="/setup">'
         '<label for="code">Einrichtungscode</label>'
         '<input id="code" name="code" type="text" autocomplete="off" required>'
-        '<label for="password">Neues Passwort (mindestens 12 Zeichen)</label>'
+        '<label for="password">Neues Passwort (mindestens 8 Zeichen)</label>'
         '<input id="password" name="password" type="password" autocomplete="new-password" '
-        'minlength="12" required>'
+        'minlength="8" required>'
         '<label for="password2">Passwort wiederholen</label>'
         '<input id="password2" name="password2" type="password" autocomplete="new-password" '
-        'minlength="12" required>'
+        'minlength="8" required>'
         '<button type="submit">Passwort festlegen</button></form></div>',
     )
 
