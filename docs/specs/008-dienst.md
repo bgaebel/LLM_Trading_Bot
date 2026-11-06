@@ -86,9 +86,9 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
 
 ## Plan
 - [x] 1. ADR-0017, `service/schedule.py` + `paper_cycle`-Stopp-Abfrage + `ensure_portfolios` mit Tests (AK1, Teile AK3/AK5)
-- [ ] 2. `service/run.py` Grundschleife: Lock, DB, Runden, Fehlerbehandlung, Stall-Grenze, Config-Reload (AK2–AK4)
-- [ ] 3. Stopp per Signal mit Frist, Warten unterbrechbar (AK5)
-- [ ] 4. `notify.py`, `status.py`, `logs.py` mit Redaktion (AK6, AK7, AK9)
+- [x] 2. `service/run.py` Grundschleife: Lock, DB, Runden, Fehlerbehandlung, Stall-Grenze, Config-Reload (AK2–AK4)
+- [x] 3. Stopp per Signal mit Frist, Warten unterbrechbar (AK5)
+- [x] 4. `notify.py`, `status.py`, `logs.py` mit Redaktion (AK6, AK7, AK9)
 - [ ] 5. CLI `run`, Lebenszeichen „Dienst“ in der Übersicht (AK2, AK8)
 - [ ] 6. `deploy/`-Units, Journal-Konfiguration, `scripts/check-units.sh` + CI-Schritt (AK10); Doku: README,
   ARCHITEKTUR, `docs/betrieb/server.md` (Abschnitt Dienst, Installation folgt Nr. 6), STAND; manuelle Prüfung AK11
@@ -107,6 +107,12 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
 ---
 
 ## Verlauf
+- 2026-11-06: Schritte 2–4 in einem Commit, weil die Schleife Status, Watchdog und Logging direkt braucht.
+  Die Hauptschleife wartet in Scheiben von 1 s (Stopp unter Windows sonst bis zu 20 s verzögert; Frist ab
+  Bemerken ≤ 76 s). `open_db(check_same_thread=False)`, damit die Runde im Worker-Thread dieselbe Verbindung nutzt
+  (immer nur ein Thread). Stopp vor dem GPT-Schritt erscheint als Status `STOPPING`, zählt nicht als Fehler.
+  Key-Redaktion bewusst ohne Wortgrenze (lieber ein verstümmeltes Wort als ein Key im Log).
+  Hart-Exit bei Stall und überschrittener Stopp-Frist: Exit 4.
 
 ## Ergebnis
 - **Erreicht:** …

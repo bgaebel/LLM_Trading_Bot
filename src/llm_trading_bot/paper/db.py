@@ -173,14 +173,20 @@ def check_schema(con: sqlite3.Connection) -> None:
             raise SchemaError(f"{table}: unique key {key} missing")
 
 
-def open_db(path: Path, *, agents: Iterable[str]) -> sqlite3.Connection:
+def open_db(
+    path: Path, *, agents: Iterable[str], check_same_thread: bool = True
+) -> sqlite3.Connection:
     """Open (or create) the bot database and make sure every agent has a portfolio.
 
     Precondition: the caller holds the WriterLock for ``path`` (single writer, CLAUDE.md).
+    ``check_same_thread=False`` lets the service hand the connection to its round thread; the
+    caller makes sure only one thread uses it at a time.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     # Autocommit mode: every write goes through write_tx, so there are no implicit transactions.
-    con = sqlite3.connect(path, timeout=20, isolation_level=None)
+    con = sqlite3.connect(
+        path, timeout=20, isolation_level=None, check_same_thread=check_same_thread
+    )
     con.row_factory = sqlite3.Row
     try:
         con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
