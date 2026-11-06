@@ -20,7 +20,7 @@ Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft,
 | 4 | Risiko-Grenzen und Fail-closed (veraltete Kurse, Feed-/LLM-Ausfall, BTC/ETH entkoppelt) | – | – |
 | 5 | Dienst: Worker-Schleife, sauberer Shutdown, Health, Logging | – | – |
 | 6 | Hetzner-Server: Härtung (SSH-Key, Firewall, Updates), systemd, Backup, Update/Rollback | [002](specs/002-server-grundeinrichtung.md) (Härtung) | – |
-| 7 | Status-Ansicht nur auf 127.0.0.1, Zugriff per SSH-Tunnel | – | – |
+| 7 | Status-Ansicht nur auf 127.0.0.1, Zugriff per SSH-Tunnel; zuerst Login + Zugangsdaten | [006](specs/006-weboberflaeche.md) (Login, Zugangsdaten) | – |
 | 8 | Echtgeld-Schnittstelle als Entwurf (Interface + ADR-Vorschlag, keine Implementierung) | – | – |
 
 ## M2 – Echtgeld-Minimalbetrieb ⬜

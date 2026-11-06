@@ -155,3 +155,19 @@ class OpenAIResponses:
                 continue
             return replace(reply_from(response), requests=attempt + 1)
         raise AssertionError("unreachable")
+
+
+def check_key(
+    api_key: str,
+    *,
+    model: str = "gpt-6-luna",
+    client_factory: Callable[..., openai.OpenAI] = openai.OpenAI,
+    **client_options: Any,
+) -> str:
+    """Free connectivity check (model lookup, no tokens billed): "" if fine, else the error type."""
+    client = client_factory(api_key=api_key, timeout=15.0, max_retries=0, **client_options)
+    try:
+        client.models.retrieve(model)
+    except API_ERRORS as exc:
+        return type(exc).__name__
+    return ""
