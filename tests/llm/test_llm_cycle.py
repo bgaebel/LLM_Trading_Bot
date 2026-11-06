@@ -22,11 +22,19 @@ from llm_trading_bot.llm.contract import SYSTEM, response_schema
 from llm_trading_bot.llm.cycle import market_triggers, run_llm_depots
 from llm_trading_bot.llm.due import iso, llm_due, trigger_state
 from llm_trading_bot.llm.openai_client import ModelReply
+from llm_trading_bot.market.http import HTTPFailure
 from llm_trading_bot.market.models import Quote, Symbol
 from llm_trading_bot.market.snapshot import MarketSnapshot, build_snapshots
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db, write_tx
-from llm_trading_bot.paper.execution import BUYHOLD, Costs, Quotes, latest_quotes, record_quotes
+from llm_trading_bot.paper.execution import (
+    BUYHOLD,
+    Costs,
+    Quotes,
+    current_weight,
+    latest_quotes,
+    record_quotes,
+)
 from llm_trading_bot.paper.report import CycleReport, LlmOutcome, MarketResult
 from llm_trading_bot.strategy.indicators import indicators
 from llm_trading_bot.strategy.payload import cost_roundtrip, feature_payload
@@ -409,6 +417,32 @@ def test_the_cycle_really_fetches_quotes_after_the_answers(con: sqlite3.Connecti
     assert client.quote_calls == 3
 
 
+class FailingFromClient(ScenarioClient):
+    """The ticker fails from the n-th call on (after the answers: call 3)."""
+
+    def __init__(self, from_call: int) -> None:
+        super().__init__()
+        self.from_call = from_call
+
+    def quotes(self) -> dict[Symbol, Quote]:
+        if self.quote_calls + 1 >= self.from_call:
+            self.quote_calls += 1
+            raise HTTPFailure(503)
+        return super().quotes()
+
+
+def test_a_failed_fetch_after_the_answers_trades_nothing(con: sqlite3.Connection) -> None:
+    # The quotes stored at the cycle start are still young enough for latest_quotes; using
+    # them would trade at a price from before the answer and make the drift check pointless.
+    client = FailingFromClient(from_call=3)
+    report = cycle(con, FakeModel(), client=client)
+    assert client.quote_calls == 3
+    for agent in ("gpt-luna", "gpt-sol"):
+        assert {m.status for m in decisions(report, agent).values()} == {"STALE_QUOTE"}
+    assert con.execute("SELECT COUNT(*) FROM trades WHERE agent LIKE 'gpt-%'").fetchone()[0] == 0
+    assert {r["status"] for r in calls(con)} == {"OK"} and all(r["cost_eur"] for r in calls(con))
+
+
 # ------------------------------------------------------------------ other skips
 
 
@@ -522,6 +556,26 @@ def test_message_carries_the_arena_payload_with_the_depot_weight(con: sqlite3.Co
         ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, 0.0025, 0.0005))
         expected = feature_payload(snap, ind, 0.0, 0.0025, 0.0005)  # flat depot before the call
         assert sent[symbol.market] == json.loads(json.dumps(expected))
+
+
+def test_message_carries_the_weight_of_a_depot_that_holds_coins(con: sqlite3.Connection) -> None:
+    # HOLD keeps the existing weight: a lost weight in the prompt would change decisions.
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET cash=6000, btc=0.04, eth=0.5 WHERE agent='gpt-luna'")
+    model = FakeModel()
+    cycle(con, model)
+    qs = ScenarioClient().quotes()
+    luna = next(c for c in model.calls if c["model"] == "gpt-6-luna")
+    sol = next(c for c in model.calls if c["model"] == "gpt-6.1-sol")
+    sent = json.loads(luna["message"])["markets"]
+    held = {"cash": 6000.0, "btc": 0.04, "eth": 0.5}
+    for symbol, snap in build_snapshots(ScenarioClient(), clock=lambda: NOW).items():
+        weight = current_weight(held, symbol, qs)
+        assert 0.05 < weight < 0.95
+        ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, 0.0025, 0.0005))
+        expected = feature_payload(snap, ind, weight, 0.0025, 0.0005)
+        assert sent[symbol.market] == json.loads(json.dumps(expected))
+    assert luna["message"] != sol["message"]  # sol is still flat
 
 
 def test_failing_quote_refresh_still_settles_every_paid_answer(con: sqlite3.Connection) -> None:

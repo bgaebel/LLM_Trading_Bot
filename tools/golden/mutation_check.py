@@ -414,6 +414,7 @@ M += [
     (Y, "MAX_MID_DRIFT = 0.02", "MAX_MID_DRIFT = 0.04", "llm mid drift"),
     (Y, "MAX_SNAPSHOT_AGE = 120", "MAX_SNAPSHOT_AGE = 125", "llm snapshot age"),
     (Y, "fresh = refresh_quotes()", "fresh = qs", "llm quote recheck"),
+    (Y, "current_weight(p, s, qs),", "0.0,", "llm depot weight in prompt"),
     (Y, "if not llm_due(", "if False and not llm_due(", "llm due respected"),
     (
         Y,
