@@ -176,6 +176,16 @@ Claude Haiku 5.5 (gleicher Preis wie luna; ADR-0012), Raspberry Pi (ADR-0005 ble
   CLI zeigt die echte Versuchsnummer. Tests für alle Grenzfälle ergänzt (120/121 s vor und nach der Antwort, Drift
   1,99/2,01 %, Quotes 21 s alt, Abruf nach der Antwort verdrahtet, Gesamtbudget über die Konfiguration). AK6/AK7
   präziser formuliert (Inhalt unverändert bzw. strenger). Mutationstest LLM 51/51 wie erwartet.
+- 2026-11-06: Nachprüfung der Fixes (Workflow mit Kritiker). Nachgebessert: Entscheidungszeit je Depot (Antwort von
+  sol nicht mehr mit der Zeit des langsameren luna geprüft); Fehler beim Quote-Abruf nach den Antworten verliert keine
+  Abrechnung mehr (dann `STALE_QUOTE` für beide); sofort abgelehnte Anfragen (4xx außer 408/409/429) werden mit 0 €
+  abgerechnet statt die dreifache Reservierung zu behalten. Neue Tests: echte Parallelität (luna antwortet erst, wenn
+  sol gefragt wurde), zweiter Lauf nach Cooldown mit eigenen Trades → `NOT_DUE`, Nachricht = Arena-Payload,
+  Versuchsnummer ≥ 10000 in der CLI.
+  **Bewusste Abwägungen:** (1) Signalwechsel-Auslöser rechnen mit Gewicht 0, sehen also Ausstiegssignale eines
+  offenen Depots nicht; die stündliche Anfrage und die Bewegungsschwelle decken das ab. (2) Schema v2 wurde vor
+  69da905 ohne Versionssprung geändert (`trigger_signals`); v2-Entwicklungs-DBs von vorher verwerfen – es gab nur lokale
+  Test-DBs, keine Handelshistorie.
 
 ## Ergebnis
 - **Erreicht:** …

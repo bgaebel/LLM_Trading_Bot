@@ -239,3 +239,24 @@ def test_web_reports_a_taken_port(tmp_path: Path, capsys: pytest.CaptureFixture[
         port = taken.getsockname()[1]
         code = main(["web", "--data-dir", str(tmp_path), "--port", str(port)])
     assert code == EXIT_INVALID and "could not start" in capsys.readouterr().out
+
+
+def test_llm_decision_line_shows_the_real_attempt_number() -> None:
+    from llm_trading_bot.cli import _market_line
+    from llm_trading_bot.paper.report import MarketResult
+
+    line = _market_line(
+        MarketResult(
+            "gpt-luna",
+            Symbol.BTCEUR,
+            1793000005 * 10000 + 12345,
+            True,
+            "BUY",
+            0.25,
+            "OK",
+            True,
+            "r",
+            attempt=12345,
+        )
+    )
+    assert "attempt 12345 new: BUY" in line
