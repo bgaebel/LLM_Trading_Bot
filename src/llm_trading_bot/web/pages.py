@@ -112,7 +112,17 @@ RADAR = (
 )
 
 
-def _page(title: str, body: str, *, csrf: str | None = None) -> str:
+TABS = (("/", "Übersicht"), ("/settings", "Einstellungen"))
+
+
+def _page(
+    title: str,
+    body: str,
+    *,
+    csrf: str | None = None,
+    active: str | None = None,
+    refresh: int | None = None,
+) -> str:
     logout = (
         '<form method="post" action="/logout">'
         f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
@@ -121,15 +131,31 @@ def _page(title: str, body: str, *, csrf: str | None = None) -> str:
         else ""
     )
     items = "".join(f"<span><b>{escape(head)}</b>{escape(text)}</span>" for head, text in TICKER)
+    # Tabs only after login: before it, every route leads to login or setup anyway.
+    tabs = (
+        '<nav class="tabs" aria-label="Bereiche">'
+        + "".join(
+            f'<a href="{href}"{' class="active" aria-current="page"' if href == active else ""}>'
+            f"{escape(label)}</a>"
+            for href, label in TABS
+        )
+        + "</nav>"
+        if csrf
+        else ""
+    )
+    # Meta refresh instead of a script: the CSP forbids scripts (ADR-0015).
+    reload = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
     return (
         '<!doctype html><html lang="de"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         '<meta name="color-scheme" content="dark">'
-        f"<title>{escape(title)} · LLM Trading Bot</title>"
+        + reload
+        + f"<title>{escape(title)} · LLM Trading Bot</title>"
         '<link rel="stylesheet" href="/app.css"></head><body>'
         + BACKDROP
-        + f'<header><div class="brand">{LOGO}<div><p class="brand-name">LLM <span>Trading</span>'
-        ' Bot</p><div class="brand-sub">Paper-Terminal · BTC/EUR · ETH/EUR</div></div></div>'
+        + f'<header><a class="brand" href="/">{LOGO}<div><p class="brand-name">LLM '
+        '<span>Trading</span> Bot</p><div class="brand-sub">Paper-Terminal · BTC/EUR · ETH/EUR'
+        f"</div></div></a>{tabs}"
         '<div class="status"><span class="chip ok"><i class="led"></i>Paper</span>'
         '<span class="chip lock"><i class="led"></i>Echtgeld gesperrt</span>'
         f'<span class="chip net">127.0.0.1</span>{logout}</div></header>'
@@ -431,4 +457,4 @@ def settings_page(
         + hidden
         + '<button class="alt" type="submit">Gespeicherten Key testen</button></form></section>'
     )
-    return _page("Einstellungen", body, csrf=csrf)
+    return _page("Einstellungen", body, csrf=csrf, active="/settings")
