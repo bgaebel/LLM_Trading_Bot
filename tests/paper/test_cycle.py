@@ -3,15 +3,19 @@
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from fakes import ScenarioClient
 from golden_scenarios import NOW
 from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.market.snapshot import MarketSnapshot
+from llm_trading_bot.paper import cycle
 from llm_trading_bot.paper.cycle import active_agent, paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
+from llm_trading_bot.strategy.signals import Signal
 
 
 @pytest.fixture
@@ -123,3 +127,29 @@ def test_active_agent_from_environment(env: dict[str, str], expected: str) -> No
 def test_unknown_or_benchmark_agent_is_refused(name: str) -> None:
     with pytest.raises(ValueError, match="BOT_AGENT"):
         active_agent({"BOT_AGENT": name})
+
+
+def test_strategy_failure_in_btc_does_not_block_eth(
+    con: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from llm_trading_bot.strategy.signals import run_strategy as real
+
+    def flaky(name: str, snap: MarketSnapshot, *args: Any) -> Signal:
+        if snap.symbol == Symbol.BTCEUR:
+            raise ZeroDivisionError("broken indicator")
+        return real(name, snap, *args)
+
+    monkeypatch.setattr(cycle, "run_strategy", flaky)
+    report = paper_cycle(con, ScenarioClient(), "trend", costs=Costs(), clock=lambda: NOW)
+    btc, eth = report.markets
+    assert btc.error == "ZeroDivisionError: broken indicator"
+    assert (eth.new, eth.traded) == (True, True)
+    assert not report.complete and len(report.equity) == 2
+    assert con.execute("SELECT COUNT(*) FROM decisions WHERE agent='trend'").fetchone()[0] == 1
+
+
+def test_cycle_stores_the_newest_closed_minute_per_market(con: sqlite3.Connection) -> None:
+    paper_cycle(con, ScenarioClient(), "trend", costs=Costs(), clock=lambda: NOW)
+    rows = con.execute("SELECT symbol, bar_ts FROM market ORDER BY symbol").fetchall()
+    last_minute = (NOW // 60 - 1) * 60
+    assert [(r[0], r[1]) for r in rows] == [("BTCEUR", last_minute), ("ETHEUR", last_minute)]

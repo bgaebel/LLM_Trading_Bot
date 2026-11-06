@@ -94,7 +94,10 @@ def write_tx(con: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     try:
         yield con
     except BaseException:
-        con.execute("ROLLBACK")
+        # SQLite may already have rolled back by itself (e.g. disk full); a second ROLLBACK
+        # would raise and hide the original error.
+        if con.in_transaction:
+            con.execute("ROLLBACK")
         raise
     con.execute("COMMIT")
 

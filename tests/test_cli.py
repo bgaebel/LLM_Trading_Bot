@@ -165,7 +165,7 @@ def test_paper_cycle_refuses_a_foreign_database(tmp_path: Path) -> None:
     con.close()
     code, text = run_cycle(db, ScenarioClient())
     assert code == EXIT_INVALID
-    assert "database not usable: schema version 0" in text
+    assert "database error: SchemaError: schema version 0" in text
 
 
 def test_paper_cycle_needs_a_db_path() -> None:

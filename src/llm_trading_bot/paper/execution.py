@@ -1,6 +1,7 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - fee_rate, slip_rate, value,
 #   current_weight, trade_to_target, mark_and_risk (without the drawdown stop),
 #   record_live_quotes (without ticks and risk), latest_quotes
+# Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (adapted) - update_market (live branch)
 # Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (adapted) - record_decision,
 #   initialize_buyhold
 """Virtual order execution, identical to Arena v0.3.1 (ADR-0007, golden fixtures).
@@ -283,3 +284,12 @@ def latest_quotes(
         except (TypeError, ValueError, KeyError):
             return None
     return qs if set(qs) == set(SYMBOLS) else None
+
+
+def record_bar(con: sqlite3.Connection, symbol: Symbol, *, bar_ts: int, last_close: float) -> None:
+    """Newest closed 1m bar per market, next to its stored quote (Arena update_market, live)."""
+    with write_tx(con):
+        con.execute(
+            "UPDATE market SET bar_ts=?,last_close=? WHERE symbol=?",
+            (bar_ts, last_close, symbol.name),
+        )

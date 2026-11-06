@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from llm_trading_bot.paper.db import COLUMNS, SCHEMA_VERSION, SchemaError, open_db
+from llm_trading_bot.paper.db import COLUMNS, SCHEMA_VERSION, SchemaError, open_db, write_tx
 
 AGENTS = ("trend", "buyhold")
 
@@ -117,3 +117,14 @@ def test_non_database_file_is_refused(tmp_path: Path) -> None:
     path.write_bytes(b"not a database, just text" * 100)
     with pytest.raises(sqlite3.DatabaseError):
         open_db(path, agents=AGENTS)
+
+
+def test_write_tx_keeps_the_original_error_when_sqlite_already_rolled_back(tmp_path: Path) -> None:
+    con = open_db(tmp_path / "bot.db", agents=AGENTS)
+    try:
+        with pytest.raises(RuntimeError, match="original"), write_tx(con):
+            con.execute("ROLLBACK")  # what SQLite does by itself on e.g. SQLITE_FULL
+            raise RuntimeError("original")
+        assert not con.in_transaction
+    finally:
+        con.close()

@@ -12,15 +12,22 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from llm_trading_bot.market.models import SYMBOLS, Symbol
-from llm_trading_bot.market.snapshot import DATA_ERRORS, MarketClient, build_snapshots
+from llm_trading_bot.market.snapshot import (
+    DATA_ERRORS,
+    MarketClient,
+    MarketSnapshot,
+    build_snapshots,
+)
 from llm_trading_bot.paper.db import balance, write_tx
 from llm_trading_bot.paper.execution import (
     BUYHOLD,
     Costs,
+    Quotes,
     current_weight,
     initialize_buyhold,
     latest_quotes,
     mark,
+    record_bar,
     record_decision,
     record_quotes,
     value,
@@ -104,6 +111,37 @@ def _result(
     )
 
 
+def _decide(
+    con: sqlite3.Connection,
+    snap: MarketSnapshot,
+    agent: str,
+    qs: Quotes,
+    costs: Costs,
+    now: str,
+) -> MarketResult:
+    """At most one decision per new closed bar of the agent's own timeframe."""
+    symbol = snap.symbol
+    record_bar(con, symbol, bar_ts=snap.bars[1][-1].ts, last_close=snap.bars[1][-1].close)
+    bar_ts = snap.bars[STRATEGY_TIMEFRAME[agent]][-1].ts
+    exists = con.execute(
+        "SELECT 1 FROM decisions WHERE agent=? AND symbol=? AND bar_ts=?",
+        (agent, symbol.name, bar_ts),
+    ).fetchone()
+    if exists:
+        return _result(con, agent, symbol, bar_ts, False)
+    p = balance(con, agent)
+    if p["halted"]:
+        return MarketResult(symbol, bar_ts, error="portfolio halted")
+    weight = current_weight(p, symbol, qs)
+    ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage))
+    sig = run_strategy(agent, snap, ind, weight)
+    context = feature_payload(snap, ind, weight, costs.fee_rate, costs.slippage)
+    new = record_decision(
+        con, agent, symbol, bar_ts, agent.upper(), sig, context, costs=costs, now=now, qs=qs
+    )
+    return _result(con, agent, symbol, bar_ts, new)
+
+
 def paper_cycle(
     con: sqlite3.Connection,
     client: MarketClient,
@@ -116,7 +154,7 @@ def paper_cycle(
 
     Fails closed like the Arena's quant_cycle: without fresh quotes of both markets no decision
     is taken at all, so the bar stays open and is decided once quotes are back. A market whose
-    candles fail is reported and skipped; it never blocks the other market.
+    candles or decision fail is reported and skipped; it never blocks the other market.
     """
     at = int(clock())
     now = iso(at)
@@ -138,35 +176,17 @@ def paper_cycle(
         errors[symbol] = f"{type(exc).__name__}: {exc}"
 
     snaps = build_snapshots(client, clock=clock, on_error=on_error)
-    tf = STRATEGY_TIMEFRAME[agent]
     for symbol in SYMBOLS:
         snap = snaps.get(symbol)
         if snap is None:
             report.markets.append(MarketResult(symbol, error=errors.get(symbol, "no snapshot")))
             continue
-        bar_ts = snap.bars[tf][-1].ts
-        exists = con.execute(
-            "SELECT 1 FROM decisions WHERE agent=? AND symbol=? AND bar_ts=?",
-            (agent, symbol.name, bar_ts),
-        ).fetchone()
-        p = balance(con, agent)
-        if exists or p["halted"]:
-            report.markets.append(
-                _result(con, agent, symbol, bar_ts, False)
-                if exists
-                else MarketResult(symbol, bar_ts, error="portfolio halted")
-            )
-            continue
-        weight = current_weight(p, symbol, qs)
-        ind = indicators(
-            snap, cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage)
-        )
-        sig = run_strategy(agent, snap, ind, weight)
-        context = feature_payload(snap, ind, weight, costs.fee_rate, costs.slippage)
-        new = record_decision(
-            con, agent, symbol, bar_ts, agent.upper(), sig, context, costs=costs, now=now, qs=qs
-        )
-        report.markets.append(_result(con, agent, symbol, bar_ts, new))
+        try:
+            report.markets.append(_decide(con, snap, agent, qs, costs, now))
+        except Exception as exc:
+            # CLAUDE.md: a BTC failure never blocks ETH. record_decision rolled back its own
+            # transaction; the error stays visible in the report and the exit code.
+            report.markets.append(MarketResult(symbol, error=f"{type(exc).__name__}: {exc}"))
 
     with write_tx(con):
         for name in (agent, BUYHOLD):

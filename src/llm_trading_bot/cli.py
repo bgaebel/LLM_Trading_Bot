@@ -199,7 +199,7 @@ def run_paper_cycle(
         return EXIT_LOCKED
     except (SchemaError, sqlite3.DatabaseError) as exc:
         # Never repair or migrate: the history in that file must stay as it is (ADR-0008).
-        print(f"paper-cycle refused, database not usable: {exc}", file=out)
+        print(f"paper-cycle refused, database error: {type(exc).__name__}: {exc}", file=out)
         return EXIT_INVALID
     print_cycle(report, costs, out=out)
     if not report.equity:
