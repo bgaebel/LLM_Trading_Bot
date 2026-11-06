@@ -1,6 +1,6 @@
 # ADR-0014: Weboberfläche für Zugangsdaten nur auf 127.0.0.1, Passwort-Login, Secrets-Datei außerhalb des Repos
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0015](0015-weboberflaeche-passwort-8.md)
 - **Löst ab:** –
 - **Datum:** 2026-11-06
 - **Bereich:** #web #sicherheit #betrieb
