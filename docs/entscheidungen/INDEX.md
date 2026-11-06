@@ -13,4 +13,4 @@
 | [0006](0006-server-zugang-benutzer.md) | Admin-Benutzer mit Key und sudo NOPASSWD; Dienst unter eigenem Systembenutzer | angenommen |
 | [0007](0007-strategien-identisch-zur-arena.md) | Übernommene Strategien identisch zu Arena v0.3.1; Änderungen nur als neue Version | angenommen |
 | [0008](0008-paper-schema-ein-agent.md) | Eigenes versioniertes SQLite-Schema; ein aktiver Agent plus Buy & Hold | angenommen |
-| [0009](0009-llm-agent-openai-budget.md) | LLM-Agent über OpenAI (gpt-6.1-sol, openai-SDK); hartes EUR-Tagesbudget und Provenienz in der DB | vorgeschlagen |
+| [0009](0009-llm-agent-openai-budget.md) | LLM-Agent über OpenAI (gpt-6.1-sol, openai-SDK); hartes EUR-Tagesbudget und Provenienz in der DB | angenommen |

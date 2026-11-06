@@ -1,6 +1,6 @@
 # Spec 005: LLM-Strategie (GPT) mit Budgetsperre und Provenienz
 
-- **Status:** Entwurf
+- **Status:** freigegeben
 - **Issue:** – · **Branch:** `feat/s005-llm-strategie` · **Meilenstein:** M1 (Nr. 3a)
 - **Erstellt:** 2026-11-06
 
@@ -61,7 +61,7 @@ nie zu einem Trade.
 - ADR-0007: Prompt, Schema, Kontext und Takt identisch zur Arena, belegt durch Golden-Tests **mit Grenzfällen**
   und Mutationstest (Learning „Golden-Fixtures beweisen Gleichheit nur mit Grenzfällen").
 - ADR-0008: Schema-Erweiterung erhöht `user_version`; keine automatische Migration; ein aktiver Agent.
-- ADR-0009 (Entwurf, mit dieser Spec): OpenAI/gpt-6.1-sol, `openai`-SDK, EUR-Budget und Provenienz in der DB.
+- ADR-0009 (angenommen): OpenAI/gpt-6.1-sol, `openai`-SDK, EUR-Budget und Provenienz in der DB.
 - ADR-0002: Fremdpaket erlaubt, wenn per `uv add` gelockt.
 - CLAUDE.md: Fail closed bei ungültigen LLM-Antworten; BTC-Fehler blockiert ETH nicht; Secrets nie loggen.
 - LEARNINGS #windows #encoding: deutsche Texte, Ausgaben als UTF-8; Ersetzungen mit Nicht-ASCII per Edit.
@@ -108,6 +108,8 @@ Verworfen: Claude (Nutzer), urllib (siehe ADR-0009), Budget-Datei der Arena (sie
 - EUR/USD: Preise sind Schätzwerte; Standard rechnet USD 1:1 als EUR (eher zu hoch). Zusätzlich Limit im
   OpenAI-Konto setzen.
 - Für AK10 braucht es einen OpenAI-Key lokal (nur in der Shell-Umgebung, nie in Dateien im Repo).
+- Bei der Freigabe am 2026-11-06 bestätigt: `openai`-SDK, Budget/Provenienz in der DB (Schema v2),
+  `max_output_tokens` 8000, Preis-Standard 2,00/10,00 € je 1 Mio. Token.
 
 ---
 
