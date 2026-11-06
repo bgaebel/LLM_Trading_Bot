@@ -1,8 +1,8 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - open_db schema, balance
 """SQLite store for the paper bot.
 
-ADR-0008: own schema with ``PRAGMA user_version``; version 2 adds ``llm_calls`` (Spec 005,
-ADR-0009). Columns and idempotency keys follow the Arena so results stay comparable; tables the bot
+ADR-0010: own schema with ``PRAGMA user_version``; version 2 adds ``llm_calls`` (Spec 005,
+ADR-0011). Columns and idempotency keys follow the Arena so results stay comparable; tables the bot
 does not need (ticks, logs) are left out. A database with another version or a different shape is
 refused, never migrated, because a silent migration could rewrite the trading history.
 """
@@ -41,13 +41,13 @@ CREATE TABLE equity (
   UNIQUE(ts,agent));
 CREATE TABLE llm_calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, agent TEXT NOT NULL,
-  symbol TEXT NOT NULL, ref_mid REAL NOT NULL, status TEXT NOT NULL, model TEXT NOT NULL,
-  max_output_tokens INTEGER NOT NULL, effort TEXT NOT NULL, prompt_sha256 TEXT NOT NULL,
-  context TEXT NOT NULL, reserved_eur TEXT, cost_eur TEXT,
-  reservation_exceeded INTEGER NOT NULL DEFAULT 0, response_id TEXT, input_tokens INTEGER,
-  output_tokens INTEGER, reasoning_tokens INTEGER, cached_tokens INTEGER, latency_seconds REAL,
-  error TEXT, decision_id INTEGER, FOREIGN KEY(decision_id) REFERENCES decisions(id));
-CREATE INDEX idx_llm_calls_agent_symbol ON llm_calls(agent,symbol,id);
+  markets TEXT NOT NULL, ref_mid_btc REAL, ref_mid_eth REAL, status TEXT NOT NULL,
+  model TEXT NOT NULL, prompt_version TEXT NOT NULL, prompt_sha256 TEXT NOT NULL,
+  max_output_tokens INTEGER NOT NULL, effort TEXT NOT NULL, context TEXT NOT NULL,
+  reserved_eur TEXT, cost_eur TEXT, reservation_exceeded INTEGER NOT NULL DEFAULT 0,
+  response_id TEXT, input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER,
+  cached_tokens INTEGER, latency_seconds REAL, error TEXT);
+CREATE INDEX idx_llm_calls_agent ON llm_calls(agent,id);
 """
 
 COLUMNS: Mapping[str, tuple[str, ...]] = {
@@ -81,18 +81,20 @@ COLUMNS: Mapping[str, tuple[str, ...]] = {
     ),
     "market": ("symbol", "ts", "bar_ts", "bid", "ask", "last_close", "source"),
     "equity": ("id", "ts", "agent", "value", "cash", "btc", "eth"),
-    # One row per LLM attempt: budget ledger and provenance in one place (ADR-0009).
+    # One row per LLM request (both markets): budget ledger and provenance in one place (ADR-0011).
     "llm_calls": (
         "id",
         "ts",
         "agent",
-        "symbol",
-        "ref_mid",
+        "markets",
+        "ref_mid_btc",
+        "ref_mid_eth",
         "status",
         "model",
+        "prompt_version",
+        "prompt_sha256",
         "max_output_tokens",
         "effort",
-        "prompt_sha256",
         "context",
         "reserved_eur",
         "cost_eur",
@@ -104,7 +106,6 @@ COLUMNS: Mapping[str, tuple[str, ...]] = {
         "cached_tokens",
         "latency_seconds",
         "error",
-        "decision_id",
     ),
 }
 

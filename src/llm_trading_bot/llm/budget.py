@@ -1,25 +1,22 @@
-# Origin: LLM-Trading-Arena@7563724 apps/arena/budget.py (adapted) - reserve, settle, settings
-"""Hard daily LLM spend limit in EUR, booked in the bot database (ADR-0009).
+# Origin: LLM-Trading-Arena@7563724 apps/arena/budget.py (adapted) - reserve, settle, amount
+"""Hard daily LLM spend limits in EUR, booked in the bot database (ADR-0011).
 
-Every attempt is a row in ``llm_calls``. Before a request leaves the process its reservation is
-committed; afterwards the reservation is replaced by the cost computed from the reported usage.
-Unknown cost (crash, timeout, missing usage) keeps the reservation, so the limit errs on the safe
-side. Prices are the operator's estimates, not invoices.
+Every request is a row in ``llm_calls``. Before it leaves the process its reservation - the worst
+case the prices allow - is committed; afterwards the reservation is replaced by the cost computed
+from the reported usage. Unknown cost (crash, timeout, missing usage) keeps the reservation, so the
+limits err on the safe side. Prices are the operator's estimates, not invoices.
 """
 
 import sqlite3
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_CEILING, Decimal, InvalidOperation
 
 from llm_trading_bot.paper.db import write_tx
 
-DEFAULT_MODEL = "gpt-6.1-sol"
-# gpt-6.1-sol list prices in USD per 1M tokens, taken 1:1 as EUR: rather too high (ADR-0009).
-DEFAULT_PRICES = (Decimal("2.00"), Decimal("10.00"))
 MILLION = Decimal(1_000_000)
-# Statuses whose attempt never reached the provider and cost nothing.
+CENT_FRACTION = Decimal("0.0001")
+# Statuses whose request never reached the provider and cost nothing.
 FREE_STATUSES = ("BUDGET_BLOCKED", "NOT_SENT")
 
 
@@ -38,31 +35,19 @@ def amount(value: object, name: str) -> Decimal:
 
 
 @dataclass(frozen=True)
-class BudgetSettings:
-    daily_cap_eur: Decimal
-    call_reserve_eur: Decimal
-    input_eur_per_million: Decimal | None
-    output_eur_per_million: Decimal | None
+class Pricing:
+    """EUR per 1M tokens."""
 
-    @classmethod
-    def from_env(cls, env: Mapping[str, str], model: str) -> "BudgetSettings":
-        cap = amount(env.get("LLM_DAILY_BUDGET_EUR", "3"), "LLM_DAILY_BUDGET_EUR")
-        hold = amount(env.get("LLM_CALL_RESERVE_EUR", "0.10"), "LLM_CALL_RESERVE_EUR")
-        names = ("OPENAI_INPUT_EUR_PER_MILLION", "OPENAI_OUTPUT_EUR_PER_MILLION")
-        raw = [env.get(n) for n in names]
-        if any(r is not None for r in raw) and not all(r is not None for r in raw):
-            raise ValueError("OPENAI_INPUT_EUR_PER_MILLION and _OUTPUT_ must be set together")
-        if all(r is not None for r in raw):
-            prices: tuple[Decimal | None, Decimal | None] = (
-                amount(raw[0], names[0]),
-                amount(raw[1], names[1]),
-            )
-        elif model == DEFAULT_MODEL:
-            prices = DEFAULT_PRICES
-        else:
-            # Unknown model without prices: blocked at reservation time, never guessed.
-            prices = (None, None)
-        return cls(cap, hold, *prices)
+    input_per_million: Decimal
+    output_per_million: Decimal
+
+
+@dataclass(frozen=True)
+class Limits:
+    total_daily_eur: Decimal
+    agent_daily_eur: Decimal
+    pricing: Pricing | None
+    """None: no price known for this model - it is never called."""
 
 
 @dataclass(frozen=True)
@@ -70,13 +55,17 @@ class Attempt:
     """What is known before the request: stored first, so provenance survives any failure."""
 
     agent: str
-    symbol: str
-    ref_mid: float
+    markets: str
+    ref_mid_btc: float | None
+    ref_mid_eth: float | None
     model: str
+    prompt_version: str
+    prompt_sha256: str
     max_output_tokens: int
     effort: str
-    prompt_sha256: str
     context: str
+    input_chars: int
+    """Characters of instructions, schema and message; an upper bound for input tokens."""
 
 
 @dataclass(frozen=True)
@@ -87,65 +76,92 @@ class Usage:
     cached_tokens: int | None = None
 
 
+def reservation(attempt: Attempt, pricing: Pricing) -> Decimal:
+    """Worst case: one token per input character plus the full output allowance, rounded up."""
+    worst = (
+        Decimal(attempt.input_chars) * pricing.input_per_million
+        + Decimal(attempt.max_output_tokens) * pricing.output_per_million
+    ) / MILLION
+    return worst.quantize(CENT_FRACTION, rounding=ROUND_CEILING)
+
+
 def _day_bounds(now_epoch: float) -> tuple[str, str]:
     day = datetime.fromtimestamp(now_epoch, UTC).date()
     return day.isoformat(), (day + timedelta(days=1)).isoformat()
 
 
-def charged_today(con: sqlite3.Connection, now_epoch: float) -> tuple[Decimal, bool]:
-    """Known costs plus open reservations of today, and whether any call exceeded its reserve."""
+def charged_today(
+    con: sqlite3.Connection, now_epoch: float, agent: str | None = None
+) -> tuple[Decimal, bool]:
+    """Known costs plus open reservations today (one agent or all), and whether any call of that
+    scope cost more than its reservation."""
     start, end = _day_bounds(now_epoch)
-    rows = con.execute(
+    query = (
         "SELECT reserved_eur, cost_eur, reservation_exceeded FROM llm_calls"
-        " WHERE ts>=? AND ts<? AND status NOT IN (?,?)",
-        (start, end, *FREE_STATUSES),
-    ).fetchall()
+        " WHERE ts>=? AND ts<? AND status NOT IN (?,?)"
+    )
+    params: tuple[object, ...] = (start, end, *FREE_STATUSES)
+    if agent is not None:
+        query += " AND agent=?"
+        params += (agent,)
     total = Decimal(0)
     exceeded = False
-    for row in rows:
+    for row in con.execute(query, params).fetchall():
         value = row["cost_eur"] if row["cost_eur"] is not None else row["reserved_eur"]
-        # A sent attempt without any amount has unknown cost: treat the day as used up.
+        # A sent request without any amount has unknown cost: treat the budget as used up.
         total += amount(value, "llm_calls") if value is not None else Decimal("Infinity")
         exceeded = exceeded or bool(row["reservation_exceeded"])
     return total, exceeded
 
 
+def _blocking_reason(
+    con: sqlite3.Connection, attempt: Attempt, limits: Limits, hold: Decimal, now_epoch: float
+) -> str:
+    agent_used, agent_exceeded = charged_today(con, now_epoch, attempt.agent)
+    total_used, _ = charged_today(con, now_epoch)
+    if agent_exceeded:
+        return "a call of this depot cost more than its reservation today"
+    if agent_used + hold > limits.agent_daily_eur:
+        return f"depot budget reached ({agent_used} + {hold} > {limits.agent_daily_eur} EUR)"
+    if total_used + hold > limits.total_daily_eur:
+        return f"total budget reached ({total_used} + {hold} > {limits.total_daily_eur} EUR)"
+    return ""
+
+
 def reserve(
     con: sqlite3.Connection,
     attempt: Attempt,
-    settings: BudgetSettings,
+    limits: Limits,
     *,
     now: str,
     now_epoch: float,
 ) -> int:
     """Book the attempt; raise BudgetBlocked (with the row stored) if it must not be sent."""
     with write_tx(con):
-        reason = ""
-        if settings.input_eur_per_million is None or settings.output_eur_per_million is None:
+        hold: Decimal | None = None
+        if limits.pricing is None:
             reason = f"no prices configured for model {attempt.model}"
-        elif settings.call_reserve_eur <= 0:
-            reason = "LLM_CALL_RESERVE_EUR must be positive"
         else:
-            used, exceeded = charged_today(con, now_epoch)
-            if exceeded:
-                reason = "a call cost more than its reservation today"
-            elif used + settings.call_reserve_eur > settings.daily_cap_eur:
-                reason = f"daily budget reached ({used} + {settings.call_reserve_eur} EUR)"
+            hold = reservation(attempt, limits.pricing)
+            reason = _blocking_reason(con, attempt, limits, hold, now_epoch)
         cursor = con.execute(
-            "INSERT INTO llm_calls(ts,agent,symbol,ref_mid,status,model,max_output_tokens,effort,"
-            "prompt_sha256,context,reserved_eur,error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO llm_calls(ts,agent,markets,ref_mid_btc,ref_mid_eth,status,model,"
+            "prompt_version,prompt_sha256,max_output_tokens,effort,context,reserved_eur,error)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 now,
                 attempt.agent,
-                attempt.symbol,
-                attempt.ref_mid,
+                attempt.markets,
+                attempt.ref_mid_btc,
+                attempt.ref_mid_eth,
                 "BUDGET_BLOCKED" if reason else "PENDING",
                 attempt.model,
+                attempt.prompt_version,
+                attempt.prompt_sha256,
                 attempt.max_output_tokens,
                 attempt.effort,
-                attempt.prompt_sha256,
                 attempt.context,
-                None if reason else str(settings.call_reserve_eur),
+                None if reason or hold is None else str(hold),
                 reason or None,
             ),
         )
@@ -156,21 +172,19 @@ def reserve(
     return attempt_id
 
 
-def cost_of(usage: Usage, settings: BudgetSettings) -> Decimal | None:
+def cost_of(usage: Usage, pricing: Pricing) -> Decimal:
     """Upper-bound estimate: cached input is priced like normal input (OpenAI bills it lower) and
     output_tokens already contains the reasoning tokens."""
-    if settings.input_eur_per_million is None or settings.output_eur_per_million is None:
-        return None
     return (
-        Decimal(usage.input_tokens) * settings.input_eur_per_million
-        + Decimal(usage.output_tokens) * settings.output_eur_per_million
+        Decimal(usage.input_tokens) * pricing.input_per_million
+        + Decimal(usage.output_tokens) * pricing.output_per_million
     ) / MILLION
 
 
 def settle(
     con: sqlite3.Connection,
     attempt_id: int,
-    settings: BudgetSettings,
+    pricing: Pricing,
     *,
     status: str,
     usage: Usage | None,
@@ -184,7 +198,7 @@ def settle(
         row = con.execute("SELECT reserved_eur FROM llm_calls WHERE id=?", (attempt_id,)).fetchone()
         if row is None:
             raise KeyError(f"unknown llm attempt {attempt_id}")
-        cost = Decimal(0) if not sent else cost_of(usage, settings) if usage else None
+        cost = Decimal(0) if not sent else cost_of(usage, pricing) if usage else None
         reserved = amount(row["reserved_eur"], "reserved_eur") if row["reserved_eur"] else None
         exceeded = cost is not None and reserved is not None and cost > reserved
         con.execute(
