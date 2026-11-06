@@ -280,6 +280,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError as exc:
             print(f"web refused: {exc}", file=sys.stdout)
             return EXIT_INVALID
+        except OSError as exc:
+            # Typically the port is taken (another web UI, the Arena on 8787).
+            print(f"web could not start on port {args.port}: {type(exc).__name__}: {exc}")
+            return EXIT_INVALID
         except KeyboardInterrupt:
             return EXIT_OK
         return EXIT_OK

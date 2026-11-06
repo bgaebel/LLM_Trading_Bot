@@ -196,3 +196,46 @@ def test_environment_wins_over_saved_values(tmp_path: Path) -> None:
         secrets=secrets,
     )
     assert code == EXIT_OK and "depots trend" in out.getvalue()
+
+
+def test_stored_key_from_an_explicit_secrets_file_reaches_the_model(tmp_path: Path) -> None:
+    from llm_fakes import FakeModel
+
+    key = "sk-test-stored-in-the-web-ui-0000"
+    secrets = tmp_path / "elsewhere" / "secrets.env"
+    secrets.parent.mkdir()
+    secrets.write_text(f"OPENAI_API_KEY={key}\nBOT_AGENTS=gpt-luna\n", encoding="utf-8")
+    seen: list[str] = []
+
+    def factory(api_key: str) -> FakeModel:
+        seen.append(api_key)
+        return FakeModel()
+
+    out = io.StringIO()
+    code = run_paper_cycle(
+        tmp_path / "bot.db",
+        ScenarioClient(),
+        env={},
+        out=out,
+        clock=lambda: GOLDEN_NOW,
+        model_factory=factory,
+        secrets=secrets,
+    )
+    assert code == EXIT_OK and seen == [key] and key not in out.getvalue()
+    assert "gpt-luna (gpt-6-luna): ASKED" in out.getvalue()
+
+
+def test_web_refuses_a_public_host(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["web", "--data-dir", str(tmp_path), "--host", "0.0.0.0"])
+    assert code == EXIT_INVALID and "web refused" in capsys.readouterr().out
+
+
+def test_web_reports_a_taken_port(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    import socket
+
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        code = main(["web", "--data-dir", str(tmp_path), "--port", str(port)])
+    assert code == EXIT_INVALID and "could not start" in capsys.readouterr().out

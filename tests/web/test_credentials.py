@@ -94,3 +94,31 @@ def test_unknown_lines_in_the_file_are_ignored(secrets_file: SecretsFile) -> Non
 )
 def test_mask_shows_only_the_last_four(value: str | None, masked: str) -> None:
     assert mask(value) == masked
+
+
+@pytest.mark.parametrize(
+    "separator", ["\u2028", "\u2029", "\x85", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\t"]
+)
+def test_no_line_break_of_any_kind_can_smuggle_a_second_line(
+    secrets_file: SecretsFile, separator: str
+) -> None:
+    injected = f"low{separator}OPENAI_API_KEY=sk-injectedinjectedinjected"
+    with pytest.raises(ValueError, match="line breaks"):
+        secrets_file.update({"LLM_EFFORT": injected}, agents=["trend"])
+    assert not secrets_file.path.exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("LLM_EFFORT", "turbo"),
+        ("LLM_DAILY_BUDGET_EUR", "-1"),
+        ("LLM_DAILY_BUDGET_EUR_GPT_LUNA", "x"),
+    ],
+)
+def test_gpt_settings_are_checked_even_with_classic_depots_only(
+    secrets_file: SecretsFile, field: str, value: str
+) -> None:
+    with pytest.raises(ValueError, match=field):
+        secrets_file.update({field: value}, agents=["trend"])
+    assert not secrets_file.path.exists()

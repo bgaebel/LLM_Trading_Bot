@@ -89,4 +89,7 @@ htmlcov/
 *.sqlite-wal
 *.sqlite-shm
 *.writer.lock
+# Credentials and login written by `trading-bot web` (Spec 006) - never commit.
+secrets.env
+web-auth.json
 backups/

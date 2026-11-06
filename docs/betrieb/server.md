@@ -65,11 +65,13 @@ danach `/etc/ssh/sshd_config.d/01-hardening.conf` prüfen bzw. `authorized_keys`
 - Hetzner-Backups oder ein Snapshot nach der Einrichtung.
 
 ## Weboberfläche per SSH-Tunnel (Spec 006)
-Die Weboberfläche bindet nur an `127.0.0.1` (ADR-0014). Auf dem Server starten (Deployment als Dienst folgt in Nr. 6),
+Die Weboberfläche bindet nur an `127.0.0.1` (ADR-0015). Auf dem Server starten (Deployment als Dienst folgt in Nr. 6),
 dann vom eigenen Rechner einen Tunnel öffnen und `http://127.0.0.1:8787/` im Browser aufrufen:
 
 ```bash
 ssh -N -L 8787:127.0.0.1:8787 <alias>
 ```
 
+Der lokale Port ist frei wählbar (z. B. `-L 8899:127.0.0.1:8787`, wenn lokal schon die Arena auf 8787 läuft) – die
+Seite prüft nur den Hostnamen `127.0.0.1`/`localhost`, nicht den Port.
 Beim ersten Start steht der einmalige Einrichtungscode im Terminal bzw. Journal des Web-Prozesses.

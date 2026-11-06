@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from html import escape
 
 from llm_trading_bot.llm.agents import LLM_DEFAULTS
+from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.web.credentials import AGENT_CHOICES, mask
 
 CSS = """
@@ -61,20 +62,25 @@ def _page(title: str, body: str, *, csrf: str | None = None) -> str:
     )
 
 
+def _hidden(csrf: str) -> str:
+    return f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
+
+
 def _message(message: str, ok: bool) -> str:
     if not message:
         return ""
     return f'<div class="msg {"ok" if ok else "bad"}" role="status">{escape(message)}</div>'
 
 
-def setup_page(message: str = "") -> str:
+def setup_page(message: str = "", *, csrf: str) -> str:
     return _page(
         "Einrichtung",
         _message(message, False) + '<div class="card"><h2>Ersteinrichtung</h2>'
         '<p class="hint">Der Einrichtungscode steht im Terminal, in dem '
         "<code>trading-bot web</code> läuft. Er gilt nur, bis ein Passwort festgelegt ist.</p>"
         '<form method="post" action="/setup">'
-        '<label for="code">Einrichtungscode</label>'
+        + _hidden(csrf)
+        + '<label for="code">Einrichtungscode</label>'
         '<input id="code" name="code" type="text" autocomplete="off" required>'
         '<label for="password">Neues Passwort (mindestens 8 Zeichen)</label>'
         '<input id="password" name="password" type="password" autocomplete="new-password" '
@@ -86,12 +92,13 @@ def setup_page(message: str = "") -> str:
     )
 
 
-def login_page(message: str = "") -> str:
+def login_page(message: str = "", *, csrf: str) -> str:
     return _page(
         "Anmelden",
         _message(message, False) + '<div class="card"><h2>Anmelden</h2>'
         '<form method="post" action="/login">'
-        '<label for="password">Passwort</label>'
+        + _hidden(csrf)
+        + '<label for="password">Passwort</label>'
         '<input id="password" name="password" type="password" autocomplete="current-password" '
         "required autofocus>"
         '<button type="submit">Anmelden</button></form></div>',
@@ -119,8 +126,7 @@ def settings_page(
     )
     effort = values.get("LLM_EFFORT", "low")
     efforts = "".join(
-        f'<option value="{e}"{" selected" if e == effort else ""}>{e}</option>'
-        for e in ("low", "medium", "high")
+        f'<option value="{e}"{" selected" if e == effort else ""}>{e}</option>' for e in EFFORTS
     )
 
     def amount(name: str, label: str, default: str) -> str:

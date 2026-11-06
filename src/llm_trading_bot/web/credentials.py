@@ -9,6 +9,8 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from llm_trading_bot.llm.agents import CLASSIC_AGENTS, LLM_DEFAULTS, load_config
+from llm_trading_bot.llm.budget import amount
+from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.web.files import write_private
 
 SECRET_FIELDS = ("OPENAI_API_KEY",)
@@ -51,9 +53,22 @@ def load_env_file(path: Path) -> dict[str, str]:
 
 def _clean(name: str, value: str) -> str:
     value = value.strip()
-    if any(c in value for c in "\r\n\x00"):
-        raise ValueError(f"{name}: line breaks are not allowed")
+    # parse() splits with str.splitlines(), which knows more line breaks than \n; any of them
+    # (or any other control character) could smuggle a second KEY=VALUE line into the file.
+    if len(value.splitlines()) > 1 or not value.isprintable():
+        raise ValueError(f"{name}: line breaks and control characters are not allowed")
     return value
+
+
+def _check_settings(values: Mapping[str, str]) -> None:
+    """Also when no GPT depot is selected (load_config then skips them): stored values must be
+    valid the moment a GPT depot is switched on."""
+    effort = values.get("LLM_EFFORT")
+    if effort is not None and effort not in EFFORTS:
+        raise ValueError(f"LLM_EFFORT must be one of {list(EFFORTS)}: {effort!r}")
+    for name in SETTING_FIELDS:
+        if name.startswith("LLM_DAILY_BUDGET_EUR") and name in values:
+            amount(values[name], name)
 
 
 class SecretsFile:
@@ -89,6 +104,7 @@ class SecretsFile:
                 values[name] = value
             else:
                 values.pop(name, None)
+        _check_settings(values)
         load_config(values)  # same rules as the bot; raises ValueError with the reason
         body = "".join(f"{name}={values[name]}\n" for name in FIELDS if name in values)
         write_private(self.path, _HEADER + body)

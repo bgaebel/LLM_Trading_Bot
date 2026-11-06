@@ -4,15 +4,15 @@
 in a standard-library HTTP server bound to 127.0.0.1 only.
 """
 
+import secrets
 import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TextIO
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from llm_trading_bot.llm.openai_client import check_key
 from llm_trading_bot.web import pages
@@ -27,11 +27,15 @@ from llm_trading_bot.web.auth import (
 from llm_trading_bot.web.credentials import SecretsFile
 
 LOCALHOST = "127.0.0.1"
+LOCAL_NAMES = ("127.0.0.1", "localhost")
 # LEARNING(#web): Formular-POST hängt: einfädiger HTTPServer wartet auf leere Browser-Verbindung
 # Browsers open spare connections that stay silent; they must not block real requests.
 SOCKET_TIMEOUT = 10
 MAX_BODY = 16 * 1024
-COOKIE = "session"
+# Cookies on 127.0.0.1 are shared by every local app on any port: use names nobody else uses.
+COOKIE = "ltb_session"
+PRE_COOKIE = "ltb_pre"
+EXPIRED = "Formular abgelaufen – bitte erneut."
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; "
@@ -64,6 +68,23 @@ def _one(form: Form, name: str) -> str:
     return values[0] if values else ""
 
 
+def parse_cookies(header: str | None) -> dict[str, str]:
+    """Tolerant on purpose: other local apps may set cookies http.cookies cannot parse, and one
+    odd cookie must not hide ours."""
+    cookies: dict[str, str] = {}
+    for part in (header or "").split(";"):
+        name, sep, value = part.strip().partition("=")
+        if sep and name:
+            cookies.setdefault(name, value.strip())
+    return cookies
+
+
+def is_local_host(host: str) -> bool:
+    """Host or Origin host must be 127.0.0.1/localhost; the port is free (SSH tunnel)."""
+    name = host.rsplit(":", 1)[0] if host.count(":") == 1 or host.startswith("[") else host
+    return name in LOCAL_NAMES
+
+
 class WebApp:
     def __init__(
         self,
@@ -81,21 +102,32 @@ class WebApp:
 
     # -- helpers -----------------------------------------------------------------------------
 
-    def _session(self, cookie_header: str | None) -> Session | None:
-        if not cookie_header:
-            return None
-        cookie: SimpleCookie = SimpleCookie()
-        try:
-            cookie.load(cookie_header)
-        except Exception:
-            return None
-        morsel = cookie.get(COOKIE)
-        return self.sessions.get(morsel.value if morsel else None)
+    def _session(self, cookies: Mapping[str, str]) -> Session | None:
+        return self.sessions.get(cookies.get(COOKIE))
 
     def _login(self) -> Response:
         session = self.sessions.create()
         cookie = f"{COOKIE}={session.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"
         return redirect("/settings", **{"Set-Cookie": cookie})
+
+    def _public(
+        self,
+        build: Callable[..., str],
+        cookies: Mapping[str, str],
+        message: str = "",
+        status: int = 200,
+    ) -> Response:
+        """Login and setup pages carry a pre-session CSRF token (double-submit cookie): the
+        SameSite=Strict cookie never travels with a cross-site form post."""
+        token = cookies.get(PRE_COOKIE) or secrets.token_urlsafe(24)
+        page = build(message, csrf=token)
+        cookie = f"{PRE_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600"
+        return Response(status, page, headers={"Set-Cookie": cookie})
+
+    @staticmethod
+    def _pre_ok(form: Form, cookies: Mapping[str, str]) -> bool:
+        expected = cookies.get(PRE_COOKIE, "")
+        return bool(expected) and same(_one(form, "csrf"), expected)
 
     def _settings(
         self, session: Session, message: str = "", ok: bool = True, status: int = 200
@@ -107,18 +139,20 @@ class WebApp:
 
     # -- routing -----------------------------------------------------------------------------
 
-    def handle(self, method: str, path: str, cookie_header: str | None, form: Form) -> Response:
+    def handle(self, method: str, path: str, cookies: Mapping[str, str], form: Form) -> Response:
         if path == "/app.css" and method == "GET":
             return Response(200, pages.CSS, "text/css; charset=utf-8")
         if not self.passwords.is_set():
-            return self._setup(method, path, form)
-        session = self._session(cookie_header)
+            return self._setup(method, path, form, cookies)
+        session = self._session(cookies)
         if path == "/login":
-            return self._login_route(method, form, session)
+            return self._login_route(method, form, session, cookies)
         if session is None:
             return redirect("/login")
         if method == "POST" and not same(_one(form, "csrf"), session.csrf):
-            return Response(403, pages.login_page("Sitzung ungültig – bitte erneut anmelden."))
+            return self._public(
+                pages.login_page, cookies, "Sitzung ungültig – bitte erneut anmelden.", 403
+            )
         if path in ("/", "/setup") and method == "GET":
             return redirect("/settings")
         if path == "/logout" and method == "POST":
@@ -130,41 +164,53 @@ class WebApp:
             return self._save(session, form)
         if path == "/settings/test" and method == "POST":
             return self._test(session)
-        return Response(404, pages.login_page("Seite nicht gefunden."))
+        return self._settings(session, "Seite nicht gefunden.", ok=False, status=404)
 
-    def _setup(self, method: str, path: str, form: Form) -> Response:
+    def _setup(self, method: str, path: str, form: Form, cookies: Mapping[str, str]) -> Response:
         if path != "/setup":
             return redirect("/setup")
         if method != "POST":
-            return Response(200, pages.setup_page())
-        if self.guard.seconds_locked():
-            return Response(
-                429,
-                pages.setup_page(f"Zu viele Versuche – {self.guard.seconds_locked()} s warten."),
+            return self._public(pages.setup_page, cookies)
+        if not self._pre_ok(form, cookies):
+            return self._public(pages.setup_page, cookies, EXPIRED, 403)
+        locked = self.guard.seconds_locked()
+        if locked:
+            return self._public(
+                pages.setup_page, cookies, f"Zu viele Versuche – {locked} s warten.", 429
             )
         if self.setup_code is None or not same(_one(form, "code"), self.setup_code):
             self.guard.failed()
-            return Response(403, pages.setup_page("Einrichtungscode stimmt nicht."))
+            return self._public(pages.setup_page, cookies, "Einrichtungscode stimmt nicht.", 403)
         password = _one(form, "password")
         if password != _one(form, "password2"):
-            return Response(400, pages.setup_page("Die Passwörter stimmen nicht überein."))
+            return self._public(
+                pages.setup_page, cookies, "Die Passwörter stimmen nicht überein.", 400
+            )
         try:
             self.passwords.set(password)
         except ValueError:
-            return Response(400, pages.setup_page("Das Passwort braucht mindestens 8 Zeichen."))
+            return self._public(
+                pages.setup_page, cookies, "Das Passwort braucht mindestens 8 Zeichen.", 400
+            )
         self.setup_code = None
         self.guard.succeeded()
         return self._login()
 
-    def _login_route(self, method: str, form: Form, session: Session | None) -> Response:
+    def _login_route(
+        self, method: str, form: Form, session: Session | None, cookies: Mapping[str, str]
+    ) -> Response:
         if method != "POST":
-            return redirect("/settings") if session else Response(200, pages.login_page())
+            return redirect("/settings") if session else self._public(pages.login_page, cookies)
+        if not self._pre_ok(form, cookies):
+            return self._public(pages.login_page, cookies, EXPIRED, 403)
         locked = self.guard.seconds_locked()
         if locked:
-            return Response(429, pages.login_page(f"Zu viele Fehlversuche – {locked} s warten."))
+            return self._public(
+                pages.login_page, cookies, f"Zu viele Fehlversuche – {locked} s warten.", 429
+            )
         if not self.passwords.verify(_one(form, "password")):
             self.guard.failed()
-            return Response(401, pages.login_page("Passwort falsch."))
+            return self._public(pages.login_page, cookies, "Passwort falsch.", 401)
         self.guard.succeeded()
         return self._login()
 
@@ -199,10 +245,17 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
         sys_version = ""
         timeout = SOCKET_TIMEOUT
 
+        def end_headers(self) -> None:
+            # Here and not in _send: also responses http.server writes itself (400, 414, 501 ...)
+            # carry the security headers.
+            for name, value in SECURITY_HEADERS.items():
+                self.send_header(name, value)
+            super().end_headers()
+
         def _send(self, response: Response) -> None:
             body = response.body.encode("utf-8")
             self.send_response(response.status)
-            for name, value in {**SECURITY_HEADERS, **response.headers}.items():
+            for name, value in response.headers.items():
                 self.send_header(name, value)
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(body)))
@@ -213,23 +266,38 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 # The browser gave up on this request (reload, closed tab): nothing to do.
                 return
 
+        def _plain(self, status: int, text: str) -> None:
+            self._send(Response(status, text, "text/plain; charset=utf-8"))
+
         def _dispatch(self, method: str) -> None:
             # A foreign Host header means DNS rebinding or a misrouted request: refuse it.
-            port = self.server.server_port  # type: ignore[attr-defined]
-            if self.headers.get("Host", "") not in {f"{LOCALHOST}:{port}", f"localhost:{port}"}:
-                self._send(Response(421, "wrong host", "text/plain; charset=utf-8"))
+            if not is_local_host(self.headers.get("Host", "")):
+                self._plain(421, "wrong host")
                 return
             form: dict[str, list[str]] = {}
             if method == "POST":
-                length = int(self.headers.get("Content-Length") or 0)
+                # Cross-site posts (login lockout, guessing) are refused before anything else.
+                origin = self.headers.get("Origin")
+                if origin and not is_local_host(urlsplit(origin).netloc):
+                    self._plain(403, "cross-site request")
+                    return
+                if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
+                    self._plain(403, "cross-site request")
+                    return
+                raw_length = self.headers.get("Content-Length") or "0"
+                if not raw_length.isdigit():
+                    self._plain(400, "bad length")
+                    return
+                length = int(raw_length)
                 if length > MAX_BODY:
-                    self._send(Response(413, "too large", "text/plain; charset=utf-8"))
+                    self._plain(413, "too large")
                     return
                 raw = self.rfile.read(length).decode("utf-8", errors="replace")
                 form = parse_qs(raw, keep_blank_values=True)
             path = self.path.split("?", 1)[0]
+            cookies = parse_cookies(self.headers.get("Cookie"))
             with app_lock:
-                response = app.handle(method, path, self.headers.get("Cookie"), form)
+                response = app.handle(method, path, cookies, form)
             self._send(response)
 
         def do_GET(self) -> None:
@@ -239,14 +307,14 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             self._dispatch("POST")
 
         def log_message(self, format: str, *args: object) -> None:
-            # Request lines only (method, path, status) - never bodies, cookies or headers.
+            # Nothing is logged: request lines could still carry paths or odd input.
             pass
 
     return Handler
 
 
 def make_server(app: WebApp, host: str, port: int) -> ThreadingHTTPServer:
-    # ADR-0005/0014: never reachable from the network; on the server only through an SSH tunnel.
+    # ADR-0005/0015: never reachable from the network; on the server only through an SSH tunnel.
     if host != LOCALHOST:
         raise ValueError(f"the web UI binds to {LOCALHOST} only, not {host!r}")
     server = ThreadingHTTPServer((host, port), make_handler(app))

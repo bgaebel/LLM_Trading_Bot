@@ -2,6 +2,7 @@
 
 import http.client
 import re
+import socket
 import threading
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
@@ -10,12 +11,13 @@ from urllib.parse import urlencode
 
 import pytest
 
-from llm_trading_bot.web.app import WebApp, make_server
+from llm_trading_bot.web.app import COOKIE, PRE_COOKIE, WebApp, make_server, parse_cookies
 from llm_trading_bot.web.auth import MAX_FAILURES
 from llm_trading_bot.web.credentials import load_env_file
 
 PASSWORD = "ein-langes-Passwort-2026"
 KEY = "sk-test-not-a-real-key-0000abcd"
+FormData = Mapping[str, str | list[str]]
 
 
 @dataclass
@@ -27,12 +29,16 @@ class Browser:
         self,
         method: str,
         path: str,
-        form: Mapping[str, str | list[str]] | None = None,
+        form: FormData | None = None,
         host: str | None = None,
+        extra: Mapping[str, str] | None = None,
+        cookie_header: str | None = None,
     ) -> tuple[int, dict[str, str], str]:
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        headers = {"Host": host or f"127.0.0.1:{self.port}"}
-        if self.cookies:
+        headers = {"Host": host or f"127.0.0.1:{self.port}", **(extra or {})}
+        if cookie_header is not None:
+            headers["Cookie"] = cookie_header
+        elif self.cookies:
             headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
         body = None
         if form is not None:
@@ -52,11 +58,18 @@ class Browser:
         conn.close()
         return response.status, response_headers, text
 
-    def csrf(self) -> str:
-        _, _, page = self.request("GET", "/settings")
+    def token(self, path: str) -> str:
+        _, _, page = self.request("GET", path)
         match = re.search(r'name="csrf" value="([^"]+)"', page)
         assert match, page
         return match.group(1)
+
+    def csrf(self) -> str:
+        return self.token("/settings")
+
+    def submit(self, path: str, form: FormData) -> tuple[int, dict[str, str], str]:
+        """Like a browser: open the form page first (gets the token), then post it."""
+        return self.request("POST", path, {**form, "csrf": self.token(path)})
 
 
 @dataclass
@@ -88,15 +101,22 @@ def running(tmp_path: Path) -> Iterator[Running]:
 
 def setup(r: Running) -> None:
     assert r.app.setup_code
-    status, headers, _ = r.browser.request(
-        "POST", "/setup", {"code": r.app.setup_code, "password": PASSWORD, "password2": PASSWORD}
+    status, headers, _ = r.browser.submit(
+        "/setup", {"code": r.app.setup_code, "password": PASSWORD, "password2": PASSWORD}
     )
     assert status == 303 and headers["location"] == "/settings"
 
 
+def setup_form(r: Running, password2: str = PASSWORD, code: str | None = None) -> FormData:
+    return {"code": code or r.app.setup_code or "", "password": PASSWORD, "password2": password2}
+
+
+# ------------------------------------------------------------------ binding and headers
+
+
 def test_server_refuses_any_address_but_localhost(tmp_path: Path) -> None:
     for host in ("0.0.0.0", "::", "192.168.1.10", "localhost"):
-        with pytest.raises(ValueError, match=r"127.0.0.1"):
+        with pytest.raises(ValueError, match=r"127\.0\.0\.1"):
             make_server(WebApp(tmp_path), host, 0)
 
 
@@ -111,9 +131,19 @@ def test_every_response_has_the_security_headers(running: Running) -> None:
         assert headers["x-content-type-options"] == "nosniff"
 
 
+def test_errors_written_by_http_server_itself_have_the_headers_too(running: Running) -> None:
+    status, headers, _ = running.browser.request("DELETE", "/settings")
+    assert status == 501 and headers["x-frame-options"] == "DENY"
+
+
 def test_foreign_host_header_is_refused(running: Running) -> None:
     status, _, _ = running.browser.request("GET", "/setup", host="evil.example:80")
     assert status == 421
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:9999", "localhost:8788", "localhost"])
+def test_any_local_port_works_for_an_ssh_tunnel(running: Running, host: str) -> None:
+    assert running.browser.request("GET", "/setup", host=host)[0] == 200
 
 
 def test_pages_contain_no_inline_script_or_style(running: Running) -> None:
@@ -121,15 +151,29 @@ def test_pages_contain_no_inline_script_or_style(running: Running) -> None:
     assert "<script" not in page and "style=" not in page and "<style" not in page
 
 
+@pytest.mark.parametrize("length", ["-1", "abc", "1e3"])
+def test_bad_content_length_is_refused(running: Running, length: str) -> None:
+    status, _, _ = running.browser.request(
+        "POST", "/login", extra={"Content-Length": length}, cookie_header=""
+    )
+    assert status == 400
+
+
+def test_too_large_body_is_refused(running: Running) -> None:
+    status, _, _ = running.browser.request("POST", "/login", {"password": "x" * 20_000})
+    assert status == 413
+
+
+# ------------------------------------------------------------------ setup
+
+
 def test_first_start_needs_the_setup_code(running: Running) -> None:
     status, headers, _ = running.browser.request("GET", "/settings")
     assert (status, headers["location"]) == (303, "/setup")
-    form = {"code": "falsch", "password": PASSWORD, "password2": PASSWORD}
-    assert running.browser.request("POST", "/setup", form)[0] == 403
-    form = {"code": running.app.setup_code or "", "password": "kurz", "password2": "kurz"}
-    assert running.browser.request("POST", "/setup", form)[0] == 400
-    form = {"code": running.app.setup_code or "", "password": PASSWORD, "password2": PASSWORD + "x"}
-    assert running.browser.request("POST", "/setup", form)[0] == 400
+    assert running.browser.submit("/setup", setup_form(running, code="falsch"))[0] == 403
+    short = {"code": running.app.setup_code or "", "password": "kurz", "password2": "kurz"}
+    assert running.browser.submit("/setup", short)[0] == 400
+    assert running.browser.submit("/setup", setup_form(running, PASSWORD + "x"))[0] == 400
     setup(running)
     assert running.app.setup_code is None
     assert PASSWORD not in (running.data / "web-auth.json").read_text(encoding="utf-8")
@@ -138,11 +182,19 @@ def test_first_start_needs_the_setup_code(running: Running) -> None:
     assert (status, headers["location"]) == (303, "/settings")
 
 
-def test_session_cookie_is_http_only_and_strict(running: Running) -> None:
-    form = {"code": running.app.setup_code or "", "password": PASSWORD, "password2": PASSWORD}
-    _, headers, _ = running.browser.request("POST", "/setup", form)
+def test_setup_without_form_token_is_refused(running: Running) -> None:
+    status, _, _ = running.browser.request("POST", "/setup", setup_form(running))
+    assert status == 403 and not (running.data / "web-auth.json").exists()
+
+
+def test_session_cookie_is_http_only_strict_and_uniquely_named(running: Running) -> None:
+    _, headers, _ = running.browser.submit("/setup", setup_form(running))
     cookie = headers["set-cookie"]
+    assert cookie.startswith(f"{COOKIE}=") and COOKIE != "session"
     assert "HttpOnly" in cookie and "SameSite=Strict" in cookie and "Max-Age=43200" in cookie
+
+
+# ------------------------------------------------------------------ login, logout, cross-site
 
 
 def test_login_logout_and_lockout(running: Running) -> None:
@@ -151,16 +203,98 @@ def test_login_logout_and_lockout(running: Running) -> None:
     assert running.browser.request("POST", "/logout", {"csrf": csrf})[0] == 303
     status, headers, _ = running.browser.request("GET", "/settings")
     assert (status, headers["location"]) == (303, "/login")
-    assert running.browser.request("POST", "/login", {"password": "falsch"})[0] == 401
-    status, headers, _ = running.browser.request("POST", "/login", {"password": PASSWORD})
+    assert running.browser.submit("/login", {"password": "falsch"})[0] == 401
+    status, headers, _ = running.browser.submit("/login", {"password": PASSWORD})
     assert (status, headers["location"]) == (303, "/settings")
     assert running.browser.request("GET", "/settings")[0] == 200
     # Five wrong passwords lock the login, also for the right password.
     other = Browser(running.browser.port)
     for _ in range(MAX_FAILURES):
-        other.request("POST", "/login", {"password": "falsch"})
-    status, _, page = other.request("POST", "/login", {"password": PASSWORD})
+        other.submit("/login", {"password": "falsch"})
+    status, _, page = other.submit("/login", {"password": PASSWORD})
     assert status == 429 and "warten" in page
+
+
+def test_logout_invalidates_the_session_on_the_server(running: Running) -> None:
+    setup(running)
+    old = running.browser.cookies[COOKIE]
+    running.browser.request("POST", "/logout", {"csrf": running.browser.csrf()})
+    status, headers, _ = running.browser.request(
+        "GET", "/settings", cookie_header=f"{COOKIE}={old}"
+    )
+    assert (status, headers["location"]) == (303, "/login")
+
+
+def test_login_without_form_token_is_refused(running: Running) -> None:
+    setup(running)
+    status, _, _ = running.browser.request("POST", "/login", {"password": PASSWORD})
+    assert status == 403
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [{"Origin": "https://evil.example"}, {"Sec-Fetch-Site": "cross-site"}],
+    ids=["origin", "fetch-site"],
+)
+def test_cross_site_posts_are_refused_and_do_not_count_as_failures(
+    running: Running, headers: dict[str, str]
+) -> None:
+    setup(running)
+    guest = Browser(running.browser.port)
+    token = guest.token("/login")
+    for _ in range(MAX_FAILURES + 1):
+        status, _, _ = guest.request(
+            "POST", "/login", {"password": "falsch", "csrf": token}, extra=headers
+        )
+        assert status == 403
+    # No lockout was triggered from outside: the owner can still log in.
+    assert guest.submit("/login", {"password": PASSWORD})[0] == 303
+
+
+def test_same_origin_post_with_local_origin_header_is_accepted(running: Running) -> None:
+    setup(running)
+    guest = Browser(running.browser.port)
+    token = guest.token("/login")
+    status, _, _ = guest.request(
+        "POST",
+        "/login",
+        {"password": PASSWORD, "csrf": token},
+        extra={
+            "Origin": f"http://localhost:{running.browser.port}",
+            "Sec-Fetch-Site": "same-origin",
+        },
+    )
+    assert status == 303
+
+
+def test_foreign_cookies_do_not_break_the_session(running: Running) -> None:
+    setup(running)
+    token = running.browser.cookies[COOKIE]
+    header = f'other={{"a":1}}; theme=dark mode; a="b; {COOKIE}={token}'
+    status, _, _ = running.browser.request("GET", "/settings", cookie_header=header)
+    assert status == 200
+
+
+def test_parse_cookies_is_tolerant() -> None:
+    assert parse_cookies('x={"a":1}; theme=dark mode; ltb_session=abc; =bad; noeq') == {
+        "x": '{"a":1}',
+        "theme": "dark mode",
+        "ltb_session": "abc",
+    }
+    assert parse_cookies(None) == {} and PRE_COOKIE.startswith("ltb_")
+
+
+@pytest.mark.parametrize("path", ["/settings", "/settings/test", "/logout"])
+def test_posts_without_a_session_change_nothing(running: Running, path: str) -> None:
+    setup(running)
+    stranger = Browser(running.browser.port)
+    form = {"csrf": "x", "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
+    status, headers, _ = stranger.request("POST", path, form)
+    assert (status, headers["location"]) == (303, "/login")
+    assert not (running.data / "secrets.env").exists() and running.checked == []
+
+
+# ------------------------------------------------------------------ settings
 
 
 def test_forms_without_csrf_token_are_refused(running: Running) -> None:
@@ -173,7 +307,7 @@ def test_forms_without_csrf_token_are_refused(running: Running) -> None:
 
 def test_key_is_saved_masked_and_never_shown_again(running: Running) -> None:
     setup(running)
-    form: dict[str, str | list[str]] = {
+    form: FormData = {
         "csrf": running.browser.csrf(),
         "OPENAI_API_KEY": KEY,
         "agents": ["gpt-luna", "gpt-sol"],
@@ -188,9 +322,19 @@ def test_key_is_saved_masked_and_never_shown_again(running: Running) -> None:
     assert KEY not in page
 
 
+@pytest.mark.parametrize("effort", ["none", "minimal", "xhigh", "max"])
+def test_every_valid_effort_survives_a_save(running: Running, effort: str) -> None:
+    setup(running)
+    csrf = running.browser.csrf()
+    base: FormData = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
+    running.browser.request("POST", "/settings", {**base, "LLM_EFFORT": effort})
+    _, _, page = running.browser.request("GET", "/settings")
+    assert f'<option value="{effort}" selected>' in page
+
+
 def test_invalid_settings_are_explained_and_not_written(running: Running) -> None:
     setup(running)
-    form: dict[str, str | list[str]] = {
+    form: FormData = {
         "csrf": running.browser.csrf(),
         "OPENAI_API_KEY": "kein-key",
         "agents": ["gpt-luna"],
@@ -202,7 +346,7 @@ def test_invalid_settings_are_explained_and_not_written(running: Running) -> Non
 
 def test_html_in_values_is_escaped(running: Running) -> None:
     setup(running)
-    form: dict[str, str | list[str]] = {
+    form: FormData = {
         "csrf": running.browser.csrf(),
         "OPENAI_API_KEY": KEY,
         "agents": ["gpt-luna"],
@@ -217,7 +361,7 @@ def test_connection_check_uses_the_stored_key_and_shows_no_key(running: Running)
     csrf = running.browser.csrf()
     _, _, page = running.browser.request("POST", "/settings/test", {"csrf": csrf})
     assert "Kein API-Key gespeichert" in page and running.checked == []
-    form: dict[str, str | list[str]] = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
+    form: FormData = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
     running.browser.request("POST", "/settings", form)
     _, _, page = running.browser.request("POST", "/settings/test", {"csrf": csrf})
     assert "in Ordnung" in page and KEY not in page and running.checked == [KEY]
@@ -234,6 +378,9 @@ def test_failed_connection_check_names_only_the_error_type(running: Running) -> 
     assert "AuthenticationError" in page and other not in page
 
 
+# ------------------------------------------------------------------ robustness
+
+
 def test_restart_keeps_password_but_ends_sessions(tmp_path: Path) -> None:
     first = WebApp(tmp_path)
     assert first.setup_code
@@ -243,8 +390,6 @@ def test_restart_keeps_password_but_ends_sessions(tmp_path: Path) -> None:
 
 
 def test_client_hanging_up_does_not_break_the_server(running: Running) -> None:
-    import socket
-
     sock = socket.create_connection(("127.0.0.1", running.browser.port), timeout=5)
     sock.sendall(f"GET /setup HTTP/1.1\r\nHost: 127.0.0.1:{running.browser.port}\r\n\r\n".encode())
     sock.close()  # hang up before reading the answer
@@ -253,12 +398,9 @@ def test_client_hanging_up_does_not_break_the_server(running: Running) -> None:
 
 def test_silent_spare_connection_does_not_block_a_form_post(running: Running) -> None:
     """Browsers pre-open connections and send nothing on them; a POST must still be answered."""
-    import socket
-
     idle = socket.create_connection(("127.0.0.1", running.browser.port), timeout=5)
     try:
-        form = {"code": running.app.setup_code or "", "password": PASSWORD, "password2": PASSWORD}
-        status, _, _ = running.browser.request("POST", "/setup", form)
+        status, _, _ = running.browser.submit("/setup", setup_form(running))
         assert status == 303
     finally:
         idle.close()

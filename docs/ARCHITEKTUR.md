@@ -12,7 +12,7 @@ Paper-Ausführung mit SQLite (`paper`, Spec 004): virtuelle Orders, Depot, Entsc
 GPT-Depots (`llm`, Spec 005): `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprobe) plus Buy & Hold (ADR-0012),
 eine OpenAI-Anfrage für beide Märkte nur bei Bedarf, hartes EUR-Budget, Provenienz je Versuch (ADR-0013).
 Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`. Weboberfläche (`web`, Spec 006): Login und
-Eingabe von OpenAI-Key und Einstellungen per `uv run trading-bot web --data-dir <dir>`, nur auf 127.0.0.1 (ADR-0014).
+Eingabe von OpenAI-Key und Einstellungen per `uv run trading-bot web --data-dir <dir>`, nur auf 127.0.0.1 (ADR-0015).
 Diagnose per `uv run trading-bot market` und `uv run trading-bot signals`.
 **Zielbild M1** (Bausteine werden schrittweise per Spec aus der Arena übernommen, ADR-0003):
 
@@ -126,16 +126,19 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   gespeichert/ausgegeben; der API-Key erscheint nirgends.
 
 ### web
-- **Zweck:** Betreiber loggt sich ein und pflegt OpenAI-Key und Einstellungen; `paper-cycle` liest sie (ADR-0014).
+- **Zweck:** Betreiber loggt sich ein und pflegt OpenAI-Key und Einstellungen; `paper-cycle` liest sie (ADR-0015).
 - **Schnittstelle:**
   - `app`: `WebApp(data_dir, key_check=)` mit `handle(method, path, cookie, form)`, `make_server(app, host, port)`
     (nur 127.0.0.1), `serve(...)`; Routen `/setup`, `/login`, `/logout`, `/settings`, `/settings/test`, `/app.css`
   - `auth`: `PasswordStore` (scrypt), `LoginGuard` (5 Fehlversuche → 60 s), `Sessions` (12 h, im Speicher)
   - `credentials`: `SecretsFile.update(form, agents=, clear_key=)` (prüft mit `load_config`), `load_env_file`, `mask`
   - `files`: `write_private` (atomar, 600)
-- **Invarianten:** nur 127.0.0.1 und Host-Header 127.0.0.1/localhost; Ersteinrichtung nur mit Einrichtungscode aus
-  dem Terminal; jedes Formular mit CSRF-Token; Keys nie vollständig im HTML; CSP ohne Skript, ohne Inline-Stil;
-  kein Bitvavo-Key-Feld (ADR-0004). `secrets.env` und `web-auth.json` liegen im Datenverzeichnis, nie im Repo.
+- **Invarianten:** nur 127.0.0.1; Host-Header-Name 127.0.0.1/localhost (Port frei, SSH-Tunnel); POST mit fremdem
+  `Origin`/`Sec-Fetch-Site` abgelehnt; Ersteinrichtung nur mit Einrichtungscode aus dem Terminal; jedes Formular
+  mit CSRF-Token (Sitzung bzw. Double-Submit-Cookie `ltb_pre` auf Login/Einrichtung); Cookies `ltb_*`, tolerant
+  gelesen; Keys nie vollständig im HTML; CSP ohne Skript, ohne Inline-Stil, Header auf jeder Antwort
+  (`end_headers`); `secrets.env` ohne Steuerzeichen/Zeilenumbrüche in Werten; kein Bitvavo-Key-Feld (ADR-0004).
+  `secrets.env` und `web-auth.json` liegen im Datenverzeichnis, sind git-ignoriert, nie im Repo.
 
 ## Datenfluss & Nebenläufigkeit
 `build_snapshots` holt je Markt die Kerzen für 1/15/60/240 min, danach einmal die Quotes (sie veralten am
