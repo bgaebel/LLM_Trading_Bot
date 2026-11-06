@@ -76,6 +76,16 @@
 - **Ursache:** `sys.stdout` nutzt unter Windows die Konsolen-Codepage (cp1252), nicht UTF-8; die Strategie-Begründungen der Arena sind deutsch.
 - **Lösung / Regel:** In `main()` `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` (nur wenn `io.TextIOWrapper`). Nicht `PYTHONUTF8` global setzen – das verdeckt Datei-Encoding-Fehler (siehe oben).
 
+### Sperre eines beendeten Prozesses wird unter Windows verzögert frei #windows #lock #test
+*2026-11-06 · Quelle: Spec 005 (Lock-Test aus Spec 004 wurde lokal flaky)*
+- **Symptom:** `test_lock_of_a_killed_process_is_released` scheitert lokal etwa jedes zweite Mal mit
+  `WriterLockBusy`, obwohl der Kindprozess per `kill()` beendet und mit `wait()` abgeräumt ist; in der Linux-CI grün.
+- **Ursache:** `msvcrt.locking` nutzt Byte-Range-Locks; Windows gibt die Sperren eines beendeten Prozesses
+  asynchron frei („abhängig von verfügbaren Systemressourcen"). `fcntl.flock` unter Linux sofort.
+- **Lösung / Regel:** Tests, die die Freigabe nach einem Absturz prüfen, warten unter Windows kurz in einer
+  Schleife (Frist 10 s). Im Betrieb (Linux) ist nichts zu tun; unter Windows schlägt ein sofortiger Neustart mit
+  „busy" fehl und klappt beim nächsten Versuch – das ist fail closed.
+
 ### Tests grün unter Windows, rot in der Linux-CI #windows #pfade #ci
 *2026-11-05 · Quelle: Preset python*
 - **Symptom:** Datei/Modul „nicht gefunden" nur in CI bzw. auf dem Server.

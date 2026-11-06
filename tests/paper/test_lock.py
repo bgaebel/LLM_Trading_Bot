@@ -2,6 +2,7 @@
 
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -48,8 +49,17 @@ def test_lock_of_a_killed_process_is_released(tmp_path: Path) -> None:
     child = _hold_in_child(db)
     child.kill()
     child.wait(timeout=30)
-    with WriterLock(db):
-        pass
+    # LEARNING(#windows): Sperre eines beendeten Prozesses wird unter Windows verzögert frei
+    # Windows releases a dead process's byte-range lock asynchronously; Linux (fcntl) at once.
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            with WriterLock(db):
+                break
+        except WriterLockBusy:
+            if sys.platform != "win32" or time.monotonic() > deadline:
+                raise
+            time.sleep(0.05)
     assert (tmp_path / "bot.db.writer.lock").exists()
 
 
