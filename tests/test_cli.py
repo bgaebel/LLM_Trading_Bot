@@ -1,4 +1,5 @@
 import io
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -154,6 +155,17 @@ def test_paper_cycle_refused_while_another_writer_holds_the_db(tmp_path: Path) -
         code, text = run_cycle(db, ScenarioClient())
     assert code == EXIT_LOCKED
     assert "paper-cycle refused" in text
+
+
+def test_paper_cycle_refuses_a_foreign_database(tmp_path: Path) -> None:
+    db = tmp_path / "bot.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE portfolios (agent TEXT PRIMARY KEY)")
+    con.commit()
+    con.close()
+    code, text = run_cycle(db, ScenarioClient())
+    assert code == EXIT_INVALID
+    assert "database not usable: schema version 0" in text
 
 
 def test_paper_cycle_needs_a_db_path() -> None:

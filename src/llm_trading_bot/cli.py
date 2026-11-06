@@ -3,6 +3,7 @@
 import argparse
 import io
 import os
+import sqlite3
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -21,7 +22,7 @@ from llm_trading_bot.market.snapshot import (
     build_snapshots,
 )
 from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME, CycleReport, active_agent, paper_cycle
-from llm_trading_bot.paper.db import open_db
+from llm_trading_bot.paper.db import SchemaError, open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
 from llm_trading_bot.paper.lock import WriterLock, WriterLockBusy
 from llm_trading_bot.strategy.indicators import indicators
@@ -196,6 +197,10 @@ def run_paper_cycle(
     except WriterLockBusy as exc:
         print(f"paper-cycle refused: {exc}", file=out)
         return EXIT_LOCKED
+    except (SchemaError, sqlite3.DatabaseError) as exc:
+        # Never repair or migrate: the history in that file must stay as it is (ADR-0008).
+        print(f"paper-cycle refused, database not usable: {exc}", file=out)
+        return EXIT_INVALID
     print_cycle(report, costs, out=out)
     if not report.equity:
         return EXIT_FETCH_FAILED
