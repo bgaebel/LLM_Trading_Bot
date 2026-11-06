@@ -1,0 +1,3065 @@
+{
+ "meta": {
+  "arena_commit": "7563724",
+  "generator": "tools/golden/generate_execution_golden.py",
+  "fuzz_modes": [
+   "random",
+   "threshold",
+   "total_cap",
+   "small_equity",
+   "exact",
+   "status",
+   "direct"
+  ],
+  "fuzz_per_mode": 300,
+  "fuzz_chunk": 25,
+  "walk_steps": 30,
+  "walks_skipped_for_drawdown_stop": [],
+  "coverage": {
+   "random": {
+    "trade": 108,
+    "no_trade": 192
+   },
+   "threshold": {
+    "trade": 137,
+    "no_trade": 163
+   },
+   "total_cap": {
+    "trade": 175,
+    "no_trade": 125
+   },
+   "small_equity": {
+    "trade": 113,
+    "no_trade": 187
+   },
+   "exact": {
+    "trade": 170,
+    "no_trade": 130
+   },
+   "status": {
+    "trade": 28,
+    "no_trade": 272
+   },
+   "direct": {
+    "trade": 235,
+    "no_trade": 65
+   }
+  }
+ },
+ "named": [
+  {
+   "name": "buy_both_rebalance_sell",
+   "ops": [
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "ETHEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:21+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "mark",
+     "agent": "trend",
+     "quotes": {
+      "BTCEUR": [
+       62390.64,
+       62409.36000000001
+      ],
+      "ETHEUR": [
+       2909.2725,
+       2910.7275000000004
+      ]
+     },
+     "now": "2026-10-26T07:34:20+00:00"
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 7200,
+     "model": "TREND",
+     "sig": {
+      "action": "HOLD",
+      "target_fraction": 0.0,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 7200,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       62390.64,
+       62409.36000000001
+      ],
+      "ETHEUR": [
+       2909.2725,
+       2910.7275000000004
+      ]
+     },
+     "now": "2026-10-26T08:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 10800,
+     "model": "TREND",
+     "sig": {
+      "action": "SELL",
+      "target_fraction": 0.25,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 10800,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       62390.64,
+       62409.36000000001
+      ],
+      "ETHEUR": [
+       2909.2725,
+       2910.7275000000004
+      ]
+     },
+     "now": "2026-10-26T09:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "ETHEUR",
+     "bar_ts": 10800,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.25,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 10800,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       58776.48,
+       58823.52
+      ],
+      "ETHEUR": [
+       3089.6910000000003,
+       3090.3089999999997
+      ]
+     },
+     "now": "2026-10-26T09:33:21+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 14400,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 14400,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       58776.48,
+       58823.52
+      ],
+      "ETHEUR": [
+       3089.6910000000003,
+       3090.3089999999997
+      ]
+     },
+     "now": "2026-10-26T10:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "ETHEUR",
+     "bar_ts": 14400,
+     "model": "TREND",
+     "sig": {
+      "action": "SELL",
+      "target_fraction": 0.0,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 14400,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       58776.48,
+       58823.52
+      ],
+      "ETHEUR": [
+       3089.6910000000003,
+       3090.3089999999997
+      ]
+     },
+     "now": "2026-10-26T10:33:21+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 18000,
+     "model": "TREND",
+     "sig": {
+      "action": "SELL",
+      "target_fraction": 0.0,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 18000,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T11:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    }
+   ],
+   "results": [
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       5488.75,
+       0.07494752923478273,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       3600,
+       "TREND",
+       "BUY",
+       0.45,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       "BUY",
+       0.07494752923478273,
+       60042.005999999994,
+       4500.0,
+       11.25,
+       0.0005,
+       1
+      ]
+     ],
+     "equity": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       9985.601754086965,
+       5488.75,
+       0.07494752923478273,
+       0.0
+      ]
+     ],
+     "equity_count": 1
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       2,
+       "2026-10-26T07:33:21+00:00",
+       "trend",
+       "ETHEUR",
+       3600,
+       "TREND",
+       "BUY",
+       0.45,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       2,
+       "2026-10-26T07:33:21+00:00",
+       "trend",
+       "ETHEUR",
+       "BUY",
+       1.4955332905679868,
+       3002.40045,
+       4490.189824591304,
+       11.225474561478261,
+       0.0005,
+       2
+      ]
+     ],
+     "equity": [
+      [
+       2,
+       "2026-10-26T07:33:21+00:00",
+       "trend",
+       9970.786326638141,
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868
+      ]
+     ],
+     "equity_count": 2
+    },
+    {
+     "ret": null,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868,
+       10016.0624006505,
+       0
+      ]
+     ],
+     "decisions": [],
+     "trades": [],
+     "equity": [
+      [
+       3,
+       "2026-10-26T07:34:20+00:00",
+       "trend",
+       10016.0624006505,
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868
+      ]
+     ],
+     "equity_count": 3
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868,
+       10016.0624006505,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       3,
+       "2026-10-26T08:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       7200,
+       "TREND",
+       "HOLD",
+       0.4669225926494536,
+       0.7,
+       "golden",
+       "{\"bar\": 7200, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [],
+     "equity": [],
+     "equity_count": 3
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       3153.2045809291553,
+       0.04012845513081131,
+       1.4955332905679868,
+       10016.0624006505,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       4,
+       "2026-10-26T09:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       10800,
+       "TREND",
+       "SELL",
+       0.25,
+       0.7,
+       "golden",
+       "{\"bar\": 10800, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       3,
+       "2026-10-26T09:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       "SELL",
+       0.03481907410397143,
+       62359.44468,
+       2171.2981253954267,
+       5.428245313488567,
+       0.0005,
+       4
+      ]
+     ],
+     "equity": [
+      [
+       4,
+       "2026-10-26T09:33:20+00:00",
+       "trend",
+       10009.222056644623,
+       3153.2045809291553,
+       0.04012845513081131,
+       1.4955332905679868
+      ]
+     ],
+     "equity_count": 4
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       3153.2045809291553,
+       0.04012845513081131,
+       1.4955332905679868,
+       10133.95561047594,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       5,
+       "2026-10-26T09:33:21+00:00",
+       "trend",
+       "ETHEUR",
+       10800,
+       "TREND",
+       "BUY",
+       0.4560112601122836,
+       0.7,
+       "golden",
+       "{\"bar\": 10800, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [],
+     "equity": [
+      [
+       5,
+       "2026-10-26T09:33:21+00:00",
+       "trend",
+       10133.95561047594,
+       3153.2045809291553,
+       0.04012845513081131,
+       1.4955332905679868
+      ]
+     ],
+     "equity_count": 5
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       1008.0460384978892,
+       0.07648703499914516,
+       1.4955332905679868,
+       10133.95561047594,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       6,
+       "2026-10-26T10:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       14400,
+       "TREND",
+       "BUY",
+       0.45,
+       0.7,
+       "golden",
+       "{\"bar\": 14400, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       4,
+       "2026-10-26T10:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       "BUY",
+       0.03635857986833386,
+       58852.93175999999,
+       2139.809019881562,
+       5.349522549703905,
+       0.0005,
+       6
+      ]
+     ],
+     "equity": [
+      [
+       6,
+       "2026-10-26T10:33:20+00:00",
+       "trend",
+       10126.681564302704,
+       1008.0460384978892,
+       0.07648703499914516,
+       1.4955332905679868
+      ]
+     ],
+     "equity_count": 6
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       5614.925355241665,
+       0.07648703499914516,
+       0.0,
+       10133.95561047594,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       7,
+       "2026-10-26T10:33:21+00:00",
+       "trend",
+       "ETHEUR",
+       14400,
+       "TREND",
+       "SELL",
+       0.0,
+       0.7,
+       "golden",
+       "{\"bar\": 14400, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       5,
+       "2026-10-26T10:33:21+00:00",
+       "trend",
+       "ETHEUR",
+       "SELL",
+       1.4955332905679868,
+       3088.1461545000006,
+       4618.4253801942605,
+       11.54606345048565,
+       0.0005,
+       7
+      ]
+     ],
+     "equity": [
+      [
+       7,
+       "2026-10-26T10:33:21+00:00",
+       "trend",
+       10112.3630131914,
+       5614.925355241665,
+       0.07648703499914516,
+       0.0
+      ]
+     ],
+     "equity_count": 7
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10189.470433384118,
+       0.0,
+       0.0,
+       10189.470433384118,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       8,
+       "2026-10-26T11:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       18000,
+       "TREND",
+       "SELL",
+       0.0,
+       0.7,
+       "golden",
+       "{\"bar\": 18000, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       6,
+       "2026-10-26T11:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       "SELL",
+       0.07648703499914516,
+       59958.006,
+       4586.010103400956,
+       11.46502525850239,
+       0.0005,
+       8
+      ]
+     ],
+     "equity": [
+      [
+       8,
+       "2026-10-26T11:33:20+00:00",
+       "trend",
+       10189.470433384118,
+       10189.470433384118,
+       0.0,
+       0.0
+      ]
+     ],
+     "equity_count": 8
+    }
+   ]
+  },
+  {
+   "name": "duplicate_bar_is_ignored",
+   "ops": [
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.25,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       62390.64,
+       62409.36000000001
+      ],
+      "ETHEUR": [
+       2909.2725,
+       2910.7275000000004
+      ]
+     },
+     "now": "2026-10-26T07:33:25+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "SELL",
+      "target_fraction": 0.0,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       58776.48,
+       58823.52
+      ],
+      "ETHEUR": [
+       3089.6910000000003,
+       3090.3089999999997
+      ]
+     },
+     "now": "2026-10-26T07:33:29+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    }
+   ],
+   "results": [
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       7493.75,
+       0.04163751624154596,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       3600,
+       "TREND",
+       "BUY",
+       0.25,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       "BUY",
+       0.04163751624154596,
+       60042.005999999994,
+       2500.0,
+       6.25,
+       0.0005,
+       1
+      ]
+     ],
+     "equity": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       9992.000974492757,
+       7493.75,
+       0.04163751624154596,
+       0.0
+      ]
+     ],
+     "equity_count": 1
+    },
+    {
+     "ret": false,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       7493.75,
+       0.04163751624154596,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [],
+     "trades": [],
+     "equity": [],
+     "equity_count": 1
+    },
+    {
+     "ret": false,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       7493.75,
+       0.04163751624154596,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [],
+     "trades": [],
+     "equity": [],
+     "equity_count": 1
+    }
+   ]
+  },
+  {
+   "name": "stale_and_partial_quotes",
+   "ops": [
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": null,
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "ETHEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 7200,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "  raw  "
+     },
+     "data": {
+      "bar": 7200,
+      "note": "Prüfung"
+     },
+     "status": "X",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 10800,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "  ok  "
+     },
+     "data": {
+      "bar": 10800,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:34:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    }
+   ],
+   "results": [
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       3600,
+       "TREND",
+       "HOLD",
+       0.0,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "STALE_QUOTE"
+      ]
+     ],
+     "trades": [],
+     "equity": [],
+     "equity_count": 0
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       2,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "ETHEUR",
+       3600,
+       "TREND",
+       "HOLD",
+       0.0,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "STALE_QUOTE"
+      ]
+     ],
+     "trades": [],
+     "equity": [],
+     "equity_count": 0
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       3,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       7200,
+       "TREND",
+       "BUY",
+       0.45,
+       0.7,
+       "  raw  ",
+       "{\"bar\": 7200, \"note\": \"Prüfung\"}",
+       "X"
+      ]
+     ],
+     "trades": [],
+     "equity": [],
+     "equity_count": 0
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       5488.75,
+       0.07494752923478273,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       4,
+       "2026-10-26T07:34:20+00:00",
+       "trend",
+       "BTCEUR",
+       10800,
+       "TREND",
+       "BUY",
+       0.45,
+       0.7,
+       "ok",
+       "{\"bar\": 10800, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       1,
+       "2026-10-26T07:34:20+00:00",
+       "trend",
+       "BTCEUR",
+       "BUY",
+       0.07494752923478273,
+       60042.005999999994,
+       4500.0,
+       11.25,
+       0.0005,
+       4
+      ]
+     ],
+     "equity": [
+      [
+       1,
+       "2026-10-26T07:34:20+00:00",
+       "trend",
+       9985.601754086965,
+       5488.75,
+       0.07494752923478273,
+       0.0
+      ]
+     ],
+     "equity_count": 1
+    }
+   ]
+  },
+  {
+   "name": "buyhold_once",
+   "ops": [
+    {
+     "op": "buyhold",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "buyhold",
+     "quotes": {
+      "BTCEUR": [
+       62390.64,
+       62409.36000000001
+      ],
+      "ETHEUR": [
+       2909.2725,
+       2910.7275000000004
+      ]
+     },
+     "now": "2026-10-26T07:34:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "buyhold",
+     "symbol": "BTCEUR",
+     "bar_ts": 3600,
+     "model": "BUY&HOLD",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       62390.64,
+       62409.36000000001
+      ],
+      "ETHEUR": [
+       2909.2725,
+       2910.7275000000004
+      ]
+     },
+     "now": "2026-10-26T07:35:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "buyhold",
+     "symbol": "ETHEUR",
+     "bar_ts": 3600,
+     "model": "BUY&HOLD",
+     "sig": {
+      "action": "SELL",
+      "target_fraction": 0.0,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       62390.64,
+       62409.36000000001
+      ],
+      "ETHEUR": [
+       2909.2725,
+       2910.7275000000004
+      ]
+     },
+     "now": "2026-10-26T07:35:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "mark",
+     "agent": "buyhold",
+     "quotes": {
+      "BTCEUR": [
+       58776.48,
+       58823.52
+      ],
+      "ETHEUR": [
+       3089.6910000000003,
+       3090.3089999999997
+      ]
+     },
+     "now": "2026-10-26T07:36:20+00:00"
+    }
+   ],
+   "results": [
+    {
+     "ret": 2,
+     "portfolios": [
+      [
+       "buyhold",
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "buyhold",
+       "BTCEUR",
+       -1,
+       "BUY&HOLD",
+       "BUY",
+       0.45,
+       1.0,
+       "Passiver Benchmark: einmaliger Kauf auf frischem Geld-/Briefkurs",
+       "{\"strategy\": \"buy_and_hold\", \"source\": \"BITVAVO-LIVE-QUOTE\", \"initial_allocation_pct\": 45, \"requires_candles\": false, \"bid\": 59988.0, \"ask\": 60012.0}",
+       "OK"
+      ],
+      [
+       2,
+       "2026-10-26T07:33:20+00:00",
+       "buyhold",
+       "ETHEUR",
+       -1,
+       "BUY&HOLD",
+       "BUY",
+       0.45,
+       1.0,
+       "Passiver Benchmark: einmaliger Kauf auf frischem Geld-/Briefkurs",
+       "{\"strategy\": \"buy_and_hold\", \"source\": \"BITVAVO-LIVE-QUOTE\", \"initial_allocation_pct\": 45, \"requires_candles\": false, \"bid\": 2999.1, \"ask\": 3000.9}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "buyhold",
+       "BTCEUR",
+       "BUY",
+       0.07494752923478273,
+       60042.005999999994,
+       4500.0,
+       11.25,
+       0.0005,
+       1
+      ],
+      [
+       2,
+       "2026-10-26T07:33:20+00:00",
+       "buyhold",
+       "ETHEUR",
+       "BUY",
+       1.4955332905679868,
+       3002.40045,
+       4490.189824591304,
+       11.225474561478261,
+       0.0005,
+       2
+      ]
+     ],
+     "equity": [
+      [
+       2,
+       "2026-10-26T07:33:20+00:00",
+       "buyhold",
+       9970.786326638141,
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868
+      ]
+     ],
+     "equity_count": 1
+    },
+    {
+     "ret": 0,
+     "portfolios": [
+      [
+       "buyhold",
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [],
+     "trades": [],
+     "equity": [],
+     "equity_count": 1
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       3,
+       "2026-10-26T07:35:20+00:00",
+       "buyhold",
+       "BTCEUR",
+       3600,
+       "BUY&HOLD",
+       "HOLD",
+       0.4669225926494536,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [],
+     "equity": [],
+     "equity_count": 1
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       4,
+       "2026-10-26T07:35:20+00:00",
+       "buyhold",
+       "ETHEUR",
+       3600,
+       "BUY&HOLD",
+       "HOLD",
+       0.43450227259668406,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [],
+     "equity": [],
+     "equity_count": 1
+    },
+    {
+     "ret": null,
+     "portfolios": [
+      [
+       "buyhold",
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868,
+       10015.447287707522,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [],
+     "trades": [],
+     "equity": [
+      [
+       3,
+       "2026-10-26T07:36:20+00:00",
+       "buyhold",
+       10015.447287707522,
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868
+      ]
+     ],
+     "equity_count": 2
+    }
+   ]
+  },
+  {
+   "name": "buyhold_needs_both_quotes",
+   "ops": [
+    {
+     "op": "buyhold",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "buyhold",
+     "quotes": {
+      "BTCEUR": [
+       59760.0,
+       60240.0
+      ],
+      "ETHEUR": [
+       2999.7,
+       3000.3
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "buyhold",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:21+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    }
+   ],
+   "results": [
+    {
+     "ret": "ValueError",
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [],
+     "trades": [],
+     "equity": [],
+     "equity_count": 0
+    },
+    {
+     "ret": "ValueError",
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [],
+     "trades": [],
+     "equity": [],
+     "equity_count": 0
+    },
+    {
+     "ret": 2,
+     "portfolios": [
+      [
+       "buyhold",
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       1,
+       "2026-10-26T07:33:21+00:00",
+       "buyhold",
+       "BTCEUR",
+       -1,
+       "BUY&HOLD",
+       "BUY",
+       0.45,
+       1.0,
+       "Passiver Benchmark: einmaliger Kauf auf frischem Geld-/Briefkurs",
+       "{\"strategy\": \"buy_and_hold\", \"source\": \"BITVAVO-LIVE-QUOTE\", \"initial_allocation_pct\": 45, \"requires_candles\": false, \"bid\": 59988.0, \"ask\": 60012.0}",
+       "OK"
+      ],
+      [
+       2,
+       "2026-10-26T07:33:21+00:00",
+       "buyhold",
+       "ETHEUR",
+       -1,
+       "BUY&HOLD",
+       "BUY",
+       0.45,
+       1.0,
+       "Passiver Benchmark: einmaliger Kauf auf frischem Geld-/Briefkurs",
+       "{\"strategy\": \"buy_and_hold\", \"source\": \"BITVAVO-LIVE-QUOTE\", \"initial_allocation_pct\": 45, \"requires_candles\": false, \"bid\": 2999.1, \"ask\": 3000.9}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       1,
+       "2026-10-26T07:33:21+00:00",
+       "buyhold",
+       "BTCEUR",
+       "BUY",
+       0.07494752923478273,
+       60042.005999999994,
+       4500.0,
+       11.25,
+       0.0005,
+       1
+      ],
+      [
+       2,
+       "2026-10-26T07:33:21+00:00",
+       "buyhold",
+       "ETHEUR",
+       "BUY",
+       1.4955332905679868,
+       3002.40045,
+       4490.189824591304,
+       11.225474561478261,
+       0.0005,
+       2
+      ]
+     ],
+     "equity": [
+      [
+       2,
+       "2026-10-26T07:33:21+00:00",
+       "buyhold",
+       9970.786326638141,
+       987.3347008472174,
+       0.07494752923478273,
+       1.4955332905679868
+      ]
+     ],
+     "equity_count": 1
+    }
+   ]
+  },
+  {
+   "name": "halted_portfolio_does_not_trade",
+   "ops": [
+    {
+     "op": "init",
+     "agent": "trend",
+     "cash": 4000.0,
+     "btc": 0.05,
+     "eth": 0.5,
+     "peak": 11000.0,
+     "halted": 1
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "ETHEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "SELL",
+      "target_fraction": 0.0,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "trade",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "target": 0.45,
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:21+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "trade",
+     "agent": "trend",
+     "symbol": "ETHEUR",
+     "target": 0.0,
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:22+00:00",
+     "costs": [
+      0.0025,
+      0.0005
+     ]
+    },
+    {
+     "op": "mark",
+     "agent": "trend",
+     "quotes": {
+      "BTCEUR": [
+       62390.64,
+       62409.36000000001
+      ],
+      "ETHEUR": [
+       2909.2725,
+       2910.7275000000004
+      ]
+     },
+     "now": "2026-10-26T07:33:23+00:00"
+    }
+   ],
+   "results": [
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       4000.0,
+       0.05,
+       0.5,
+       11000.0,
+       1
+      ]
+     ],
+     "decisions": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       3600,
+       "TREND",
+       "BUY",
+       0.45,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [],
+     "equity": [],
+     "equity_count": 0
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       4000.0,
+       0.05,
+       0.5,
+       11000.0,
+       1
+      ]
+     ],
+     "decisions": [
+      [
+       2,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "ETHEUR",
+       3600,
+       "TREND",
+       "SELL",
+       0.0,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [],
+     "equity": [],
+     "equity_count": 0
+    },
+    {
+     "ret": null,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       4000.0,
+       0.05,
+       0.5,
+       11000.0,
+       1
+      ]
+     ],
+     "decisions": [],
+     "trades": [],
+     "equity": [],
+     "equity_count": 0
+    },
+    {
+     "ret": null,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       5495.0532244375,
+       0.05,
+       0.0,
+       11000.0,
+       1
+      ]
+     ],
+     "decisions": [],
+     "trades": [
+      [
+       1,
+       "2026-10-26T07:33:22+00:00",
+       "trend",
+       "ETHEUR",
+       "SELL",
+       0.5,
+       2997.60045,
+       1498.800225,
+       3.7470005625,
+       0.0005,
+       0
+      ]
+     ],
+     "equity": [],
+     "equity_count": 0
+    },
+    {
+     "ret": null,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       5495.0532244375,
+       0.05,
+       0.0,
+       11000.0,
+       1
+      ]
+     ],
+     "decisions": [],
+     "trades": [],
+     "equity": [
+      [
+       1,
+       "2026-10-26T07:33:23+00:00",
+       "trend",
+       8615.053224437499,
+       5495.0532244375,
+       0.05,
+       0.0
+      ]
+     ],
+     "equity_count": 1
+    }
+   ]
+  },
+  {
+   "name": "costs_from_configuration",
+   "ops": [
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.45,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.004,
+      0.001
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "ETHEUR",
+     "bar_ts": 3600,
+     "model": "TREND",
+     "sig": {
+      "action": "BUY",
+      "target_fraction": 0.25,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 3600,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       59988.0,
+       60012.0
+      ],
+      "ETHEUR": [
+       2999.1,
+       3000.9
+      ]
+     },
+     "now": "2026-10-26T07:33:20+00:00",
+     "costs": [
+      0.0,
+      0.0
+     ]
+    },
+    {
+     "op": "decide",
+     "agent": "trend",
+     "symbol": "BTCEUR",
+     "bar_ts": 7200,
+     "model": "TREND",
+     "sig": {
+      "action": "SELL",
+      "target_fraction": 0.0,
+      "confidence": 0.7,
+      "reason": "golden"
+     },
+     "data": {
+      "bar": 7200,
+      "note": "Prüfung"
+     },
+     "status": "OK",
+     "quotes": {
+      "BTCEUR": [
+       62390.64,
+       62409.36000000001
+      ],
+      "ETHEUR": [
+       2909.2725,
+       2910.7275000000004
+      ]
+     },
+     "now": "2026-10-26T07:33:21+00:00",
+     "costs": [
+      0.05,
+      0.05
+     ]
+    }
+   ],
+   "results": [
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       5482.0,
+       0.07491009290649363,
+       0.0,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       3600,
+       "TREND",
+       "BUY",
+       0.45,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "BTCEUR",
+       "BUY",
+       0.07491009290649363,
+       60072.011999999995,
+       4500.0,
+       18.0,
+       0.001,
+       1
+      ]
+     ],
+     "equity": [
+      [
+       1,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       9976.605574389618,
+       5482.0,
+       0.07491009290649363,
+       0.0
+      ]
+     ],
+     "equity_count": 1
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       2987.8486064025956,
+       0.07491009290649363,
+       0.8311344575285429,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       2,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "ETHEUR",
+       3600,
+       "TREND",
+       "BUY",
+       0.25,
+       0.7,
+       "golden",
+       "{\"bar\": 3600, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       2,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       "ETHEUR",
+       "BUY",
+       0.8311344575285429,
+       3000.9,
+       2494.1513935974044,
+       0.0,
+       0.0,
+       2
+      ]
+     ],
+     "equity": [
+      [
+       2,
+       "2026-10-26T07:33:20+00:00",
+       "trend",
+       9975.857553377842,
+       2987.8486064025956,
+       0.07491009290649363,
+       0.8311344575285429
+      ]
+     ],
+     "equity_count": 1
+    },
+    {
+     "ret": true,
+     "portfolios": [
+      [
+       "buyhold",
+       10000.0,
+       0.0,
+       0.0,
+       10000.0,
+       0
+      ],
+      [
+       "trend",
+       7205.852603005873,
+       0.0,
+       0.8311344575285429,
+       10000.0,
+       0
+      ]
+     ],
+     "decisions": [
+      [
+       3,
+       "2026-10-26T07:33:21+00:00",
+       "trend",
+       "BTCEUR",
+       7200,
+       "TREND",
+       "SELL",
+       0.0,
+       0.7,
+       "golden",
+       "{\"bar\": 7200, \"note\": \"Prüfung\"}",
+       "OK"
+      ]
+     ],
+     "trades": [
+      [
+       3,
+       "2026-10-26T07:33:21+00:00",
+       "trend",
+       "BTCEUR",
+       "SELL",
+       0.07491009290649363,
+       59271.108,
+       4440.004206950818,
+       222.00021034754093,
+       0.05,
+       3
+      ]
+     ],
+     "equity": [
+      [
+       3,
+       "2026-10-26T07:33:21+00:00",
+       "trend",
+       9624.453874413932,
+       7205.852603005873,
+       0.0,
+       0.8311344575285429
+      ]
+     ],
+     "equity_count": 2
+    }
+   ]
+  }
+ ],
+ "fuzz": [
+  {
+   "mode": "random",
+   "chunk": 0,
+   "digest": "6ae9d3096ce27113704e9b30"
+  },
+  {
+   "mode": "random",
+   "chunk": 1,
+   "digest": "fe81246c777135f6f7d24d25"
+  },
+  {
+   "mode": "random",
+   "chunk": 2,
+   "digest": "4cac381ec007d09b5b9cf944"
+  },
+  {
+   "mode": "random",
+   "chunk": 3,
+   "digest": "b559f443b40151f96334b03f"
+  },
+  {
+   "mode": "random",
+   "chunk": 4,
+   "digest": "f17bf19ec62d944eaa7d75f2"
+  },
+  {
+   "mode": "random",
+   "chunk": 5,
+   "digest": "187ac37fce8f4557b0144787"
+  },
+  {
+   "mode": "random",
+   "chunk": 6,
+   "digest": "791416fb56afcc42e09e124b"
+  },
+  {
+   "mode": "random",
+   "chunk": 7,
+   "digest": "af91cdef254b32821b0a3c6b"
+  },
+  {
+   "mode": "random",
+   "chunk": 8,
+   "digest": "1a401bc44d55103ed14aba7a"
+  },
+  {
+   "mode": "random",
+   "chunk": 9,
+   "digest": "0a40f0ae8180cb061b65ac5a"
+  },
+  {
+   "mode": "random",
+   "chunk": 10,
+   "digest": "a75052431d0c13e94b7df515"
+  },
+  {
+   "mode": "random",
+   "chunk": 11,
+   "digest": "793d1f86ccec80b9f9c64315"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 0,
+   "digest": "081c39e885bab82e46afef8f"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 1,
+   "digest": "9f5171d8bb0564246f413fb9"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 2,
+   "digest": "2aa7880c51af8c9d69b29e1d"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 3,
+   "digest": "dfe5abaffc0bad2b4614c94e"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 4,
+   "digest": "5b6f695758100ec741e8d4b8"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 5,
+   "digest": "d376756c495d05394e3d5c88"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 6,
+   "digest": "a50876f61b66f1792664f7e2"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 7,
+   "digest": "1cf8f898b06d67bef255dfb1"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 8,
+   "digest": "186ffcdb13464c8e8091c74a"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 9,
+   "digest": "d662a133d736b10297e78b77"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 10,
+   "digest": "2f56776f53443046c50abd5a"
+  },
+  {
+   "mode": "threshold",
+   "chunk": 11,
+   "digest": "23382614fba7458e8a6c1c0a"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 0,
+   "digest": "133642b1df72662e56a11b89"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 1,
+   "digest": "5f32ca289d7b7f12d150ace7"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 2,
+   "digest": "fd0c1346545fcf78dc25b2a4"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 3,
+   "digest": "adc16ec68cc901b5f415f52c"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 4,
+   "digest": "3556f7ffec6c328c87cdadbf"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 5,
+   "digest": "4c84386e1c8d76c56ffbb7ad"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 6,
+   "digest": "79741d3a1385c22b1ecff1fd"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 7,
+   "digest": "125b11934495bc6e1b933758"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 8,
+   "digest": "54b5c1748840e71cc16a9402"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 9,
+   "digest": "001088413b386346a8e4a584"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 10,
+   "digest": "43507a7b0f940d55dfb3dcd9"
+  },
+  {
+   "mode": "total_cap",
+   "chunk": 11,
+   "digest": "ecf13aa6c3769bbc9861e056"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 0,
+   "digest": "be9bfc4a752db7089ff630fa"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 1,
+   "digest": "ba5d78406fa76ddb5755460c"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 2,
+   "digest": "46c4a9a1b07b278bc280493b"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 3,
+   "digest": "e1c53578fcfb73173a1adebe"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 4,
+   "digest": "7be75ba47418856edec05674"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 5,
+   "digest": "92df6c52ecf666a9094c1f92"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 6,
+   "digest": "1d5b8a9ebf469d89568f8d99"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 7,
+   "digest": "a647fb27df31750fe69033f1"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 8,
+   "digest": "e10291a15feeeff480668495"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 9,
+   "digest": "d03b5b1a54d5680380b6418a"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 10,
+   "digest": "aac6c1d285bfbc81f2ba2c82"
+  },
+  {
+   "mode": "small_equity",
+   "chunk": 11,
+   "digest": "d0376cb8e8f92c3d58f404be"
+  },
+  {
+   "mode": "exact",
+   "chunk": 0,
+   "digest": "e6b0663cb263d0912f24ddc5"
+  },
+  {
+   "mode": "exact",
+   "chunk": 1,
+   "digest": "f4eed80f7ae65d35458c4068"
+  },
+  {
+   "mode": "exact",
+   "chunk": 2,
+   "digest": "2db7ee1bfe304ff1f4b50843"
+  },
+  {
+   "mode": "exact",
+   "chunk": 3,
+   "digest": "f59914dd87a4e48167acdfac"
+  },
+  {
+   "mode": "exact",
+   "chunk": 4,
+   "digest": "a4e74d27041be9ac6734b964"
+  },
+  {
+   "mode": "exact",
+   "chunk": 5,
+   "digest": "bb330dfab79982af19b454dc"
+  },
+  {
+   "mode": "exact",
+   "chunk": 6,
+   "digest": "c1c28b1bfe441d355a2b6d26"
+  },
+  {
+   "mode": "exact",
+   "chunk": 7,
+   "digest": "0c38a0bf433442c721d3c24d"
+  },
+  {
+   "mode": "exact",
+   "chunk": 8,
+   "digest": "35bbbc49a99fb0055f6cf992"
+  },
+  {
+   "mode": "exact",
+   "chunk": 9,
+   "digest": "15c6df60d29ab1ca8c152d9f"
+  },
+  {
+   "mode": "exact",
+   "chunk": 10,
+   "digest": "03190afc461df396f692a49c"
+  },
+  {
+   "mode": "exact",
+   "chunk": 11,
+   "digest": "9904db04ed925b2cb34687cb"
+  },
+  {
+   "mode": "status",
+   "chunk": 0,
+   "digest": "5ab0e99b93e3917e4d7c3e1c"
+  },
+  {
+   "mode": "status",
+   "chunk": 1,
+   "digest": "d85a2077a565df321013d2e9"
+  },
+  {
+   "mode": "status",
+   "chunk": 2,
+   "digest": "7ea2011e1ac9bf7780e52aff"
+  },
+  {
+   "mode": "status",
+   "chunk": 3,
+   "digest": "ba4c6f665b6549fc59ac6b0c"
+  },
+  {
+   "mode": "status",
+   "chunk": 4,
+   "digest": "cb3715c59cea5b68c3e32ec8"
+  },
+  {
+   "mode": "status",
+   "chunk": 5,
+   "digest": "7cc12ecb19a1a5a60b193f32"
+  },
+  {
+   "mode": "status",
+   "chunk": 6,
+   "digest": "534bb86a3c6531f237c6e274"
+  },
+  {
+   "mode": "status",
+   "chunk": 7,
+   "digest": "dd275e9ddbc93782ab02df65"
+  },
+  {
+   "mode": "status",
+   "chunk": 8,
+   "digest": "51938693082762467507eba6"
+  },
+  {
+   "mode": "status",
+   "chunk": 9,
+   "digest": "98a5457edac85a6e8e60ca14"
+  },
+  {
+   "mode": "status",
+   "chunk": 10,
+   "digest": "342cfbebc6e7fb0dc31dcf8a"
+  },
+  {
+   "mode": "status",
+   "chunk": 11,
+   "digest": "fe91fc6501e9957123faf59d"
+  },
+  {
+   "mode": "direct",
+   "chunk": 0,
+   "digest": "891383c6d44473efa5a30562"
+  },
+  {
+   "mode": "direct",
+   "chunk": 1,
+   "digest": "ba66d394aa015d0729a65d41"
+  },
+  {
+   "mode": "direct",
+   "chunk": 2,
+   "digest": "9cc32d9abfeb952ae2331b9e"
+  },
+  {
+   "mode": "direct",
+   "chunk": 3,
+   "digest": "35f43a2ded8fd8404ca58be2"
+  },
+  {
+   "mode": "direct",
+   "chunk": 4,
+   "digest": "8f9f7b18d1b8df1873f1a2b9"
+  },
+  {
+   "mode": "direct",
+   "chunk": 5,
+   "digest": "1eeed9e3eb005d57f03b817e"
+  },
+  {
+   "mode": "direct",
+   "chunk": 6,
+   "digest": "347f1ed31c3c13dea080c892"
+  },
+  {
+   "mode": "direct",
+   "chunk": 7,
+   "digest": "5df70f2a987a9d33e6355a66"
+  },
+  {
+   "mode": "direct",
+   "chunk": 8,
+   "digest": "53b1b6e2d48ef90492c17e39"
+  },
+  {
+   "mode": "direct",
+   "chunk": 9,
+   "digest": "f1bd84cbb66096f23bdeadda"
+  },
+  {
+   "mode": "direct",
+   "chunk": 10,
+   "digest": "65d7ef2cca78f3fcaf60f1bb"
+  },
+  {
+   "mode": "direct",
+   "chunk": 11,
+   "digest": "679ec6b2440983a35d51c3e4"
+  }
+ ],
+ "walks": [
+  {
+   "seed": 0,
+   "digest": "4a9601a954dea9706423162d"
+  },
+  {
+   "seed": 1,
+   "digest": "b8be37155e9c5904fce8b81e"
+  },
+  {
+   "seed": 2,
+   "digest": "0645e354ecba43281bbb9180"
+  },
+  {
+   "seed": 3,
+   "digest": "ae5941c37b541db852647e83"
+  },
+  {
+   "seed": 4,
+   "digest": "365a8443a82ef35563e66c4f"
+  },
+  {
+   "seed": 5,
+   "digest": "dc0c30ae6341c833d8208591"
+  },
+  {
+   "seed": 6,
+   "digest": "66e6e7792e22951d172844db"
+  },
+  {
+   "seed": 7,
+   "digest": "c9de63d60157acd67f634227"
+  },
+  {
+   "seed": 8,
+   "digest": "d630938fc3e49918154e6022"
+  },
+  {
+   "seed": 9,
+   "digest": "b69ab2eba0a37c8f68040437"
+  },
+  {
+   "seed": 10,
+   "digest": "020826d35595ba20daba4125"
+  },
+  {
+   "seed": 11,
+   "digest": "e9d0ff6c8e2ac24431f4a007"
+  },
+  {
+   "seed": 12,
+   "digest": "79c43a31f613e6eb4d5cc30f"
+  },
+  {
+   "seed": 13,
+   "digest": "1fdb3977e22fbe15647cae77"
+  },
+  {
+   "seed": 14,
+   "digest": "44489334714d2d8f928ef85c"
+  },
+  {
+   "seed": 15,
+   "digest": "348c363e2c737061a8e4256e"
+  },
+  {
+   "seed": 16,
+   "digest": "f4388422eaf877219feecf99"
+  },
+  {
+   "seed": 17,
+   "digest": "20730f10e8160d5ab6c9c678"
+  },
+  {
+   "seed": 18,
+   "digest": "36b227a0318193342fd6ba2c"
+  },
+  {
+   "seed": 19,
+   "digest": "826406df528265780ee24c8b"
+  },
+  {
+   "seed": 20,
+   "digest": "b4fcdaff9f32ae2b3253bf84"
+  },
+  {
+   "seed": 21,
+   "digest": "9a2a348d849cf31054f699fe"
+  },
+  {
+   "seed": 22,
+   "digest": "5449ea42ea48c78abb67f293"
+  },
+  {
+   "seed": 23,
+   "digest": "c3a4eabee15260f9f3b110c6"
+  }
+ ]
+}

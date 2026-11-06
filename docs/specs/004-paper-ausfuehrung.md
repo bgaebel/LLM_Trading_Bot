@@ -86,7 +86,7 @@ ORM/SQLAlchemy (neue Abhängigkeit für vier Tabellen). Migrationen (es gibt kei
 
 ## Plan
 - [x] 1. `db.py` + `lock.py` + Tests (AK1, AK2, AK3)
-- [ ] 2. Generator für Ausführungs-Fixtures (Folgen + Grenzfälle) gegen die Arena
+- [x] 2. Generator für Ausführungs-Fixtures (Folgen + Grenzfälle) gegen die Arena
 - [ ] 3. `execution.py`: `trade_to_target`, `record_decision`, Kosten + Golden-Tests (AK4, AK5, AK8)
 - [ ] 4. Quotes/Fail-closed + Buy & Hold (AK6, AK7)
 - [ ] 5. `cycle.py` + CLI `paper-cycle` (AK9)
