@@ -23,6 +23,7 @@ from llm_trading_bot.llm.budget import (
     BudgetBlocked,
     Limits,
     Pricing,
+    Usage,
     request_worst_case,
     reserve,
     settle,
@@ -96,6 +97,19 @@ class _Prepared:
     reply: ModelReply | None = None
     error: BaseException | None = None
     latency: float = 0.0
+    answered_at: float = 0.0
+    """Clock time when this depot's own reply arrived - not when the slowest depot finished."""
+
+
+def _rejected_unbilled(exc: BaseException) -> bool:
+    """4xx answers other than timeout/conflict/rate limit: refused before any generation."""
+    status = getattr(exc, "status_code", None)
+    return (
+        isinstance(exc, API_ERRORS)
+        and isinstance(status, int)
+        and 400 <= status < 500
+        and (status not in (408, 409, 429))
+    )
 
 
 def _outcome(agent: LlmAgent, status: str, detail: str = "", **kw: Any) -> LlmOutcome:
@@ -163,7 +177,9 @@ def _prepare(
     return _Prepared(agent, attempt_id, agent.pricing, attempt, usable, payloads, schema)
 
 
-def _ask(prepared: _Prepared, settings: LlmSettings, model: SignalModel) -> None:
+def _ask(
+    prepared: _Prepared, settings: LlmSettings, model: SignalModel, clock: Callable[[], float]
+) -> None:
     """Runs in a worker thread: network only, no database access."""
     started = time.monotonic()
     try:
@@ -179,6 +195,7 @@ def _ask(prepared: _Prepared, settings: LlmSettings, model: SignalModel) -> None
         prepared.error = exc
     finally:
         prepared.latency = time.monotonic() - started
+        prepared.answered_at = clock()
 
 
 def _finish(
@@ -192,13 +209,16 @@ def _finish(
     if prepared.error is not None or prepared.reply is None:
         exc = prepared.error or RuntimeError("no reply")
         # Type name only: provider messages may echo parts of the key. Unknown cost keeps the
-        # whole reservation (all possible requests), so the budget stays on the safe side.
+        # whole reservation (all possible requests), so the budget stays on the safe side -
+        # except for rejections that were answered at once and are not billed (bad key, bad
+        # request, unknown model): booking them at 3x worst case would drain the budget.
+        unbilled = _rejected_unbilled(exc)
         settle(
             con,
             attempt_id,
             pricing,
             status="ERROR",
-            usage=None,
+            usage=Usage(0, 0) if unbilled else None,
             latency_seconds=prepared.latency,
             error=type(exc).__name__,
         )
@@ -232,7 +252,7 @@ def _finish(
             agent, "ERROR", problem, attempt_id=attempt_id, usage=reply.usage, cost_eur=cost
         ), []
 
-    decided_at = clock()
+    decided_at = prepared.answered_at or clock()
     bar_ts = int(decided_at) * 10000 + attempt_id
     model_name = reply.model or agent.model
     results = []
@@ -308,10 +328,14 @@ def run_llm_depots(
             prepared.append(ready)
     if prepared:
         with ThreadPoolExecutor(max_workers=len(prepared)) as pool:
-            for future in [pool.submit(_ask, p, settings, model) for p in prepared]:
+            for future in [pool.submit(_ask, p, settings, model, clock) for p in prepared]:
                 future.result()  # _ask stores its own errors; this only waits
         # The answers may take a while: trade only on quotes fetched after them (Arena recheck).
-        fresh = refresh_quotes()
+        # A failing refresh must not lose the billing of answers that were already paid for.
+        try:
+            fresh = refresh_quotes()
+        except Exception:
+            fresh = None
         for p in prepared:
             try:
                 done[p.agent.name] = _finish(con, p, fresh, costs, clock)

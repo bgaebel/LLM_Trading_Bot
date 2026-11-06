@@ -172,3 +172,24 @@ def test_paper_cycle_refuses_a_foreign_database(tmp_path: Path) -> None:
 def test_paper_cycle_needs_a_db_path() -> None:
     with pytest.raises(SystemExit):
         main(["paper-cycle"])
+
+
+def test_llm_decision_line_shows_the_real_attempt_number() -> None:
+    from llm_trading_bot.cli import _market_line
+    from llm_trading_bot.paper.report import MarketResult
+
+    line = _market_line(
+        MarketResult(
+            "gpt-luna",
+            Symbol.BTCEUR,
+            1793000005 * 10000 + 12345,
+            True,
+            "BUY",
+            0.25,
+            "OK",
+            True,
+            "r",
+            attempt=12345,
+        )
+    )
+    assert "attempt 12345 new: BUY" in line

@@ -2,7 +2,9 @@
 
 import json
 import sqlite3
+import threading
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -27,7 +29,7 @@ from llm_trading_bot.paper.db import open_db, write_tx
 from llm_trading_bot.paper.execution import BUYHOLD, Costs, Quotes, latest_quotes, record_quotes
 from llm_trading_bot.paper.report import CycleReport, LlmOutcome, MarketResult
 from llm_trading_bot.strategy.indicators import indicators
-from llm_trading_bot.strategy.payload import cost_roundtrip
+from llm_trading_bot.strategy.payload import cost_roundtrip, feature_payload
 from llm_trading_bot.strategy.signals import run_strategy
 
 ENV = {"OPENAI_API_KEY": KEY}
@@ -428,3 +430,130 @@ def test_halted_depot_is_not_asked(con: sqlite3.Connection) -> None:
     report = cycle(con, model)
     assert by_agent(report)["gpt-luna"].status == "HALTED"
     assert [c["model"] for c in model.calls] == ["gpt-6.1-sol"]
+
+
+# ------------------------------------------------------------------ review follow-ups
+
+
+class ThreadClock:
+    """Each model thread may advance only its own time; the main thread keeps the base."""
+
+    def __init__(self, now: float = NOW) -> None:
+        self.base = now
+        self.local = threading.local()
+
+    def __call__(self) -> float:
+        value: float = getattr(self.local, "now", self.base)
+        return value
+
+    def advance_this_thread(self, to: float) -> None:
+        self.local.now = to
+
+
+def test_requests_really_run_in_parallel(con: sqlite3.Connection) -> None:
+    """luna answers only after sol was asked: sequential requests would make luna time out."""
+    sol_asked = threading.Event()
+
+    def luna(markets: list[str]) -> ModelReply:
+        if not sol_asked.wait(timeout=5):
+            raise openai.APITimeoutError(request=httpx2.Request("POST", "https://api.openai.com"))
+        return valid_reply(markets)
+
+    def sol(markets: list[str]) -> ModelReply:
+        sol_asked.set()
+        return valid_reply(markets)
+
+    report = cycle(con, FakeModel({"gpt-6-luna": luna, "gpt-6.1-sol": sol}))
+    assert [o.status for o in report.llm] == ["ASKED", "ASKED"]
+
+
+def test_a_very_slow_depot_does_not_make_the_other_stale(con: sqlite3.Connection) -> None:
+    clock = ThreadClock()
+
+    def after(seconds: float) -> Callable[[list[str]], ModelReply]:
+        def reply(markets: list[str]) -> ModelReply:
+            clock.advance_this_thread(NOW + seconds)
+            return valid_reply(markets)
+
+        return reply
+
+    model = FakeModel({"gpt-6-luna": after(125), "gpt-6.1-sol": after(5)})
+    report = cycle(con, model, clock=clock)
+    assert {m.status for m in decisions(report, "gpt-luna").values()} == {"STALE_QUOTE"}
+    assert {m.status for m in decisions(report, "gpt-sol").values()} == {"OK"}
+
+
+def test_second_real_cycle_after_the_cooldown_is_not_due(con: sqlite3.Connection) -> None:
+    """Same market, but both depots traded in between: their own trades must not count."""
+    client = ScenarioClient()
+    snaps = build_snapshots(client, clock=lambda: NOW)
+    settings = config().llm
+    assert settings is not None
+
+    def run(at: float) -> list[tuple[LlmOutcome, list[MarketResult]]]:
+        moved = {
+            s: replace(snap, fetched_at=int(at), quote_at=int(at)) for s, snap in snaps.items()
+        }
+        record_quotes(con, client.quotes(), now=iso(at))
+        return run_llm_depots(
+            con,
+            settings.agents,
+            settings,
+            FakeModel(),
+            moved,
+            Costs(),
+            refresh_quotes=lambda: latest_quotes(con, now_epoch=at),
+            clock=lambda: at,
+        )
+
+    first = run(NOW)
+    assert all(m.traded for _o, results in first for m in results)
+    second = run(NOW + 600)
+    assert [o.status for o, _ in second] == ["NOT_DUE", "NOT_DUE"]
+
+
+def test_message_carries_the_arena_payload_with_the_depot_weight(con: sqlite3.Connection) -> None:
+    client = ScenarioClient()
+    model = FakeModel()
+    cycle(con, model, client=client)
+    snaps = build_snapshots(ScenarioClient(), clock=lambda: NOW)
+    sent = json.loads(model.calls[0]["message"])["markets"]
+    for symbol, snap in snaps.items():
+        ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, 0.0025, 0.0005))
+        expected = feature_payload(snap, ind, 0.0, 0.0025, 0.0005)  # flat depot before the call
+        assert sent[symbol.market] == json.loads(json.dumps(expected))
+
+
+def test_failing_quote_refresh_still_settles_every_paid_answer(con: sqlite3.Connection) -> None:
+    def broken(_qs: Quotes) -> Quotes | None:
+        raise sqlite3.OperationalError("database is locked")
+
+    out, _ = _direct(con, quotes_at=NOW, now=NOW, refreshed=broken)
+    assert [o.status for o, _ in out] == ["ASKED", "ASKED"]
+    assert {m.status for _o, results in out for m in results} == {"STALE_QUOTE"}
+    assert {r["status"] for r in calls(con)} == {"OK"} and all(r["cost_eur"] for r in calls(con))
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "free"),
+    [
+        (401, openai.AuthenticationError, True),
+        (400, openai.BadRequestError, True),
+        (404, openai.NotFoundError, True),
+        (500, openai.InternalServerError, False),
+    ],
+)
+def test_immediate_rejections_cost_nothing_server_errors_keep_the_reservation(
+    con: sqlite3.Connection, status: int, error: type[openai.APIStatusError], free: bool
+) -> None:
+    def rejected(_markets: list[str]) -> ModelReply:
+        response = httpx2.Response(status, request=httpx2.Request("POST", "https://api.openai.com"))
+        raise error("rejected", response=response, body=None)
+
+    cycle(con, FakeModel({"gpt-6-luna": rejected}))
+    row = calls(con)[0]
+    assert row["status"] == "ERROR"
+    if free:
+        assert row["cost_eur"] is not None and Decimal(row["cost_eur"]) == 0
+    else:
+        assert row["cost_eur"] is None  # possibly billed: the reservation stays
