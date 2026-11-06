@@ -288,7 +288,7 @@ def test_parse_cookies_is_tolerant() -> None:
 def test_posts_without_a_session_change_nothing(running: Running, path: str) -> None:
     setup(running)
     stranger = Browser(running.browser.port)
-    form = {"csrf": "x", "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
+    form: FormData = {"csrf": "x", "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
     status, headers, _ = stranger.request("POST", path, form)
     assert (status, headers["location"]) == (303, "/login")
     assert not (running.data / "secrets.env").exists() and running.checked == []
