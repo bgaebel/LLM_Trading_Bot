@@ -34,7 +34,7 @@ diese Werte. Keys verlassen den Rechner nicht, werden nie wieder vollständig an
   gesetzte Umgebungsvariablen gehen vor. — Nachweis: `uv run pytest tests/test_cli.py`
 - [ ] AK8: Sicherheits-Header auf jeder Antwort (CSP `default-src 'self'`, kein Inline-Skript, `X-Frame-Options:
   DENY`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`). — Nachweis: `uv run pytest tests/web/test_server.py`
-- [ ] AK9: [manuell] Seite im Browser: Ersteinrichtung, Login, Key eintragen, Verbindung testen, Logout.
+- [x] AK9: [manuell] Seite im Browser: Ersteinrichtung, Login, Key eintragen, Verbindung testen, Logout.
 - [ ] AK10: Lint, Format, `mypy src tests tools`, CI grün; kein Secret im Repo. — Nachweis: Befehle aus `CLAUDE.md`
 
 ## Abgrenzung
@@ -119,6 +119,10 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
   Wendepunkten erscheinen mit ihrer Kerze (alle 7–19 s), blinken auf und zeigen eine Log-Zeile. Ohne Skript:
   Zeitpunkte als erzeugte CSS-Klassen mit negativem Delay bzw. erzeugte Keyframes. Im Bild als „DEMO" und
   „erfundene Kurse und Signale" gekennzeichnet. Tests für Schleife, Clip, Signalabstand und -zeitpunkt, Kurspunkt.
+- 2026-11-06: AK9 durch den Nutzer: Login zurückgesetzt (altes Passwort unbekannt, `web-auth.json` beiseite gelegt),
+  Ersteinrichtung mit neuem Code, Login, Key eingetragen, Test laut Nutzer erledigt. Nachweis: `secrets.env` enthält
+  `OPENAI_API_KEY`, `BOT_AGENTS`, `LLM_EFFORT`; Spec 005 AK10 lief mit genau diesem Key (`--secrets`). Rückfrage
+  des Nutzers: Es gibt keine Startseite – nach dem Login ist die Einstellungsseite die einzige Seite.
 
 ## Ergebnis
 - **Erreicht:** …

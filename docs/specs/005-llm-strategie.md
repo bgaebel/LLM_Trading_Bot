@@ -60,7 +60,7 @@ nie zu einem Trade. So lässt sich messen, ob das teurere Reasoning sein Geld we
   `BOT_AGENT`. Ein GPT-Depot ohne `OPENAI_API_KEY` ist ein Konfigurationsfehler ohne DB-Änderung. `LLM_EFFORT`
   Standard `low`. Ein abweichendes Modell (`OPENAI_MODEL_<DEPOT>`) braucht eigene Preise. — Nachweis:
   `uv run pytest tests/llm/test_config.py`
-- [ ] AK10: [manuell] Mit echtem Key zweimal `uv run trading-bot paper-cycle --db <pfad>`: Lauf 1 fragt jedes Depot
+- [x] AK10: [manuell] Mit echtem Key zweimal `uv run trading-bot paper-cycle --db <pfad>`: Lauf 1 fragt jedes Depot
   einmal und zeigt je Depot Signale, Tokens (inkl. Reasoning) und Kosten; Lauf 2 kurz danach fragt nicht.
   Gemessene Tokens und Kosten je Modell kommen in den „Verlauf" und prüfen die Schätzung.
 - [ ] AK11: Lint, Format, `mypy src tests tools`, CI grün; kein Key im Repo (`git grep -n "sk-"` ohne Treffer
@@ -186,6 +186,17 @@ Claude Haiku 5.5 (gleicher Preis wie luna; ADR-0012), Raspberry Pi (ADR-0005 ble
   offenen Depots nicht; die stündliche Anfrage und die Bewegungsschwelle decken das ab. (2) Schema v2 wurde vor
   69da905 ohne Versionssprung geändert (`trigger_signals`); v2-Entwicklungs-DBs von vorher verwerfen – es gab nur lokale
   Test-DBs, keine Handelshistorie.
+- 2026-11-06: AK10 live (Key über die Weboberfläche, frische Test-DB, nur Paper): Lauf 1 fragte beide Depots je
+  einmal (beide `ASKED`, Antworten gültig, je Markt `HOLD` mit Begründung, Regime je Markt); Lauf 2 28 s später:
+  beide `NOT_DUE`, kein Aufruf. Gemessen je Anfrage (BTC+ETH, Effort `low`):
+  | Modell | Input | Output | davon Reasoning | Kosten | Latenz | Reservierung |
+  |---|---|---|---|---|---|---|
+  | gpt-6-luna | 1566 | 367 | 89 | 0,00034 € | 10,9 s | 0,0135 € |
+  | gpt-6.1-sol | 1566 | 259 | 0 | 0,0057 € | 8,0 s | 0,2691 € |
+  Schätzung bestätigt bzw. unterschritten (luna ~0,0005 $, sol ~0,01 $ geschätzt; sol nutzt bei `low` kein Reasoning).
+  Hochgerechnet auf das Maximum von 96 Anfragen/Tag: luna ~0,03 €, sol ~0,55 € – deutlich unter 0,50 / 2,50 €;
+  die Anteile bleiben. Strict Mode akzeptiert das Schema (Zahlen-Enum, Markt-Schlüssel mit Bindestrich).
+  Hinweis: „attempt N" in der CLI ist die `llm_calls`-Zeilennummer, keine Wiederholung (sol zeigte „attempt 2").
 
 ## Ergebnis
 - **Erreicht:** …
