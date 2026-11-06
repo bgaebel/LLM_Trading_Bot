@@ -92,7 +92,7 @@ Verworfen: Claude (Nutzer), urllib (siehe ADR-0009), Budget-Datei der Arena (sie
 ## Plan
 - [x] 1. Generator + `contract.py` + `due.py` mit Golden-Tests (AK1, AK2, AK3)
 - [x] 2. Schema v2 mit `llm_calls`, v1 abgelehnt (AK8)
-- [ ] 3. `budget.py` mit Reservierung/Abrechnung (AK4)
+- [x] 3. `budget.py` mit Reservierung/Abrechnung (AK4)
 - [ ] 4. `uv add openai`, `openai_client.py` mit Fake-Tests und `net`-Test (AK2, AK5, AK7)
 - [ ] 5. `llm_cycle` + Agent `gpt` in `paper-cycle`, Konfiguration (AK5, AK6, AK7, AK9)
 - [ ] 6. Mutationstest erweitern, Doku (ARCHITEKTUR, README, `docs/betrieb/`), manueller Live-Test (AK10)
