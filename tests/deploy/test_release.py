@@ -60,8 +60,20 @@ start_unit() {
     # oldround-<sha>: the new pid, but the last ok round is from before the start.
     [ -e "$state/oldround-$release" ] && shift=-600
     at="$(date -u -d @"$(( $(date +%s) + shift ))" +%Y-%m-%dT%H:%M:%S+00:00)"
-    printf '{"state": "running", "pid": %s, "last_round_at": "%s", "last_result": "%s"}' \
-      "$pid" "$at" "$result" >"$FAKE_ROOT/var/lib/llm-trading-bot/service-status.json"
+    svc=running
+    error=""
+    # datagap-<sha>: a round without ETH decisions because Bitvavo left out minutes.
+    if [ -e "$state/datagap-$release" ]; then
+      svc=degraded result=incomplete
+      error="trend ETH-EUR: MarketDataError: ETH-EUR: gap in recent 1m bars - no decision"
+    fi
+    # codeerror-<sha>: incomplete because of a programming error, not market data.
+    if [ -e "$state/codeerror-$release" ]; then
+      svc=degraded result=incomplete error="trend BTC-EUR: KeyError: 'close'"
+    fi
+    out="$FAKE_ROOT/var/lib/llm-trading-bot/service-status.json"
+    printf '{"state": "%s", "pid": %s, "last_round_at": "%s",' "$svc" "$pid" "$at" >"$out"
+    printf ' "last_result": "%s", "last_error": "%s"}' "$result" "$error" >>"$out"
   fi
 }
 case "$cmd" in
@@ -480,3 +492,25 @@ def test_the_pinned_uv_satisfies_the_build_backend_bound() -> None:
         return tuple(int(x) for x in v.split("."))
 
     assert parts(bound.group(1)) <= parts(version.group(1)) < parts(bound.group(2))
+
+
+def test_a_round_blocked_only_by_market_data_counts_as_healthy(box: Sandbox) -> None:
+    # Bitvavo leaves out minutes without trades; ETH-EUR may have no decision for up to an hour.
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    (box.state / f"datagap-{sha(2)}").touch()
+    box.upload(sha(2))
+    box.run("deploy", sha(2), "botsvc")
+    assert box.current() == sha(2)
+
+
+def test_an_incomplete_round_from_a_code_error_still_rolls_back(box: Sandbox) -> None:
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    (box.state / f"codeerror-{sha(2)}").touch()
+    box.upload(sha(2))
+    result = box.run("deploy", sha(2), "botsvc", check=False)
+    assert result.returncode != 0 and f"rolled back to {sha(1)}" in result.stderr
+    assert box.current() == sha(1)

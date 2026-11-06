@@ -34,7 +34,8 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
   - lehnt ein Archiv mit `secrets.env`, `.env*`, `*.db*` oder `web-auth.json` ab,
   - baut den Kandidaten (venv, `verify-db` auf der bestehenden DB), bevor der laufende Dienst gestoppt wird,
   - sichert vor dem Umschalten, installiert die Units, schaltet `current` atomar um, startet,
-  - wartet ≤ 3 min auf eine gesunde Runde (Statusdatei: `running`, PID = `MainPID`, Runde `ok` nach dem Start),
+  - wartet ≤ 3 min auf eine gesunde Runde (Statusdatei: PID = `MainPID`, Runde nach dem Start mit Ergebnis `ok` –
+    oder `incomplete` nur wegen Marktdaten, `MarketDataError`; geändert mit Zustimmung des Nutzers 2026-11-07),
   - rollt sonst Code und Units auf das vorige Release zurück (nie die DB) und endet mit Exit ≠ 0,
   - prüft, dass `secrets.env` und Drop-ins unverändert sind, behält zwei Vorgänger-Releases.
   — Nachweis: `tests/deploy/test_release.py` (Bash-Skript in einer Sandbox mit Ersatz für `systemctl`, `uv`,
@@ -171,7 +172,10 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
     Minuten ohne Handel). Bis zu zwei fehlende Minuten werden aufgefüllt (Spec 001, wie Arena), eine längere Lücke in
     den letzten 60 Kerzen sperrt ETH-Entscheidungen für bis zu eine Stunde (fail closed, gewollt). BTC unberührt.
     Folge für den Gesundheitscheck (AK5 verlangt eine Runde `ok`): Ein Deploy in so einer Stunde würde fälschlich
-    zurückrollen. Entscheidung des Nutzers offen. Learning angelegt.
+    zurückrollen. Learning angelegt.
+- 2026-11-07: Nutzer entscheidet: Der Gesundheitscheck akzeptiert auch eine Runde, die nur an Marktdaten scheitert
+  (`incomplete` mit `MarketDataError`, Zustand `degraded`); andere Fehler rollen weiter zurück. AK5 angepasst, Tests
+  für beide Fälle. Grenze: Die Statusdatei nennt nur das erste Problem einer Runde.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

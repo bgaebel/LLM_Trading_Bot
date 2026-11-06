@@ -102,7 +102,8 @@ bash scripts/deploy.sh <alias> <dienst> deploy
 ```
 Ohne Commit-Angabe gilt `origin/main`; ein bestimmter Commit als viertes Argument. Ablauf: Release bauen und die
 DB lesend prüfen, während der alte Dienst läuft → stoppen → Backup nach `pre-update/` → Units installieren →
-umschalten → starten → bis zu 3 min auf eine Runde mit Ergebnis `ok`. Sonst schaltet das Skript automatisch auf das
+umschalten → starten → bis zu 3 min auf eine Runde mit Ergebnis `ok` (oder `incomplete` nur wegen Marktdaten:
+Bitvavo lässt Minuten ohne Handel aus, ETH-EUR ist nachts dann bis zu einer Stunde ohne Entscheidung). Sonst schaltet das Skript automatisch auf das
 vorige Release zurück (Code und Units, **nie** die Datenbank) und endet mit Fehler.
 ```bash
 bash scripts/deploy.sh <alias> <dienst> rollback

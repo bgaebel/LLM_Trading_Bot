@@ -272,8 +272,10 @@ fingerprint() {
 
 # --------------------------------------------------------------------------------- health
 
-# Healthy: the status file names the new main process as running, with an ok round that
-# started after $since (Spec 009 AK5). Read with the system Python (json, no venv needed).
+# Healthy: the status file names the new main process, with a round that started after $since
+# and was ok - or incomplete only because of market data (Spec 009 AK5, user 2026-11-07).
+# Read with the system Python (json, no venv needed).
+# LEARNING(#marktdaten): Nachts fehlen ETH-EUR-Minutenkerzen – eine Stunde ohne ETH-Entscheidung
 healthy() {
   local since="$1" pid
   pid="$("$SYSTEMCTL" show -p MainPID --value "$BOT")"
@@ -289,7 +291,11 @@ try:
     started = datetime.fromisoformat(s["last_round_at"]).timestamp() if s["last_round_at"] else 0
 except (OSError, ValueError, KeyError, TypeError):
     sys.exit(1)
-ok = s["state"] == "running" and s["pid"] == pid and s["last_result"] == "ok" and started >= since
+# A round blocked only by market data (Bitvavo leaves out minutes without trades, so ETH-EUR can be
+# without decisions for up to an hour at night) still proves the new code ran a whole round.
+data_gap = s["last_result"] == "incomplete" and "MarketDataError:" in (s.get("last_error") or "")
+ran = s["last_result"] == "ok" or data_gap
+ok = s["state"] in ("running", "degraded") and s["pid"] == pid and ran and started >= since
 sys.exit(0 if ok else 1)
 PY
 }
