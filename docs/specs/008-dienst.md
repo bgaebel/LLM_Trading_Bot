@@ -1,6 +1,6 @@
 # Spec 008: Dienst – Paper-Runde jede Minute, sauberer Stopp, Health, Logging
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s008-dienst` · **Meilenstein:** M1 (Nr. 5)
 - **Erstellt:** 2026-11-06
 
@@ -85,7 +85,7 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
 - Verworfen: siehe ADR-0017 (Arena-Threads, HTTP-Health, Timer, Config nur beim Start).
 
 ## Plan
-- [ ] 1. ADR-0017, `service/schedule.py` + `paper_cycle`-Stopp-Abfrage + `ensure_portfolios` mit Tests (AK1, Teile AK3/AK5)
+- [x] 1. ADR-0017, `service/schedule.py` + `paper_cycle`-Stopp-Abfrage + `ensure_portfolios` mit Tests (AK1, Teile AK3/AK5)
 - [ ] 2. `service/run.py` Grundschleife: Lock, DB, Runden, Fehlerbehandlung, Stall-Grenze, Config-Reload (AK2–AK4)
 - [ ] 3. Stopp per Signal mit Frist, Warten unterbrechbar (AK5)
 - [ ] 4. `notify.py`, `status.py`, `logs.py` mit Redaktion (AK6, AK7, AK9)

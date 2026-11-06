@@ -192,17 +192,30 @@ def open_db(path: Path, *, agents: Iterable[str]) -> sqlite3.Connection:
             )
         check_schema(con)
         con.execute("PRAGMA journal_mode=WAL")
-        with write_tx(con):
-            for agent in agents:
-                # OR IGNORE: reopening never resets an existing portfolio (CLAUDE.md: history).
-                con.execute(
-                    "INSERT OR IGNORE INTO portfolios (agent,cash,peak) VALUES (?,?,?)",
-                    (agent, START_CASH, START_CASH),
-                )
+        ensure_portfolios(con, agents)
     except BaseException:
         con.close()
         raise
     return con
+
+
+def ensure_portfolios(con: sqlite3.Connection, agents: Iterable[str]) -> list[str]:
+    """Give every agent without a portfolio its start cash; returns the agents that were new.
+
+    The service calls this whenever the chosen depots change (Spec 008 AK3). A depot that is no
+    longer chosen keeps its row, history and holdings.
+    """
+    created = []
+    with write_tx(con):
+        for agent in agents:
+            # OR IGNORE: reopening never resets an existing portfolio (CLAUDE.md: history).
+            cur = con.execute(
+                "INSERT OR IGNORE INTO portfolios (agent,cash,peak) VALUES (?,?,?)",
+                (agent, START_CASH, START_CASH),
+            )
+            if cur.rowcount:
+                created.append(agent)
+    return created
 
 
 def balance(con: sqlite3.Connection, agent: str) -> dict[str, Any]:
