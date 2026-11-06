@@ -411,7 +411,11 @@ activate() {
     mv -T "$APP/.previous.new" "$PREVIOUS"
   fi
   printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sha" "active" >>"$APP/deployed.log"
-  log "release $sha active${old:+ (previous: $old)}"
+  if [ -n "$old" ] && [ "$old" != "$sha" ]; then
+    log "release $sha active (previous: $old)"
+  else
+    log "release $sha active"
+  fi
   [ "$FP_CHANGED" -eq 0 ] || die "secrets.env or a drop-in changed while the services were stopped" \
     "- the release $sha is active, but check them"
 }

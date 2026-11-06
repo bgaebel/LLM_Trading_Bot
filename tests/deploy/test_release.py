@@ -379,6 +379,7 @@ def test_redeploying_the_same_commit_reuses_the_built_release(box: Sandbox) -> N
     box.upload(sha(1))
     out = box.run("deploy", sha(1), "botsvc").stdout
     assert f"release {sha(1)} already built" in out and box.current() == sha(1)
+    assert f"release {sha(1)} active\n" in out and "previous" not in out
 
 
 def test_status_and_bad_arguments(box: Sandbox) -> None:
