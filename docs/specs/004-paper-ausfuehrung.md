@@ -1,6 +1,6 @@
 # Spec 004: Paper-Ausführung und SQLite-Persistenz
 
-- **Status:** Entwurf
+- **Status:** freigegeben
 - **Issue:** – · **Branch:** `feat/s004-paper` · **Meilenstein:** M1 (Nr. 3)
 - **Erstellt:** 2026-11-06
 
@@ -57,7 +57,7 @@ Dienst (Nr. 5) und für die LLM-Strategie (3a, braucht DB für Budget und Proven
 - ADR-0007: Ausführung und Kosten sind Teil der Versuchsanordnung, deshalb verhaltensgleich zur Arena, belegt
   durch Golden-Fixtures **mit Grenzfällen** und einen Mutationstest (Learning „Golden-Fixtures beweisen
   Gleichheit nur mit Grenzfällen").
-- ADR-0008 (Entwurf, mit dieser Spec): eigenes Schema mit Versionsnummer, ein aktiver Agent plus Buy & Hold.
+- ADR-0008 (angenommen): eigenes Schema mit Versionsnummer, ein aktiver Agent plus Buy & Hold.
 - ADR-0003: Herkunftsvermerke; ADR-0002: Standardbibliothek (`sqlite3`).
 - CLAUDE.md: Historie nie still zurücksetzen; nie zwei Prozesse auf derselben DB; DBs nie committen.
 - LEARNINGS #windows #pfade: DB-Pfade über `pathlib`; Tests mit `tmp_path`.
@@ -97,7 +97,7 @@ ORM/SQLAlchemy (neue Abhängigkeit für vier Tabellen). Migrationen (es gibt kei
   Prozess läuft in CI unter Linux, lokal unter Windows.
 - Die Ausführungslogik der Arena ruft `fee_rate()`/`slip_rate()` aus Umgebungsvariablen auf. Der Generator setzt
   sie, der Bot nimmt Parameter.
-- Annahmen ohne Rückfrage (Nutzer wollte autonomes Vorgehen), bei der Freigabe zu bestätigen: Startkapital
+- Annahmen, bei der Freigabe am 2026-11-06 bestätigt: Startkapital
   10.000 EUR, Slippage 0,05 % (Arena-Code, nicht 0,03 % aus der Arena-Roadmap), aktiver Agent `trend` bis 3a.
 
 ---

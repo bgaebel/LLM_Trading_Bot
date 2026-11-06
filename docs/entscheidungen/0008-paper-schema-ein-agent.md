@@ -1,6 +1,6 @@
 # ADR-0008: Eigenes versioniertes SQLite-Schema; ein aktiver Agent plus Buy & Hold
 
-- **Status:** vorgeschlagen
+- **Status:** angenommen
 - **Löst ab:** –
 - **Datum:** 2026-11-06
 - **Bereich:** #persistenz #paper
