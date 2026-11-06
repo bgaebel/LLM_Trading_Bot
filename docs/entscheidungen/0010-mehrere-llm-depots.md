@@ -1,6 +1,6 @@
 # ADR-0010: Drei GPT-Depots zum Modellvergleich plus Buy & Hold; Schema bleibt versioniert
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0012](0012-luna-haupt-sol-gegenprobe.md)
 - **Löst ab:** [ADR-0008](0008-paper-schema-ein-agent.md)
 - **Datum:** 2026-11-06
 - **Bereich:** #persistenz #paper #llm

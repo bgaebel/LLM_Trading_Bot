@@ -14,5 +14,6 @@
 | [0007](0007-strategien-identisch-zur-arena.md) | Übernommene Strategien identisch zu Arena v0.3.1; Änderungen nur als neue Version | angenommen |
 | [0008](0008-paper-schema-ein-agent.md) | Eigenes versioniertes SQLite-Schema; ein aktiver Agent plus Buy & Hold | abgelöst durch [0010](0010-mehrere-llm-depots.md) |
 | [0009](0009-llm-agent-openai-budget.md) | LLM-Agent über OpenAI (gpt-6.1-sol, openai-SDK); hartes EUR-Tagesbudget und Provenienz in der DB | abgelöst durch [0011](0011-gpt-gemeinsame-anfrage.md) |
-| [0010](0010-mehrere-llm-depots.md) | Drei GPT-Depots (sol, terra, luna) zum Modellvergleich plus Buy & Hold; Schema bleibt versioniert (löst 0008 ab) | angenommen |
+| [0010](0010-mehrere-llm-depots.md) | Drei GPT-Depots (sol, terra, luna) zum Modellvergleich plus Buy & Hold; Schema bleibt versioniert (löst 0008 ab) | abgelöst durch [0012](0012-luna-haupt-sol-gegenprobe.md) |
 | [0011](0011-gpt-gemeinsame-anfrage.md) | Eine GPT-Anfrage für BTC+ETH mit Prompt v1, 4/h + ≤ 4 Ereignis/h, Effort low; Budget je Agent in der DB (löst 0009 ab) | angenommen |
+| [0012](0012-luna-haupt-sol-gegenprobe.md) | Zwei GPT-Depots: gpt-6-luna Haupt-Trader, gpt-6.1-sol Gegenprobe; Anteile 0,50 / 2,50 € von 3 € (löst 0010 ab) | angenommen |
