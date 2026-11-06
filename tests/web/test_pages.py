@@ -2,10 +2,13 @@
 
 import re
 from collections.abc import Callable
+from dataclasses import replace
+from decimal import Decimal
 
 import pytest
 
 from llm_trading_bot.web import pages
+from llm_trading_bot.web.overview import Overview
 
 
 def _widths(page: str) -> list[float]:
@@ -85,3 +88,157 @@ def test_unmeasured_effort_is_marked_as_not_measured() -> None:
 def test_a_smaller_budget_caps_the_daily_worst_case() -> None:
     page = pages.settings_page({"LLM_DAILY_BUDGET_EUR_GPT_LUNA": "0.10"}, csrf="t")
     assert _cost_rows(page)["Obergrenze pro Tag (96 Anfragen)"][0] == "0.10 € (Budget)"
+
+
+# ------------------------------------------------------------------ overview (Spec 007)
+
+
+def _view(**changes: object) -> Overview:
+    from llm_trading_bot.web.overview import (
+        DecisionRow,
+        DepotRow,
+        LlmToday,
+        Overview,
+        Pulse,
+        Series,
+        TradeRow,
+    )
+
+    base = Overview(
+        depots=[
+            DepotRow(
+                "gpt-luna",
+                10_100.0,
+                7_000.0,
+                0.01,
+                0.5,
+                "2026-11-06T12:00:00+00:00",
+                False,
+                100.0,
+                1.0,
+                1.5,
+            ),
+            DepotRow(
+                "buyhold",
+                9_950.0,
+                900.0,
+                0.06,
+                2.0,
+                "2026-11-06T12:00:00+00:00",
+                False,
+                -50.0,
+                -0.5,
+                None,
+            ),
+        ],
+        series=[
+            Series("gpt-luna", ((1_000.0, 10_000.0), (2_000.0, 10_100.0))),
+            Series("buyhold", ((1_000.0, 10_000.0), (2_000.0, 9_950.0))),
+        ],
+        pulses=[Pulse("Letzter Zyklus", "2026-11-06T12:00:00+00:00", 30.0)],
+        decisions=[
+            DecisionRow(
+                "gpt-luna",
+                "BTC-EUR",
+                "2026-11-06T12:00:00+00:00",
+                "BUY",
+                0.25,
+                0.6,
+                "OK",
+                "<script>alert(1)</script> & mehr",
+            ),
+        ],
+        llm=[
+            LlmToday(
+                "gpt-luna",
+                2,
+                Decimal("0.0007"),
+                Decimal("0.50"),
+                False,
+                3000,
+                700,
+                180,
+                "OK",
+                None,
+                "2026-11-06T12:00:00+00:00",
+            ),
+        ],
+        trades=[
+            TradeRow(
+                "2026-11-06T12:00:00+00:00",
+                "gpt-luna",
+                "BTC-EUR",
+                "BUY",
+                0.01,
+                60_000.0,
+                600.0,
+                1.5,
+            ),
+        ],
+    )
+    return replace(base, **changes)  # type: ignore[arg-type]
+
+
+def test_reason_html_is_escaped() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+
+    page = overview_page(_view(), csrf="t")
+    assert "<script>alert(1)</script>" not in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt; &amp; mehr" in page
+    assert "style=" not in page and "<script" not in page
+
+
+def test_overview_refreshes_but_settings_do_not() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+
+    assert '<meta http-equiv="refresh" content="60">' in overview_page(_view(), csrf="t")
+    assert "http-equiv" not in pages.settings_page({}, csrf="t")
+    assert "http-equiv" not in pages.login_page(csrf="t")
+
+
+def test_navigation_marks_the_active_tab_and_only_after_login() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+
+    home = overview_page(_view(), csrf="t")
+    settings = pages.settings_page({}, csrf="t")
+    assert '<a href="/" class="active" aria-current="page">Übersicht</a>' in home
+    assert '<a href="/settings">Einstellungen</a>' in home
+    assert '<a href="/settings" class="active" aria-current="page">Einstellungen</a>' in settings
+    assert '<a class="brand" href="/">' in home
+    assert 'class="tabs"' not in pages.login_page(csrf="t")
+
+
+def test_equity_chart_draws_one_line_per_depot_and_the_start_line() -> None:
+    from llm_trading_bot.web.overview_page import equity_chart
+
+    svg = equity_chart(_view().series)
+    assert svg.count('<polyline class="eq-line') == 2
+    assert 'class="eq-line bench"' in svg and 'class="eq-line c0"' in svg
+    assert 'class="eq-start"' in svg and "echte Paper-Daten" in svg
+    # Every point lies inside the plot area.
+    for x, y in re.findall(r"([0-9.]+),([0-9.]+)", " ".join(re.findall(r'points="([^"]+)"', svg))):
+        assert 64 <= float(x) <= 788 and 16 <= float(y) <= 222
+
+
+def test_equity_chart_needs_two_moments() -> None:
+    from llm_trading_bot.web.overview import Series
+    from llm_trading_bot.web.overview_page import equity_chart
+
+    assert "Noch kein Verlauf" in equity_chart([])
+    assert "Noch kein Verlauf" in equity_chart([Series("a", ((5.0, 10_000.0),))])
+
+
+def test_overview_without_data_explains_why() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+
+    page = overview_page(None, csrf="t", problem="Noch keine Daten <b>")
+    assert "Noch keine Daten &lt;b&gt;" in page and "ADR-0016" in page
+
+
+def test_overview_shows_comparison_and_halt_flags() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+
+    page = overview_page(_view(), csrf="t")
+    assert "+1.50 pp" in page and "Referenz" in page
+    assert "+100.00 € (+1.00 %)" in page
+    assert "0.0007 € von 0.50 €" in page

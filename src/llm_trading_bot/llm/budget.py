@@ -98,7 +98,7 @@ def reservation(attempt: Attempt, pricing: Pricing) -> Decimal:
     return request_worst_case(attempt, pricing) * attempt.max_requests
 
 
-def _day_bounds(now_epoch: float) -> tuple[str, str]:
+def day_bounds(now_epoch: float) -> tuple[str, str]:
     day = datetime.fromtimestamp(now_epoch, UTC).date()
     return day.isoformat(), (day + timedelta(days=1)).isoformat()
 
@@ -108,7 +108,7 @@ def charged_today(
 ) -> tuple[Decimal, bool]:
     """Known costs plus open reservations today (one agent or all), and whether any call of that
     scope cost more than its reservation."""
-    start, end = _day_bounds(now_epoch)
+    start, end = day_bounds(now_epoch)
     query = (
         "SELECT reserved_eur, cost_eur, reservation_exceeded FROM llm_calls"
         " WHERE ts>=? AND ts<? AND status NOT IN (?,?)"

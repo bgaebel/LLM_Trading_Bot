@@ -255,8 +255,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="credentials file (default: secrets.env next to --db)",
     )
-    web = commands.add_parser("web", help="local web UI for credentials (127.0.0.1 only)")
+    web = commands.add_parser("web", help="local web UI: overview and credentials (127.0.0.1 only)")
     web.add_argument("--data-dir", type=Path, required=True, help="where secrets.env is kept")
+    web.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="bot database, opened read-only (default: bot.db in --data-dir)",
+    )
     web.add_argument("--port", type=int, default=8787)
     web.add_argument("--host", default="127.0.0.1", help="must stay 127.0.0.1 (ADR-0015)")
     args = parser.parse_args(argv)
@@ -276,7 +282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     if args.command == "web":
         try:
-            serve(args.data_dir, port=args.port, host=args.host, out=sys.stdout)
+            serve(args.data_dir, port=args.port, host=args.host, out=sys.stdout, db=args.db)
         except ValueError as exc:
             print(f"web refused: {exc}", file=sys.stdout)
             return EXIT_INVALID
