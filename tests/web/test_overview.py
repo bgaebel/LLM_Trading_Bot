@@ -167,6 +167,24 @@ def test_liveness_reports_last_cycle_and_each_quote(con: sqlite3.Connection) -> 
     assert {p.level for p in overview.liveness(con, NOW + 3601)} == {overview.STOPPED}
 
 
+def test_quotes_are_the_stored_book_of_each_market_in_symbol_order(con: sqlite3.Connection) -> None:
+    stored = {
+        r["symbol"]: r for r in con.execute("SELECT symbol, bid, ask, last_close FROM market")
+    }
+    quotes = overview.quotes(con)
+    assert [q.market for q in quotes] == ["BTC-EUR", "ETH-EUR"]
+    for q, name in zip(quotes, ("BTCEUR", "ETHEUR"), strict=True):
+        assert (q.bid, q.ask, q.last_close) == tuple(stored[name][1:])
+        assert q.ts == iso(NOW) and q.bid <= q.mid <= q.ask and q.spread_pct >= 0
+    assert overview.load(con, NOW, SHARES).quotes == quotes
+
+
+def test_quote_spread_is_relative_to_the_mid() -> None:
+    q = overview.Quote("BTC-EUR", iso(NOW), 99.0, 101.0, 100.0, "bitvavo")
+    assert q.mid == 100.0 and q.spread_pct == pytest.approx(2.0)
+    assert overview.Quote("X", iso(NOW), 0.0, 0.0, 0.0, "x").spread_pct == 0.0
+
+
 def test_liveness_of_an_empty_database_says_stopped(tmp_path: Path) -> None:
     path = tmp_path / "bot.db"
     open_db(path, agents=("trend",)).close()

@@ -124,6 +124,10 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
   60 s neu (Spec 007 AK9), also im Gleichtakt mit den 60-s-Runden – jedes Laden zeigte dasselbe Alter. Jetzt Neuladen
   alle 15 s, Lebenszeichen mit Sekunden, die Kennzahl „Letzter Zyklus“ wird per Beschriftung statt Position gewählt
   (seit dem Dienst-Lebenszeichen stand dort an Position 0 der Dienst).
+- 2026-11-06: Auf Wunsch des Nutzers (beim AK11-Test): Der Banner der Übersicht zeigt statt fester Hinweise die
+  gespeicherten Kurse (Mitte, Geld/Brief, Spread, Kerzenschluss, Stand) und jedes Depot mit Wert und Ergebnis. Er läuft
+  über das Neuladen hinweg an derselben Stelle weiter (Phasen-Klasse aus der Uhr, kein Skript), und die sich selbst
+  neu ladende Seite verzichtet auf die Einblend-Animation. Login- und Einstellungsseite behalten die festen Hinweise.
 
 ## Ergebnis
 - **Erreicht:** …

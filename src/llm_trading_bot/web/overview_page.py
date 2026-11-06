@@ -247,6 +247,30 @@ def _trades(rows: Sequence[TradeRow]) -> str:
     return _table(("Zeit", "Depot", "Markt", "Seite", "Menge", "Kurs", "Betrag", "Gebühr"), body)
 
 
+def _number(value: float) -> str:
+    return f"{value:,.2f}".replace(",", NBSP)
+
+
+def ticker(view: Overview) -> list[tuple[str, str]]:
+    """Strip under the header: the stored quotes and every depot, instead of fixed hints."""
+    items: list[tuple[str, str]] = []
+    for q in view.quotes:
+        base = q.market.split("-")[0]
+        items += [
+            (q.market, money(q.mid)),
+            (f"{base} Geld / Brief", f"{_number(q.bid)} / {_number(q.ask)}"),
+            (f"{base} Spread", f"{q.spread_pct:.3f} %"),
+            (f"{base} Kerzenschluss", money(q.last_close)),
+        ]
+    if view.quotes:
+        newest = max(view.quotes, key=lambda q: q.ts)
+        items.append(("Kurse", f"{when(newest.ts, seconds=True)} · {newest.source}"))
+    for d in view.depots:
+        label = "Buy & Hold" if d.reference else d.agent
+        items.append((label, f"{money(d.value)} · {signed(d.pnl_pct, ' %')}"))
+    return [*items, ("Modus", "Paper – kein Echtgeld")] if items else list(pages.TICKER)
+
+
 def _readouts(view: Overview) -> str:
     # By label, not position: the service pulse (Spec 008) comes first when there is a status file.
     cycle = next((p for p in view.pulses if p.label == CYCLE_LABEL), None)
@@ -276,8 +300,11 @@ def _readouts(view: Overview) -> str:
     )
 
 
-def overview_page(view: Overview | None, *, csrf: str, problem: str = "") -> str:
-    """``view`` is None when the database cannot be shown; ``problem`` then says why."""
+def overview_page(
+    view: Overview | None, *, csrf: str, problem: str = "", now: float | None = None
+) -> str:
+    """``view`` is None when the database cannot be shown; ``problem`` then says why. ``now``
+    keeps the ticker running across reloads."""
     if view is None:
         body = (
             '<section class="panel">'
@@ -294,7 +321,8 @@ def overview_page(view: Overview | None, *, csrf: str, problem: str = "") -> str
             + '<section class="panel span-5">'
             + pages._head("01", "Lebenszeichen")
             + _pulses(view.pulses)
-            + '<p class="hint">läuft ≤ 15 min · verzögert ≤ 60 min · danach steht.</p></section>'
+            + '<p class="hint">Dienst: läuft ≤ 3 min nach der letzten Runde · verzögert ≤ 15 min. '
+            "Zyklus und Kurse: läuft ≤ 15 min · verzögert ≤ 60 min. Danach steht.</p></section>"
             + '<section class="panel span-7">'
             + pages._head("02", "GPT heute", "amber")
             + _llm(view.llm)
@@ -317,4 +345,12 @@ def overview_page(view: Overview | None, *, csrf: str, problem: str = "") -> str
             + _trades(view.trades)
             + "</section></div>"
         )
-    return pages._page("Übersicht", body, csrf=csrf, active="/", refresh=REFRESH_SECONDS)
+    return pages._page(
+        "Übersicht",
+        body,
+        csrf=csrf,
+        active="/",
+        refresh=REFRESH_SECONDS,
+        ticker=pages.TICKER if view is None else ticker(view),
+        now=now,
+    )

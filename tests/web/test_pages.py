@@ -271,3 +271,54 @@ def test_pulse_times_show_seconds() -> None:
 
     page = overview_page(_view(), csrf="t")
     assert "2026-11-06 12:00:00 UTC · vor 30 s" in page
+
+
+def _track(page: str) -> str:
+    start = page.index('<div class="ticker-track')
+    return page[start : page.index("</div>", start)]
+
+
+def test_overview_ticker_shows_quotes_and_depots_not_fixed_hints() -> None:
+    from llm_trading_bot.web.overview import Quote
+    from llm_trading_bot.web.overview_page import NBSP as N
+    from llm_trading_bot.web.overview_page import overview_page
+
+    btc = Quote("BTC-EUR", "2026-11-06T12:00:05+00:00", 60_000.0, 60_050.0, 60_010.0, "bitvavo")
+    track = _track(overview_page(_view(quotes=[btc]), csrf="t"))
+    assert f"<b>BTC-EUR</b>60{N}025.00 €" in track
+    assert f"<b>BTC Geld / Brief</b>60{N}000.00 / 60{N}050.00" in track
+    assert "<b>BTC Spread</b>0.083 %" in track and f"<b>BTC Kerzenschluss</b>60{N}010.00 €" in track
+    assert "<b>Kurse</b>2026-11-06 12:00:05 UTC · bitvavo" in track
+    assert f"<b>gpt-luna</b>10{N}100.00 € · +1.00 %" in track
+    assert f"<b>Buy &amp; Hold</b>9{N}950.00 € · -0.50 %" in track
+    assert "Fail closed" not in track
+
+
+def test_ticker_without_data_keeps_the_fixed_hints() -> None:
+    from llm_trading_bot.web.overview_page import overview_page, ticker
+
+    assert ticker(_view(depots=[], quotes=[])) == list(pages.TICKER)
+    assert "Fail closed" in _track(overview_page(None, csrf="t", problem="x"))
+
+
+def test_ticker_continues_across_reloads_from_the_wall_clock() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+    from llm_trading_bot.web.style import CSS, TICKER_SECONDS
+
+    assert 'class="ticker-track tp-5"' in overview_page(
+        _view(), csrf="t", now=TICKER_SECONDS * 7 + 5.9
+    )
+    assert 'class="ticker-track"' in overview_page(_view(), csrf="t")
+    for n in (0, TICKER_SECONDS - 1):
+        assert f".ticker-track.tp-{n} {{ animation-delay: -{n}s; }}" in CSS
+    assert f".ticker-track.tp-{TICKER_SECONDS} " not in CSS
+    assert f"animation: ticker {TICKER_SECONDS}s linear infinite" in CSS
+
+
+def test_only_the_reloading_overview_drops_its_entrance_animation() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+    from llm_trading_bot.web.style import CSS
+
+    assert '<body class="live">' in overview_page(_view(), csrf="t")
+    assert '<body class="live">' not in pages.settings_page({}, csrf="t")
+    assert ".live .panel, .live .readout, .live .msg { animation: none; }" in CSS

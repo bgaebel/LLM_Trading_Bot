@@ -160,8 +160,8 @@ class WebApp:
             with reading(self.db) as con:
                 view = overview.load(con, now, shares, service=service)
         except DbUnavailable as exc:
-            return Response(200, overview_page(None, csrf=session.csrf, problem=str(exc)))
-        return Response(200, overview_page(view, csrf=session.csrf))
+            return Response(200, overview_page(None, csrf=session.csrf, problem=str(exc), now=now))
+        return Response(200, overview_page(view, csrf=session.csrf, now=now))
 
     def _settings(
         self, session: Session, message: str = "", ok: bool = True, status: int = 200

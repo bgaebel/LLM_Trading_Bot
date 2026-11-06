@@ -7,7 +7,7 @@ after fees and slippage because the paper execution books them.
 
 import sqlite3
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
@@ -190,6 +190,40 @@ def liveness(con: sqlite3.Connection, now: float) -> list[Pulse]:
 
 
 @dataclass(frozen=True)
+class Quote:
+    """Last stored quote of a market, as the bot wrote it in its last round."""
+
+    market: str
+    ts: str
+    bid: float
+    ask: float
+    last_close: float
+    """Close of the last finished candle - what the strategies see."""
+    source: str
+
+    @property
+    def mid(self) -> float:
+        return (self.bid + self.ask) / 2
+
+    @property
+    def spread_pct(self) -> float:
+        return (self.ask - self.bid) / self.mid * 100 if self.mid > 0 else 0.0
+
+
+def quotes(con: sqlite3.Connection) -> list[Quote]:
+    """In the order of ``Symbol``; markets the bot never priced are left out."""
+    rows = {
+        r["symbol"]: r
+        for r in con.execute("SELECT symbol, ts, bid, ask, last_close, source FROM market")
+    }
+    return [
+        Quote(s.market, r["ts"], r["bid"], r["ask"], r["last_close"], r["source"])
+        for s in Symbol
+        if (r := rows.get(s.name)) is not None
+    ]
+
+
+@dataclass(frozen=True)
 class DecisionRow:
     agent: str
     market: str
@@ -323,6 +357,7 @@ class Overview:
     decisions: list[DecisionRow]
     llm: list[LlmToday]
     trades: list[TradeRow]
+    quotes: list[Quote] = field(default_factory=list)
 
 
 def load(
@@ -339,4 +374,5 @@ def load(
         latest_decisions(con),
         llm_today(con, now, shares),
         recent_trades(con),
+        quotes(con),
     )

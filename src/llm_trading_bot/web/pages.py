@@ -2,7 +2,7 @@
 (the CSP forbids both), so injected markup cannot run. Decoration is inline SVG with presentation
 attributes and classes from ``/app.css``."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from html import escape
 
@@ -10,7 +10,7 @@ from llm_trading_bot.llm.agents import LLM_DEFAULTS, MAX_OUTPUT_TOKENS, MODEL_PR
 from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.web import chart
 from llm_trading_bot.web.credentials import AGENT_CHOICES, mask
-from llm_trading_bot.web.style import CSS
+from llm_trading_bot.web.style import CSS, TICKER_SECONDS
 
 __all__ = ["CSS", "login_page", "settings_page", "setup_page"]
 
@@ -122,7 +122,11 @@ def _page(
     csrf: str | None = None,
     active: str | None = None,
     refresh: int | None = None,
+    ticker: Sequence[tuple[str, str]] = TICKER,
+    now: float | None = None,
 ) -> str:
+    """``ticker``: (label, value) pairs for the strip under the header. ``now`` (wall clock) lets
+    a reloading page continue the strip where the last load left it."""
     logout = (
         '<form method="post" action="/logout">'
         f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
@@ -130,7 +134,8 @@ def _page(
         if csrf
         else ""
     )
-    items = "".join(f"<span><b>{escape(head)}</b>{escape(text)}</span>" for head, text in TICKER)
+    items = "".join(f"<span><b>{escape(head)}</b>{escape(text)}</span>" for head, text in ticker)
+    phase = "" if now is None else f" tp-{int(now) % TICKER_SECONDS}"
     # Tabs only after login: before it, every route leads to login or setup anyway.
     tabs = (
         '<nav class="tabs" aria-label="Bereiche">'
@@ -151,7 +156,8 @@ def _page(
         '<meta name="color-scheme" content="dark">'
         + reload
         + f"<title>{escape(title)} · LLM Trading Bot</title>"
-        '<link rel="stylesheet" href="/app.css"></head><body>'
+        '<link rel="stylesheet" href="/app.css"></head>'
+        + ('<body class="live">' if refresh else "<body>")
         + BACKDROP
         + f'<header><a class="brand" href="/">{LOGO}<div><p class="brand-name">LLM '
         '<span>Trading</span> Bot</p><div class="brand-sub">Paper-Terminal · BTC/EUR · ETH/EUR'
@@ -160,8 +166,8 @@ def _page(
         '<span class="chip lock"><i class="led"></i>Echtgeld gesperrt</span>'
         f'<span class="chip net">127.0.0.1</span>{logout}</div></header>'
         # The track holds the items twice so the loop has no visible seam.
-        f'<div class="ticker" aria-hidden="true"><div class="ticker-track">{items}{items}</div>'
-        f"</div><main>{body}</main>"
+        f'<div class="ticker" aria-hidden="true"><div class="ticker-track{phase}">'
+        f"{items}{items}</div></div><main>{body}</main>"
         "<footer><span>Paper-Modus · kein Echtgeld (ADR-0004)</span>"
         "<span>nur 127.0.0.1 · Zugriff per SSH-Tunnel (ADR-0005)</span>"
         "<span>Zugangsdaten in secrets.env (600)</span></footer></body></html>"
