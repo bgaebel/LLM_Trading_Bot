@@ -5,6 +5,7 @@ import io
 import os
 import sqlite3
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
@@ -28,6 +29,9 @@ from llm_trading_bot.paper.db import SchemaError, open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
 from llm_trading_bot.paper.lock import WriterLock, WriterLockBusy
 from llm_trading_bot.paper.report import CycleReport, LlmOutcome, MarketResult
+from llm_trading_bot.service.logs import setup_logging
+from llm_trading_bot.service.notify import Notifier
+from llm_trading_bot.service.run import Service, install_stop_signals
 from llm_trading_bot.strategy.indicators import indicators
 from llm_trading_bot.strategy.payload import ARENA_SLIPPAGE, ARENA_TAKER_FEE, cost_roundtrip
 from llm_trading_bot.strategy.signals import STRATEGIES, STRATEGY_VERSION, run_strategy
@@ -38,6 +42,7 @@ EXIT_OK = 0
 EXIT_INVALID = 1
 EXIT_FETCH_FAILED = 2
 EXIT_LOCKED = 3
+# `run` only: 4 = a round hung or ignored the stop deadline (service.run.EXIT_STALLED).
 
 
 def _utc(ts: float) -> str:
@@ -242,6 +247,38 @@ def run_paper_cycle(
     return EXIT_OK if report.complete else EXIT_INVALID
 
 
+def run_service(
+    db: Path,
+    client: MarketClient,
+    *,
+    env: Mapping[str, str],
+    out: TextIO,
+    secrets: Path | None = None,
+    model_factory: Callable[[str], SignalModel] = OpenAIResponses,
+) -> int:
+    """The long-running service (Spec 008): a paper round every minute until SIGTERM/Ctrl+C."""
+    try:
+        log = setup_logging(
+            env.get("LOG_LEVEL", "INFO"), out, journal=bool(env.get("JOURNAL_STREAM"))
+        )
+    except ValueError as exc:
+        print(f"run refused: {exc}", file=out)
+        return EXIT_INVALID
+    stop = threading.Event()
+    install_stop_signals(stop)
+    service = Service(
+        db,
+        client,
+        env=env,
+        secrets=secrets or db.parent / "secrets.env",
+        stop=stop,
+        log=log,
+        notifier=Notifier.from_env(env),
+        model_factory=model_factory,
+    )
+    return service.run()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="trading-bot")
     commands = parser.add_subparsers(dest="command")
@@ -254,6 +291,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         type=Path,
         default=None,
         help="credentials file (default: secrets.env next to --db)",
+    )
+    service = commands.add_parser(
+        "run", help="the service: a paper round every minute until stopped (Spec 008)"
+    )
+    service.add_argument("--db", type=Path, required=True, help="path of the paper database")
+    service.add_argument(
+        "--secrets",
+        type=Path,
+        default=None,
+        help="credentials file, re-read every round (default: secrets.env next to --db)",
     )
     web = commands.add_parser("web", help="local web UI: overview and credentials (127.0.0.1 only)")
     web.add_argument("--data-dir", type=Path, required=True, help="where secrets.env is kept")
@@ -279,6 +326,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "paper-cycle":
         return run_paper_cycle(
             args.db, BitvavoClient(), env=os.environ, out=sys.stdout, secrets=args.secrets
+        )
+    if args.command == "run":
+        return run_service(
+            args.db, BitvavoClient(), env=dict(os.environ), out=sys.stdout, secrets=args.secrets
         )
     if args.command == "web":
         try:

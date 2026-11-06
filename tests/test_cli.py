@@ -262,6 +262,65 @@ def test_llm_decision_line_shows_the_real_attempt_number() -> None:
     assert "attempt 12345 new: BUY" in line
 
 
+def test_run_starts_the_service_and_a_stop_ends_it_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    from llm_trading_bot import cli
+    from llm_trading_bot.service.status import read_status, status_path
+
+    def stop_at_once(stop: threading.Event) -> None:
+        stop.set()  # as if SIGTERM arrived right after the start
+
+    monkeypatch.setattr(cli, "install_stop_signals", stop_at_once)
+    db = tmp_path / "bot.db"
+    out = io.StringIO()
+    code = cli.run_service(db, ScenarioClient(), env={"BOT_AGENTS": "trend"}, out=out)
+    assert code == EXIT_OK
+    assert "INFO service started: db bot.db, depots trend" in out.getvalue()
+    assert "INFO service stopped" in out.getvalue()
+    status = read_status(status_path(db))
+    assert status is not None and status.state == "stopped" and status.last_round_at is None
+
+
+def test_run_refuses_an_unknown_log_level(tmp_path: Path) -> None:
+    from llm_trading_bot.cli import run_service
+
+    out = io.StringIO()
+    code = run_service(tmp_path / "bot.db", ScenarioClient(), env={"LOG_LEVEL": "LOUD"}, out=out)
+    assert code == EXIT_INVALID and "LOG_LEVEL" in out.getvalue()
+    assert not (tmp_path / "bot.db").exists()
+
+
+def test_run_is_refused_while_another_writer_holds_the_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from llm_trading_bot import cli
+
+    monkeypatch.setattr(cli, "install_stop_signals", lambda stop: None)
+    db = tmp_path / "bot.db"
+    out = io.StringIO()
+    with WriterLock(db):
+        code = cli.run_service(db, ScenarioClient(), env={"BOT_AGENTS": "trend"}, out=out)
+    assert code == EXIT_LOCKED and "refused: another process owns" in out.getvalue()
+
+
+def test_run_command_passes_db_and_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from llm_trading_bot import cli
+
+    seen: list[object] = []
+
+    def fake(db: Path, client: object, **kw: object) -> int:
+        seen.append((db, kw["secrets"]))
+        return EXIT_OK
+
+    monkeypatch.setattr(cli, "run_service", fake)
+    assert main(["run", "--db", str(tmp_path / "bot.db")]) == EXIT_OK
+    assert main(["run", "--db", "x.db", "--secrets", str(tmp_path / "s.env")]) == EXIT_OK
+    assert seen == [(tmp_path / "bot.db", None), (Path("x.db"), tmp_path / "s.env")]
+
+
 def test_web_db_defaults_to_bot_db_in_the_data_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

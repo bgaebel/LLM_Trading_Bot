@@ -64,6 +64,26 @@ danach `/etc/ssh/sshd_config.d/01-hardening.conf` prüfen bzw. `authorized_keys`
 - Hetzner-Cloud-Firewall mit denselben Regeln als zweite Schicht vor dem Server.
 - Hetzner-Backups oder ein Snapshot nach der Einrichtung.
 
+## Dienst (Spec 008, Installation folgt in Nr. 6)
+Die systemd-Dateien liegen mit Platzhaltern in `deploy/`; die CI prüft sie mit Testwerten (`scripts/check-units.sh`).
+Installiert werden sie erst mit Roadmap Nr. 6 und nur mit Zustimmung:
+- `llm-trading-bot.service`: `trading-bot run --db __DATA_DIR__/bot.db` als `__SERVICE_USER__`, `Type=notify`,
+  Watchdog 60 s, Neustart bei Fehler nach 15 s, Stopp-Frist 90 s (der Dienst selbst gibt einer Runde 75 s).
+- `llm-trading-bot-web.service`: die Weboberfläche auf `127.0.0.1:8787`, gleicher Benutzer (liest `secrets.env`
+  und `service-status.json`, beide 600).
+- `journald@llm-trading-bot.conf`: eigener Journal-Namensraum, höchstens 200 MB und 14 Tage.
+
+Platzhalter: `__SERVICE_USER__` (Dienstbenutzer aus Spec 002), `__APP_DIR__` (Checkout mit `.venv`),
+`__DATA_DIR__` (DB, `secrets.env`, Statusdatei; einziges beschreibbares Verzeichnis). Geplante Prüfbefehle:
+
+```bash
+systemctl status llm-trading-bot
+journalctl --namespace=llm-trading-bot -u llm-trading-bot -n 50 --no-pager
+```
+
+Exit-Codes von `run`: 0 gestoppt, 1 Einstellungen/Schema ungültig, 3 andere Schreibsperre, 4 Runde hing bzw.
+Stopp-Frist überschritten. Bei allen außer 0 startet systemd neu.
+
 ## Weboberfläche per SSH-Tunnel (Spec 006)
 Die Weboberfläche bindet nur an `127.0.0.1` (ADR-0015). Auf dem Server starten (Deployment als Dienst folgt in Nr. 6),
 dann vom eigenen Rechner einen Tunnel öffnen und `http://127.0.0.1:8787/` im Browser aufrufen:

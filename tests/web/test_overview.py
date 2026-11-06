@@ -16,6 +16,7 @@ from llm_trading_bot.llm.due import iso
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import START_CASH, open_db, write_tx
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
+from llm_trading_bot.service.status import ServiceStatus
 from llm_trading_bot.web import overview
 from llm_trading_bot.web.readonly import reading
 
@@ -166,6 +167,24 @@ def test_liveness_reports_last_cycle_and_each_quote(con: sqlite3.Connection) -> 
     assert {p.level for p in overview.liveness(con, NOW + 3601)} == {overview.STOPPED}
 
 
+def test_quotes_are_the_stored_book_of_each_market_in_symbol_order(con: sqlite3.Connection) -> None:
+    stored = {
+        r["symbol"]: r for r in con.execute("SELECT symbol, bid, ask, last_close FROM market")
+    }
+    quotes = overview.quotes(con)
+    assert [q.market for q in quotes] == ["BTC-EUR", "ETH-EUR"]
+    for q, name in zip(quotes, ("BTCEUR", "ETHEUR"), strict=True):
+        assert (q.bid, q.ask, q.last_close) == tuple(stored[name][1:])
+        assert q.ts == iso(NOW) and q.bid <= q.mid <= q.ask and q.spread_pct >= 0
+    assert overview.load(con, NOW, SHARES).quotes == quotes
+
+
+def test_quote_spread_is_relative_to_the_mid() -> None:
+    q = overview.Quote("BTC-EUR", iso(NOW), 99.0, 101.0, 100.0, "bitvavo")
+    assert q.mid == 100.0 and q.spread_pct == pytest.approx(2.0)
+    assert overview.Quote("X", iso(NOW), 0.0, 0.0, 0.0, "x").spread_pct == 0.0
+
+
 def test_liveness_of_an_empty_database_says_stopped(tmp_path: Path) -> None:
     path = tmp_path / "bot.db"
     open_db(path, agents=("trend",)).close()
@@ -275,3 +294,66 @@ def test_load_bundles_everything(con: sqlite3.Connection) -> None:
     assert len(view.depots) == 3 and len(view.series) == 3 and len(view.pulses) == 3
     assert len(view.decisions) == 6 and len(view.llm) == 2
     assert len(view.trades) == 6  # Buy & Hold 2 + two GPT depots x 2 markets
+
+
+# ------------------------------------------------------------------ service pulse (Spec 008 AK8)
+
+
+def _status(state: str = "running", **changes: object) -> ServiceStatus:
+    base = ServiceStatus(state, 42, iso(NOW - 600), iso(NOW), 60, 5, last_round_at=iso(NOW))
+    return base.but(**changes)
+
+
+@pytest.mark.parametrize(
+    ("state", "age", "expected"),
+    [
+        ("running", 0, overview.RUNNING),
+        ("running", 180, overview.RUNNING),
+        ("running", 181, overview.DELAYED),
+        ("running", 900, overview.DELAYED),
+        ("running", 901, overview.STOPPED),
+        ("degraded", 0, overview.DELAYED),
+        ("degraded", 901, overview.STOPPED),
+        ("starting", 0, overview.DELAYED),
+        ("stopping", 0, overview.STOPPED),
+        ("stopped", 0, overview.STOPPED),
+        ("stalled", 0, overview.STOPPED),
+    ],
+)
+def test_service_pulse_levels_at_their_boundaries(state: str, age: float, expected: str) -> None:
+    pulse = overview.service_pulse(_status(state), NOW + age)
+    assert (pulse.label, pulse.level, pulse.at) == ("Dienst", expected, iso(NOW))
+    assert pulse.age_seconds == pytest.approx(age)
+
+
+def test_service_pulse_without_a_status_file_says_no_service() -> None:
+    pulse = overview.service_pulse(None, NOW)
+    assert (pulse.level, pulse.at, pulse.note) == (overview.NO_SERVICE, None, "noch nie gestartet")
+
+
+def test_service_pulse_before_the_first_round_uses_the_last_update() -> None:
+    pulse = overview.service_pulse(_status("starting", last_round_at=None), NOW + 10)
+    assert pulse.at == iso(NOW) and pulse.note == "startet"
+
+
+def test_service_pulse_names_failures_and_configuration_problems() -> None:
+    one = overview.service_pulse(_status("degraded", failures=1), NOW)
+    many = overview.service_pulse(_status("degraded", failures=3, config_warning="x"), NOW)
+    assert one.note == "1 Runde mit Fehler"
+    assert many.note == "3 Runden mit Fehler · Einstellungen ungültig"
+
+
+def test_service_pulse_of_an_unreadable_file_says_stopped() -> None:
+    pulse = overview.service_pulse(None, NOW, problem="Statusdatei unlesbar (ValueError)")
+    assert (pulse.level, pulse.note) == (overview.STOPPED, "Statusdatei unlesbar (ValueError)")
+
+
+def test_service_pulse_comes_first_in_the_overview(con: sqlite3.Connection) -> None:
+    service = overview.service_pulse(_status(), NOW + 5)
+    view = overview.load(con, NOW + 5, SHARES, service=service)
+    assert [p.label for p in view.pulses] == [
+        "Dienst",
+        "Letzter Zyklus",
+        "Kurs BTC-EUR",
+        "Kurs ETH-EUR",
+    ]

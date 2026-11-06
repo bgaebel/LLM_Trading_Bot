@@ -1,6 +1,6 @@
 # Spec 008: Dienst – Paper-Runde jede Minute, sauberer Stopp, Health, Logging
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s008-dienst` · **Meilenstein:** M1 (Nr. 5)
 - **Erstellt:** 2026-11-06
 
@@ -85,12 +85,12 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
 - Verworfen: siehe ADR-0017 (Arena-Threads, HTTP-Health, Timer, Config nur beim Start).
 
 ## Plan
-- [ ] 1. ADR-0017, `service/schedule.py` + `paper_cycle`-Stopp-Abfrage + `ensure_portfolios` mit Tests (AK1, Teile AK3/AK5)
-- [ ] 2. `service/run.py` Grundschleife: Lock, DB, Runden, Fehlerbehandlung, Stall-Grenze, Config-Reload (AK2–AK4)
-- [ ] 3. Stopp per Signal mit Frist, Warten unterbrechbar (AK5)
-- [ ] 4. `notify.py`, `status.py`, `logs.py` mit Redaktion (AK6, AK7, AK9)
-- [ ] 5. CLI `run`, Lebenszeichen „Dienst“ in der Übersicht (AK2, AK8)
-- [ ] 6. `deploy/`-Units, Journal-Konfiguration, `scripts/check-units.sh` + CI-Schritt (AK10); Doku: README,
+- [x] 1. ADR-0017, `service/schedule.py` + `paper_cycle`-Stopp-Abfrage + `ensure_portfolios` mit Tests (AK1, Teile AK3/AK5)
+- [x] 2. `service/run.py` Grundschleife: Lock, DB, Runden, Fehlerbehandlung, Stall-Grenze, Config-Reload (AK2–AK4)
+- [x] 3. Stopp per Signal mit Frist, Warten unterbrechbar (AK5)
+- [x] 4. `notify.py`, `status.py`, `logs.py` mit Redaktion (AK6, AK7, AK9)
+- [x] 5. CLI `run`, Lebenszeichen „Dienst“ in der Übersicht (AK2, AK8)
+- [x] 6. `deploy/`-Units, Journal-Konfiguration, `scripts/check-units.sh` + CI-Schritt (AK10); Doku: README,
   ARCHITEKTUR, `docs/betrieb/server.md` (Abschnitt Dienst, Installation folgt Nr. 6), STAND; manuelle Prüfung AK11
 
 ## Risiken & offene Fragen
@@ -107,6 +107,27 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
 ---
 
 ## Verlauf
+- 2026-11-06: Schritte 2–4 in einem Commit, weil die Schleife Status, Watchdog und Logging direkt braucht.
+  Die Hauptschleife wartet in Scheiben von 1 s (Stopp unter Windows sonst bis zu 20 s verzögert; Frist ab
+  Bemerken ≤ 76 s). `open_db(check_same_thread=False)`, damit die Runde im Worker-Thread dieselbe Verbindung nutzt
+  (immer nur ein Thread). Stopp vor dem GPT-Schritt erscheint als Status `STOPPING`, zählt nicht als Fehler.
+  Key-Redaktion bewusst ohne Wortgrenze (lieber ein verstümmeltes Wort als ein Key im Log).
+  Hart-Exit bei Stall und überschrittener Stopp-Frist: Exit 4.
+- 2026-11-06: Probelauf lokal mit echten Bitvavo-Daten (`trend,breakout`): 3 Runden je um :05, 1,3–4,8 s, Status
+  korrekt (AK11 selbst bleibt beim Nutzer). Buy-&-Hold-Käufe bekommen eine eigene Logzeile.
+- 2026-11-06: Review (5 Prüfer, je Befund Gegenprüfung): 3 von 12 Befunden bestätigt und behoben – seltener
+  Deadlock, wenn der Signal-Handler `stop.set()` ausführt, während der Hauptthread in `stop.wait()` steckt (jetzt
+  `sleep` + `is_set`, Regressionstest im Unterprozess, Learning #signal); fehlender Test „Stopp während des
+  Wartens“ (AK5); ARCHITEKTUR nannte noch `/etc/llm-trading-bot/env`. Dazu Tests für GPT-Kosten in der Rundenzeile
+  (AK9) und READY erst nach geöffneter DB (AK6).
+- 2026-11-06: AK11-Test beim Nutzer: „Letzter Zyklus“ schien eingefroren. Ursache: Die Übersicht lud sich alle
+  60 s neu (Spec 007 AK9), also im Gleichtakt mit den 60-s-Runden – jedes Laden zeigte dasselbe Alter. Jetzt Neuladen
+  alle 15 s, Lebenszeichen mit Sekunden, die Kennzahl „Letzter Zyklus“ wird per Beschriftung statt Position gewählt
+  (seit dem Dienst-Lebenszeichen stand dort an Position 0 der Dienst).
+- 2026-11-06: Auf Wunsch des Nutzers (beim AK11-Test): Der Banner der Übersicht zeigt statt fester Hinweise die
+  gespeicherten Kurse (Mitte, Geld/Brief, Spread, Kerzenschluss, Stand) und jedes Depot mit Wert und Ergebnis. Er läuft
+  über das Neuladen hinweg an derselben Stelle weiter (Phasen-Klasse aus der Uhr, kein Skript), und die sich selbst
+  neu ladende Seite verzichtet auf die Einblend-Animation. Login- und Einstellungsseite behalten die festen Hinweise.
 
 ## Ergebnis
 - **Erreicht:** …

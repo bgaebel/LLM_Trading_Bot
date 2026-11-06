@@ -38,6 +38,7 @@ from llm_trading_bot.paper.execution import (
 from llm_trading_bot.paper.report import (
     CycleReport,
     Equity,
+    LlmOutcome,
     MarketResult,
     decision_result,
 )
@@ -98,8 +99,12 @@ def paper_cycle(
     costs: Costs,
     model: SignalModel | None = None,
     clock: Callable[[], float] = time.time,
+    stop_requested: Callable[[], bool] = lambda: False,
 ) -> CycleReport:
     """Run one cycle. Precondition: the caller holds the WriterLock of this database.
+
+    ``stop_requested`` is asked before the GPT step: while the service is stopping, no new paid
+    request is started, but the depots are still valued (Spec 008 AK5).
 
     Fails closed like the Arena's quant_cycle: without fresh quotes of both markets no decision
     is taken at all, so the bar stays open. A failing market or depot is reported and skipped;
@@ -142,7 +147,12 @@ def paper_cycle(
                     MarketResult(agent, symbol, error=f"{type(exc).__name__}: {exc}")
                 )
 
-    if config.llm is not None:
+    if config.llm is not None and stop_requested():
+        report.llm.extend(
+            LlmOutcome(a.name, a.model, "STOPPING", "service is stopping")
+            for a in config.llm.agents
+        )
+    elif config.llm is not None:
         if model is None:
             raise ValueError("GPT depots configured but no model client given")
 

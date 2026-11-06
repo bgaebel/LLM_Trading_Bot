@@ -4,6 +4,7 @@ import http.client
 import re
 import socket
 import threading
+import time
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,9 +12,12 @@ from urllib.parse import urlencode
 
 import pytest
 
+from llm_trading_bot.llm.due import iso
+from llm_trading_bot.service.status import ServiceStatus, write_status
 from llm_trading_bot.web.app import COOKIE, PRE_COOKIE, WebApp, make_server, parse_cookies
 from llm_trading_bot.web.auth import MAX_FAILURES
 from llm_trading_bot.web.credentials import load_env_file
+from llm_trading_bot.web.overview_page import REFRESH_SECONDS
 
 PASSWORD = "ein-langes-Passwort-2026"
 KEY = "sk-test-not-a-real-key-0000abcd"
@@ -475,6 +479,25 @@ def test_overview_shows_the_bot_database_next_to_the_secrets(running: Running) -
     assert "Noch keine Daten" not in page
 
 
+def test_overview_shows_the_service_pulse_from_the_status_file(running: Running) -> None:
+    _bot_db(running.data / "bot.db")
+    setup(running)
+    assert "kein Dienst" in running.browser.request("GET", "/")[2]
+    now = time.time()
+    status = ServiceStatus("running", 1, iso(now), iso(now), 60, 5, last_round_at=iso(now - 30))
+    write_status(running.data / "service-status.json", status)
+    page = running.browser.request("GET", "/")[2]
+    assert re.search(r'pulse-row ok"><i class="led"></i><span>Dienst</span><b>läuft</b>', page)
+
+
+def test_overview_survives_a_broken_status_file(running: Running) -> None:
+    _bot_db(running.data / "bot.db")
+    (running.data / "service-status.json").write_text("{", encoding="utf-8")
+    setup(running)
+    status, _, page = running.browser.request("GET", "/")
+    assert status == 200 and "Statusdatei unlesbar (JSONDecodeError)" in page
+
+
 def test_overview_reads_an_explicit_db_path(tmp_path: Path) -> None:
     db = tmp_path / "elsewhere" / "bot.db"
     _bot_db(db)
@@ -484,7 +507,8 @@ def test_overview_reads_an_explicit_db_path(tmp_path: Path) -> None:
 
 def test_overview_refreshes_itself_settings_page_does_not(running: Running) -> None:
     setup(running)
-    assert '<meta http-equiv="refresh" content="60">' in running.browser.request("GET", "/")[2]
+    page = running.browser.request("GET", "/")[2]
+    assert f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">' in page
     assert "http-equiv" not in running.browser.request("GET", "/settings")[2]
 
 

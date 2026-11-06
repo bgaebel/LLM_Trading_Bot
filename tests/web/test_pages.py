@@ -189,9 +189,10 @@ def test_reason_html_is_escaped() -> None:
 
 
 def test_overview_refreshes_but_settings_do_not() -> None:
-    from llm_trading_bot.web.overview_page import overview_page
+    from llm_trading_bot.web.overview_page import REFRESH_SECONDS, overview_page
 
-    assert '<meta http-equiv="refresh" content="60">' in overview_page(_view(), csrf="t")
+    page = overview_page(_view(), csrf="t")
+    assert f'<meta http-equiv="refresh" content="{REFRESH_SECONDS}">' in page
     assert "http-equiv" not in pages.settings_page({}, csrf="t")
     assert "http-equiv" not in pages.login_page(csrf="t")
 
@@ -242,3 +243,82 @@ def test_overview_shows_comparison_and_halt_flags() -> None:
     assert "+1.50 pp" in page and "Referenz" in page
     assert "+100.00 € (+1.00 %)" in page
     assert "0.0007 € von 0.50 €" in page
+
+
+def test_overview_reloads_several_times_per_service_round() -> None:
+    # At 60 s the reload ran in lockstep with the 60-s rounds: every load showed the same age.
+    from llm_trading_bot.service.schedule import PERIOD
+    from llm_trading_bot.web.overview_page import REFRESH_SECONDS
+
+    assert 0 < REFRESH_SECONDS <= PERIOD / 4
+
+
+def test_readouts_take_the_last_cycle_by_label_not_from_the_service_pulse() -> None:
+    from llm_trading_bot.web.overview import Pulse
+    from llm_trading_bot.web.overview_page import overview_page
+
+    service = Pulse("Dienst", "2026-11-06T11:00:00+00:00", 3_600.0, "steht", "beendet")
+    cycle = Pulse("Letzter Zyklus", "2026-11-06T12:00:00+00:00", 30.0)
+    page = overview_page(_view(pulses=[service, cycle]), csrf="t")
+    # Readouts are <small>label</small><b>value</b>; the pulse rows use <span>.
+    assert "<small>Letzter Zyklus</small><b>vor 30 s</b>" in page
+    # The bot readout follows the service, which knows more than the last equity point.
+    assert '<small>Bot</small><b class="off">steht</b>' in page
+
+
+def test_pulse_times_show_seconds() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+
+    page = overview_page(_view(), csrf="t")
+    assert "2026-11-06 12:00:00 UTC · vor 30 s" in page
+
+
+def _track(page: str) -> str:
+    start = page.index('<div class="ticker-track')
+    return page[start : page.index("</div>", start)]
+
+
+def test_overview_ticker_shows_quotes_and_depots_not_fixed_hints() -> None:
+    from llm_trading_bot.web.overview import Quote
+    from llm_trading_bot.web.overview_page import NBSP as N
+    from llm_trading_bot.web.overview_page import overview_page
+
+    btc = Quote("BTC-EUR", "2026-11-06T12:00:05+00:00", 60_000.0, 60_050.0, 60_010.0, "bitvavo")
+    track = _track(overview_page(_view(quotes=[btc]), csrf="t"))
+    assert f"<b>BTC-EUR</b>60{N}025.00 €" in track
+    assert f"<b>BTC Geld / Brief</b>60{N}000.00 / 60{N}050.00" in track
+    assert "<b>BTC Spread</b>0.083 %" in track and f"<b>BTC Kerzenschluss</b>60{N}010.00 €" in track
+    assert "<b>Kurse</b>2026-11-06 12:00:05 UTC · bitvavo" in track
+    assert f"<b>gpt-luna</b>10{N}100.00 € · +1.00 %" in track
+    assert f"<b>Buy &amp; Hold</b>9{N}950.00 € · -0.50 %" in track
+    assert "Fail closed" not in track
+
+
+def test_ticker_without_data_keeps_the_fixed_hints() -> None:
+    from llm_trading_bot.web.overview_page import overview_page, ticker
+
+    assert ticker(_view(depots=[], quotes=[])) == list(pages.TICKER)
+    assert "Fail closed" in _track(overview_page(None, csrf="t", problem="x"))
+
+
+def test_ticker_continues_across_reloads_from_the_wall_clock() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+    from llm_trading_bot.web.style import CSS, TICKER_SECONDS
+
+    assert 'class="ticker-track tp-5"' in overview_page(
+        _view(), csrf="t", now=TICKER_SECONDS * 7 + 5.9
+    )
+    assert 'class="ticker-track"' in overview_page(_view(), csrf="t")
+    for n in (0, TICKER_SECONDS - 1):
+        assert f".ticker-track.tp-{n} {{ animation-delay: -{n}s; }}" in CSS
+    assert f".ticker-track.tp-{TICKER_SECONDS} " not in CSS
+    assert f"animation: ticker {TICKER_SECONDS}s linear infinite" in CSS
+
+
+def test_only_the_reloading_overview_drops_its_entrance_animation() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+    from llm_trading_bot.web.style import CSS
+
+    assert '<body class="live">' in overview_page(_view(), csrf="t")
+    assert '<body class="live">' not in pages.settings_page({}, csrf="t")
+    assert ".live .panel, .live .readout, .live .msg { animation: none; }" in CSS

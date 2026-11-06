@@ -173,14 +173,20 @@ def check_schema(con: sqlite3.Connection) -> None:
             raise SchemaError(f"{table}: unique key {key} missing")
 
 
-def open_db(path: Path, *, agents: Iterable[str]) -> sqlite3.Connection:
+def open_db(
+    path: Path, *, agents: Iterable[str], check_same_thread: bool = True
+) -> sqlite3.Connection:
     """Open (or create) the bot database and make sure every agent has a portfolio.
 
     Precondition: the caller holds the WriterLock for ``path`` (single writer, CLAUDE.md).
+    ``check_same_thread=False`` lets the service hand the connection to its round thread; the
+    caller makes sure only one thread uses it at a time.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     # Autocommit mode: every write goes through write_tx, so there are no implicit transactions.
-    con = sqlite3.connect(path, timeout=20, isolation_level=None)
+    con = sqlite3.connect(
+        path, timeout=20, isolation_level=None, check_same_thread=check_same_thread
+    )
     con.row_factory = sqlite3.Row
     try:
         con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
@@ -192,17 +198,30 @@ def open_db(path: Path, *, agents: Iterable[str]) -> sqlite3.Connection:
             )
         check_schema(con)
         con.execute("PRAGMA journal_mode=WAL")
-        with write_tx(con):
-            for agent in agents:
-                # OR IGNORE: reopening never resets an existing portfolio (CLAUDE.md: history).
-                con.execute(
-                    "INSERT OR IGNORE INTO portfolios (agent,cash,peak) VALUES (?,?,?)",
-                    (agent, START_CASH, START_CASH),
-                )
+        ensure_portfolios(con, agents)
     except BaseException:
         con.close()
         raise
     return con
+
+
+def ensure_portfolios(con: sqlite3.Connection, agents: Iterable[str]) -> list[str]:
+    """Give every agent without a portfolio its start cash; returns the agents that were new.
+
+    The service calls this whenever the chosen depots change (Spec 008 AK3). A depot that is no
+    longer chosen keeps its row, history and holdings.
+    """
+    created = []
+    with write_tx(con):
+        for agent in agents:
+            # OR IGNORE: reopening never resets an existing portfolio (CLAUDE.md: history).
+            cur = con.execute(
+                "INSERT OR IGNORE INTO portfolios (agent,cash,peak) VALUES (?,?,?)",
+                (agent, START_CASH, START_CASH),
+            )
+            if cur.rowcount:
+                created.append(agent)
+    return created
 
 
 def balance(con: sqlite3.Connection, agent: str) -> dict[str, Any]:

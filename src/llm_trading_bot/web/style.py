@@ -105,7 +105,8 @@ header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px
 .ticker { overflow: hidden; border-bottom: 1px solid var(--line);
   background: rgba(0, 0, 0, 0.82); font: 11px/1 var(--mono); letter-spacing: 0.14em;
   text-transform: uppercase; color: var(--dim); }
-.ticker-track { display: inline-flex; white-space: nowrap; animation: ticker 48s linear infinite; }
+.ticker-track { display: inline-flex; white-space: nowrap;
+  animation: ticker TICKER_SECONDSs linear infinite; }
 .ticker-track span { padding: 9px 22px; border-right: 1px solid var(--line); }
 .ticker-track b { color: var(--cyan); font-weight: 600; margin-right: 8px; }
 .ticker-track span:nth-child(3n) b { color: var(--magenta); }
@@ -416,9 +417,23 @@ table.data .reason { display: block; min-width: 260px; max-width: 520px; white-s
   .status .chip.net { display: none; }
   .readouts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+/* A page that reloads itself (overview): no entrance animation, or it twitches on every reload. */
+.live .panel, .live .readout, .live .msg { animation: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 """
 
-CSS = _BASE + chart.css()
+TICKER_SECONDS = 48
+"""One loop of the ticker (half the track, which holds its items twice)."""
+
+
+def ticker_css() -> str:
+    """One class per second of the loop: a reloading page continues the ticker where the last
+    load left it instead of jumping back to the start (no script, no style attribute - CSP)."""
+    return "".join(
+        f".ticker-track.tp-{n} {{ animation-delay: -{n}s; }}\n" for n in range(TICKER_SECONDS)
+    )
+
+
+CSS = _BASE.replace("TICKER_SECONDS", str(TICKER_SECONDS)) + ticker_css() + chart.css()

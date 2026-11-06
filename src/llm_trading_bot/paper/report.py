@@ -31,7 +31,8 @@ class LlmOutcome:
     agent: str
     model: str
     status: str
-    """ASKED, NOT_DUE, HOURLY_LIMIT, BUDGET_BLOCKED, NO_QUOTES, NO_MARKETS, HALTED or ERROR."""
+    """ASKED, NOT_DUE, HOURLY_LIMIT, BUDGET_BLOCKED, NO_QUOTES, NO_MARKETS, HALTED,
+    STOPPING (not asked because the service is stopping) or ERROR."""
     detail: str = ""
     attempt_id: int | None = None
     usage: Usage | None = None

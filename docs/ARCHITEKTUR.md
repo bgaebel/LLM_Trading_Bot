@@ -15,6 +15,9 @@ Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`. Weboberfläche (`we
 (Depots, Equity-Verlauf, Lebenszeichen, Entscheidungen, GPT-Kosten, Trades; liest die Bot-DB nur lesend, ADR-0016)
 und Eingabe von OpenAI-Key und Einstellungen per `uv run trading-bot web --data-dir <dir> [--db <pfad>]`, nur auf
 127.0.0.1 (ADR-0015).
+Dauerbetrieb (`service`, Spec 008, ADR-0017): `uv run trading-bot run --db <pfad>` führt jede Minute (:05) einen
+Zyklus aus, liest die Einstellungen jede Runde neu, meldet sich bei systemd (Watchdog) und schreibt
+`service-status.json` neben der DB; die Übersicht zeigt daraus das Lebenszeichen „Dienst“. Units in `deploy/`.
 Diagnose per `uv run trading-bot market` und `uv run trading-bot signals`.
 **Zielbild M1** (Bausteine werden schrittweise per Spec aus der Arena übernommen, ADR-0003):
 
@@ -41,7 +44,8 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | Pfad | Verantwortung |
 |---|---|
 | `src/llm_trading_bot/` | Anwendungspaket |
-| `src/llm_trading_bot/cli.py` | Einstiegspunkt `main()` (`uv run trading-bot [market|signals|paper-cycle]`) |
+| `src/llm_trading_bot/cli.py` | Einstiegspunkt `main()` (`uv run trading-bot [market|signals|paper-cycle|run|web]`) |
+| `src/llm_trading_bot/service/` | Dienst: Takt (`schedule`), Hauptschleife (`run`), systemd-Meldungen (`notify`), Statusdatei (`status`), Logging mit Key-Redaktion (`logs`) |
 | `src/llm_trading_bot/core.py` | Reine Logik ohne I/O (aktuell: Modusauflösung) |
 | `src/llm_trading_bot/market/` | Marktdaten: Modelle, HTTP-Transport, Bitvavo-Client, Snapshot-Prüfung |
 | `src/llm_trading_bot/strategy/` | Indikatoren, klassische Strategien, LLM-Kontext (reine Logik, ADR-0007) |
@@ -50,8 +54,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | `src/llm_trading_bot/llm/` | GPT-Depots: Prompt v1 und Antwortprüfung (`contract`), Takt (`due`), Budget (`budget`), Konfiguration (`agents`), OpenAI-Adapter (`openai_client`), Ablauf je Depot (`cycle`) |
 | `tools/golden/` | Generator der Golden-Fixtures aus dem Arena-Code; `mutation_check.py` prüft, dass die Tests Änderungen an Schwellen/Gewichten erkennen (nur Entwicklung) |
 | `tests/` | pytest-Tests; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests der Strategien; `golden_execution_cases.py`/`golden_execution_runner.py` + `paper/fixtures/` Golden-Tests der Ausführung; `llm_fakes.py` Fake-Modell; Marker `net` = echte API (standardmäßig aus) |
-| `deploy/` | Server-Skripte; `setup-server.sh` härtet einen frischen Server (Spec 002) |
-| `.github/workflows/` | CI (ruff, mypy, pytest, shellcheck) und Doku-Prüfung |
+| `deploy/` | Server-Dateien: `setup-server.sh` härtet einen frischen Server (Spec 002); systemd-Units `llm-trading-bot.service` (Dienst), `llm-trading-bot-web.service` (Weboberfläche) und `journald@llm-trading-bot.conf` mit Platzhaltern (Spec 008, Installation in Nr. 6) |
+| `scripts/` | `docs-check.sh` (Doku-Hygiene), `check-units.sh` (Units mit Testwerten per `systemd-analyze verify`), `github-labels.sh` |
+| `.github/workflows/` | CI (ruff, mypy, pytest, shellcheck, systemd-Units) und Doku-Prüfung |
 
 ## Module & Schnittstellen
 ### core
@@ -90,12 +95,14 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 ### paper
 - **Zweck:** Signale in virtuelle Orders umsetzen und alles dauerhaft speichern. Kein Börsenzugang (ADR-0004).
 - **Schnittstelle:**
-  - `db`: `open_db(path, agents=)` (legt Schema an oder prüft es, WAL, `busy_timeout`), `check_schema`,
-    `SchemaError`, `write_tx(con)` (eine `BEGIN IMMEDIATE`-Transaktion), `balance`, `START_CASH = 10_000`
+  - `db`: `open_db(path, agents=, check_same_thread=)` (legt Schema an oder prüft es, WAL, `busy_timeout`),
+    `ensure_portfolios(con, agents)` (Startkapital nur für neue Depots), `check_schema`, `SchemaError`,
+    `write_tx(con)` (eine `BEGIN IMMEDIATE`-Transaktion), `balance`, `START_CASH = 10_000`
   - `lock`: `WriterLock(db_path)` (Betriebssystem-Sperre neben der DB), `WriterLockBusy`
   - `execution`: `Costs` (Gebühr/Slippage, `from_env`), `record_decision`, `trade_to_target`, `mark`,
     `initialize_buyhold`, `record_quotes`, `latest_quotes`, `value`, `current_weight`
-  - `cycle`: `paper_cycle(con, client, config, costs=, model=, clock=) -> CycleReport`, `STRATEGY_TIMEFRAME`
+  - `cycle`: `paper_cycle(con, client, config, costs=, model=, clock=, stop_requested=) -> CycleReport`
+    (bei Stopp-Wunsch keine GPT-Anfrage, Status `STOPPING`; bewertet wird trotzdem), `STRATEGY_TIMEFRAME`
   - `report`: `CycleReport`, `MarketResult`, `LlmOutcome`, `Equity`
 - **Invarianten:** Schema `user_version = 2` (v2: `llm_calls`); andere Versionen oder Formen werden abgelehnt, nie
   migriert (ADR-0012). Genau ein Schreiber (`WriterLock`). Eine Entscheidung je (Agent, Markt, Bar), mit Trade und Depot in
@@ -127,6 +134,23 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   Signalwechsel-Auslöser vergleicht die Referenzsignale aus Marktsicht (Gewicht 0, `llm_calls.trigger_signals`). Fehler werden nur mit Typnamen
   gespeichert/ausgegeben; der API-Key erscheint nirgends.
 
+### service
+- **Zweck:** den Paper-Zyklus dauerhaft betreiben (ADR-0017): ein Prozess, ein Schreiber, eine Runde pro Minute.
+- **Schnittstelle:**
+  - `schedule`: `next_slot(now, after=)` (erster Termin `k·60 + 5` ≥ now und > after), `skipped(previous, slot)`
+  - `run`: `Service(db, client, env=, secrets=, stop=, log=, notifier=, timer=, model_factory=, cycle=, hard_exit=)`
+    mit `run() -> int` (0 gestoppt, 1 Konfiguration/Schema, 3 andere Schreibsperre, 4 Runde hängt bzw. Stopp-Frist
+    überschritten); `install_stop_signals(stop)`; `STALL_SECONDS = 300`, `STOP_SECONDS = 75`, `PING_SECONDS = 20`
+  - `notify`: `Notifier.from_env(env)` mit `ready`, `watchdog`, `status`, `stopping` (Datagramm an `NOTIFY_SOCKET`)
+  - `status`: `ServiceStatus` (Zustand `starting`/`running`/`degraded`/`stalled`/`stopping`/`stopped`, letzte Runde,
+    Fehler in Folge, nächster Termin, Konfigurationswarnung), `write_status`/`read_status`, `status_path(db)`
+  - `logs`: `setup_logging(level, stream, journal=)`, `redact(text)`
+- **Invarianten:** `WriterLock` die ganze Laufzeit; die Runde läuft in einem Worker-Thread, der Hauptthread wartet in
+  1-s-Scheiben, pingt den Watchdog, bemerkt den Stopp und erzwingt Stall-Grenze und Stopp-Frist (dann `os._exit`,
+  SQLite rollt offene Transaktionen zurück). Kein Nachholen verpasster Termine. Ungültige Einstellungen während des
+  Betriebs: letzte gültige Konfiguration bleibt, eine Warnung je Fehlerbild. Neuer Key → neuer Client. Keys
+  erscheinen weder im Log noch in der Statusdatei.
+
 ### web
 - **Zweck:** Betreiber loggt sich ein und pflegt OpenAI-Key und Einstellungen; `paper-cycle` liest sie (ADR-0015).
 - **Schnittstelle:**
@@ -151,14 +175,16 @@ Snapshot: je Depot frische Quotes? fällig? (stündlich, Bewegung ≥ 1,8 % oder
 Abstand, ≤ 4/h) → Reservierung; dann alle Anfragen gleichzeitig (Threads, nur Netz) → Quotes einmal neu holen → je
 Depot Abrechnung → Prüfung → Entscheidung je Markt → Equity-Punkt je Depot. Ein Fehler eines Depots blockiert die
 anderen nicht.
-Worker-Schleife und Takt folgen in M1 Nr. 5. Vorgabe aus der Arena: Marktabfrage, Signal- und LLM-Worker laufen getrennt; ein
-langsamer LLM-Aufruf blockiert die Marktabfrage nicht; ein Fehler bei BTC blockiert ETH nicht.
+Der Dienst (`service.run`) startet diesen Zyklus jede Minute um :05 in einem Worker-Thread; dauert er länger, folgt
+die nächste Runde am nächsten freien Termin. Anders als in der Arena (getrennte Kurs-, Signal- und LLM-Worker) läuft
+alles in einer Runde (ADR-0017); ein schneller Kurs-/Risiko-Worker folgt mit M1 Nr. 4. Die Weboberfläche liest
+parallel nur lesend (ADR-0016) und dazu `service-status.json`.
 
 ## Externe Schnittstellen
 | Schnittstelle | Protokoll / Format | Spezifikation |
 |---|---|---|
 | Bitvavo Marktdaten | REST/JSON, öffentlich | https://docs.bitvavo.com/ |
-| OpenAI Responses API | REST/JSON über Paket `openai`; `OPENAI_API_KEY` nur in der Umgebung (Server: `/etc/llm-trading-bot/env`) | https://developers.openai.com/api/docs |
+| OpenAI Responses API | REST/JSON über Paket `openai`; `OPENAI_API_KEY` aus der Umgebung oder `secrets.env` (Server: `__DATA_DIR__/secrets.env`, 600, per Weboberfläche gepflegt; Umgebung gewinnt) | https://developers.openai.com/api/docs |
 
 ## Build, Konfiguration & Deployment
 Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariablen: `TRADING_MODE`; `BOT_AGENTS`
@@ -166,9 +192,12 @@ Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariab
 [0, 0,05]; `OPENAI_API_KEY`; `LLM_EFFORT` (`low`); `LLM_DAILY_BUDGET_EUR` (3) und `LLM_DAILY_BUDGET_EUR_GPT_LUNA`/
 `_GPT_SOL` (0,50/2,50); `LLM_MIN_INTERVAL_SECONDS` (3600), `LLM_EVENT_COOLDOWN_SECONDS` (600),
 `LLM_EVENT_MOVE_THRESHOLD` (0,018), `LLM_MAX_CALLS_PER_HOUR` (4); optional `OPENAI_MODEL_<DEPOT>` mit
-`LLM_PRICE_IN_EUR_<DEPOT>`/`LLM_PRICE_OUT_EUR_<DEPOT>`. Auf dem Server in `/etc/llm-trading-bot/env` (root, 600). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.
-Server ist gehärtet (Spec 002, Ablauf und Prüfbefehle: `docs/betrieb/server.md`); das Deployment des Bots
-(Unit, Verzeichnisse, Backup, Update/Rollback) folgt in M1 Nr. 6.
+`LLM_PRICE_IN_EUR_<DEPOT>`/`LLM_PRICE_OUT_EUR_<DEPOT>`. Auf dem Server in `__DATA_DIR__/secrets.env` (600, Dienstbenutzer, geschrieben von der Weboberfläche, ADR-0015);
+der Dienst liest sie jede Runde neu, Umgebungswerte gewinnen (ADR-0017). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.
+Dazu `LOG_LEVEL` (Standard `INFO`) für `run`. Server ist gehärtet (Spec 002, Ablauf und Prüfbefehle:
+`docs/betrieb/server.md`); die systemd-Dateien liegen geprüft in `deploy/` (Spec 008: `Type=notify`,
+`WatchdogSec=60`, `TimeoutStopSec=90`, `Restart=on-failure`, Härtung, Journal ≤ 200 MB / 14 Tage). Installation,
+Verzeichnisse, Backup und Update/Rollback folgen in M1 Nr. 6.
 
 ## Teststrategie
 - **Host-Unit-Tests:** pytest, Logik ohne I/O; Netzwerk über schmale Adapter, in Tests ersetzt.

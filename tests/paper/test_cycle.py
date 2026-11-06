@@ -142,3 +142,51 @@ def test_cycle_stores_the_newest_closed_minute_per_market(con: sqlite3.Connectio
     rows = con.execute("SELECT symbol, bar_ts FROM market ORDER BY symbol").fetchall()
     last_minute = (NOW // 60 - 1) * 60
     assert [(r[0], r[1]) for r in rows] == [("BTCEUR", last_minute), ("ETHEUR", last_minute)]
+
+
+# ------------------------------------------------------------------ Spec 008 AK5: stopping
+
+
+def test_stop_request_skips_gpt_but_still_values_the_depots(tmp_path: Path) -> None:
+    from llm_fakes import KEY, FakeModel
+    from llm_trading_bot.llm.agents import load_config
+
+    con = open_db(tmp_path / "bot.db", agents=("gpt-luna", "gpt-sol", BUYHOLD))
+    try:
+        model = FakeModel()
+        config = load_config({"OPENAI_API_KEY": KEY})
+        report = paper_cycle(
+            con,
+            ScenarioClient(),
+            config,
+            costs=Costs(),
+            model=model,
+            clock=lambda: NOW,
+            stop_requested=lambda: True,
+        )
+        assert model.calls == []
+        assert [(o.agent, o.status) for o in report.llm] == [
+            ("gpt-luna", "STOPPING"),
+            ("gpt-sol", "STOPPING"),
+        ]
+        assert con.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 0
+        assert [e.agent for e in report.equity] == ["gpt-luna", "gpt-sol", BUYHOLD]
+        assert report.complete  # stopping is not an error
+    finally:
+        con.close()
+
+
+def test_stop_request_is_not_asked_without_gpt_depots(
+    con: sqlite3.Connection,
+) -> None:
+    asked: list[int] = []
+
+    def stop() -> bool:
+        asked.append(counts(con)["decisions"])
+        return True
+
+    report = paper_cycle(
+        con, ScenarioClient(), TREND, costs=Costs(), clock=lambda: NOW, stop_requested=stop
+    )
+    # Classic depots only: there is no GPT step, so nothing to skip.
+    assert asked == [] and report.complete and len(report.equity) == 2

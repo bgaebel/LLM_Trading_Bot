@@ -41,6 +41,10 @@ jobs:
           for f in deploy/*.sh scripts/*.sh; do bash -n "$f"; done
           uv run shellcheck deploy/*.sh scripts/*.sh
 
+      - name: systemd units
+        # Spec 008 AK10: the units in deploy/ with test values, verified by systemd itself.
+        run: bash scripts/check-units.sh
+
       - name: Type check
         run: uv run mypy src tests tools
 

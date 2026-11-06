@@ -1,0 +1,50 @@
+# Origin: LLM-Trading-Arena@7563724 deploy unit and journald options (adapted)
+# The paper service (Spec 008, ADR-0017): one round per minute, systemd watchdog, clean stop.
+# Installed with roadmap Nr. 6: replace __SERVICE_USER__, __APP_DIR__ and __DATA_DIR__, copy to
+# /etc/systemd/system/. Real user names and paths never go into this file: the repo is public.
+[Unit]
+Description=LLM Trading Bot - paper service (one round per minute)
+Wants=network-online.target
+After=network-online.target time-sync.target
+
+[Service]
+# READY=1 once the database is open, WATCHDOG=1 at least every 20 s from the main loop.
+Type=notify
+NotifyAccess=main
+User=__SERVICE_USER__
+WorkingDirectory=__DATA_DIR__
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__APP_DIR__/.venv/bin/trading-bot run --db __DATA_DIR__/bot.db
+# Exit 1 (settings/schema), 3 (another writer), 4 (round hung) and a missed watchdog all restart;
+# a fixed setting in the web UI is then picked up without a manual restart.
+Restart=on-failure
+RestartSec=15
+WatchdogSec=60
+TimeoutStartSec=60
+# The service gives a running round 75 s after SIGTERM, then exits hard (ADR-0017).
+TimeoutStopSec=90
+LogNamespace=llm-trading-bot
+
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=__DATA_DIR__
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from llm_trading_bot.paper.db import COLUMNS, SCHEMA_VERSION, SchemaError, open_db, write_tx
+from llm_trading_bot.paper.db import (
+    COLUMNS,
+    SCHEMA_VERSION,
+    SchemaError,
+    ensure_portfolios,
+    open_db,
+    write_tx,
+)
 
 AGENTS = ("trend", "buyhold")
 
@@ -128,5 +135,21 @@ def test_write_tx_keeps_the_original_error_when_sqlite_already_rolled_back(tmp_p
             con.execute("ROLLBACK")  # what SQLite does by itself on e.g. SQLITE_FULL
             raise RuntimeError("original")
         assert not con.in_transaction
+    finally:
+        con.close()
+
+
+def test_ensure_portfolios_adds_new_depots_with_start_cash_only(tmp_path: Path) -> None:
+    con = open_db(tmp_path / "bot.db", agents=AGENTS)
+    try:
+        con.execute("UPDATE portfolios SET cash=1.5, btc=0.1 WHERE agent='trend'")
+        assert ensure_portfolios(con, ("trend", "gpt-luna")) == ["gpt-luna"]
+        rows = {r["agent"]: (r["cash"], r["btc"]) for r in con.execute("SELECT * FROM portfolios")}
+        assert rows == {
+            "trend": (1.5, 0.1),
+            "buyhold": (10_000.0, 0.0),
+            "gpt-luna": (10_000.0, 0.0),
+        }
+        assert ensure_portfolios(con, ("gpt-luna",)) == []
     finally:
         con.close()
