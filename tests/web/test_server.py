@@ -240,3 +240,12 @@ def test_restart_keeps_password_but_ends_sessions(tmp_path: Path) -> None:
     first.passwords.set(PASSWORD)
     second = WebApp(tmp_path)
     assert second.setup_code is None and second.passwords.verify(PASSWORD)
+
+
+def test_client_hanging_up_does_not_break_the_server(running: Running) -> None:
+    import socket
+
+    sock = socket.create_connection(("127.0.0.1", running.browser.port), timeout=5)
+    sock.sendall(f"GET /setup HTTP/1.1\r\nHost: 127.0.0.1:{running.browser.port}\r\n\r\n".encode())
+    sock.close()  # hang up before reading the answer
+    assert running.browser.request("GET", "/setup")[0] == 200

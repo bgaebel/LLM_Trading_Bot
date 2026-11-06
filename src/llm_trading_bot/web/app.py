@@ -199,7 +199,11 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # The browser gave up on this request (reload, closed tab): nothing to do.
+                return
 
         def _dispatch(self, method: str) -> None:
             # A foreign Host header means DNS rebinding or a misrouted request: refuse it.
