@@ -18,3 +18,4 @@
 | [0011](0011-gpt-gemeinsame-anfrage.md) | Eine GPT-Anfrage für BTC+ETH mit Prompt v1, 4/h + ≤ 4 Ereignis/h, Effort low; Budget je Agent in der DB (löst 0009 ab) | abgelöst durch [0013](0013-gpt-abfragen-nur-bei-bedarf.md) |
 | [0012](0012-luna-haupt-sol-gegenprobe.md) | Zwei GPT-Depots: gpt-6-luna Haupt-Trader, gpt-6.1-sol Gegenprobe; Anteile 0,50 / 2,50 € von 3 € (löst 0010 ab) | angenommen |
 | [0013](0013-gpt-abfragen-nur-bei-bedarf.md) | GPT nur bei Bedarf: stündlich, bei ≥ 1,8 % Bewegung oder Wechsel eines Referenzsignals, max. 4/h; sonst wie 0011 (löst 0011 ab) | angenommen |
+| [0014](0014-weboberflaeche-zugangsdaten.md) | Weboberfläche für Zugangsdaten nur auf 127.0.0.1, Passwort-Login mit Einrichtungscode, secrets.env (600) außerhalb des Repos | angenommen |
