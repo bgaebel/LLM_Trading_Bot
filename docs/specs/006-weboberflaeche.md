@@ -59,7 +59,7 @@ Paket `src/llm_trading_bot/web/`:
 Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-0014).
 
 ## Plan
-- [ ] 1. `auth.py` + Tests (AK2, AK3)
+- [x] 1. `auth.py` + Tests (AK2, AK3)
 - [ ] 2. `secrets.py` + Tests (AK5)
 - [ ] 3. `app.py` + `web`-Befehl + Server-Tests (AK1–AK6, AK8)
 - [ ] 4. `paper-cycle --secrets` (AK7)
