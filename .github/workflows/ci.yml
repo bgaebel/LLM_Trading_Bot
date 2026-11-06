@@ -42,7 +42,7 @@ jobs:
           uv run shellcheck deploy/*.sh scripts/*.sh
 
       - name: Type check
-        run: uv run mypy src
+        run: uv run mypy src tests tools
 
       - name: Test
         # Tests marked `net` hit the real Bitvavo API and stay out of CI.

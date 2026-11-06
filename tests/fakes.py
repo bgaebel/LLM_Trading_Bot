@@ -1,6 +1,7 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/tests/test_reporting_recovery.py (adapted)
 """Test doubles for the market-data transport and clocks."""
 
+import re
 from collections.abc import Callable
 
 from llm_trading_bot.market.http import HTTPFailure
@@ -38,3 +39,25 @@ VALID_BOOK: list[dict[str, str]] = [
     {"market": "ETH-EUR", "bid": "3200", "ask": "3200.2"},
     {"market": "FOO-EUR", "bid": "10", "ask": "11"},
 ]
+
+
+def bitvavo_handler(
+    now: int, *, eth_candles_fail: bool = False, quotes_fail: bool = False
+) -> Callable[[str], object]:
+    """Answers like Bitvavo: newest candle first, millisecond stamps, string values."""
+    minutes = {"1m": 1, "15m": 15, "1h": 60, "4h": 240}
+
+    def handler(url: str) -> object:
+        if url.endswith("/ticker/book"):
+            if quotes_fail:
+                raise HTTPFailure(503)
+            return VALID_BOOK
+        if eth_candles_fail and "/ETH-EUR/" in url:
+            raise HTTPFailure(500)
+        match = re.search(r"interval=(\w+)", url)
+        assert match, url
+        step = minutes[match.group(1)] * 60
+        last = (now // step - 1) * step
+        return [[(last - i * step) * 1000, "100", "101", "99", "100", "1"] for i in range(200)]
+
+    return handler

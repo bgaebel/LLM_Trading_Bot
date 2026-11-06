@@ -32,6 +32,12 @@
 - **Ursache:** Nicht abschließend geklärt; das Verzeichnis `cpython-3.13.18-…` existiert, der Link `cpython-3.13-…` wird nicht gültig angelegt (Aufruf aus Git Bash in der Claude-Sandbox).
 - **Lösung / Regel:** System-Python 3.12 nutzen (`.python-version` = 3.12, ADR-0002). Nicht erneut verbiegen, um 3.13 zu erzwingen.
 
+### uv-Neuinstall scheitert mit „os error 32" – venv danach ohne Paket #uv #windows
+*2026-11-06 · Quelle: Spec 003*
+- **Symptom:** `uv run` bricht beim Neubau des eigenen Pakets ab („Datei wird von einem anderen Prozess verwendet", os error 32); danach `ModuleNotFoundError: llm_trading_bot` für alle Tests.
+- **Ursache:** Kurzzeitige Dateisperre in `.venv` (vermutlich Virenscanner/Indexer); uv hat die alte Installation schon entfernt (`.pth` weg, `dist-info` noch da).
+- **Lösung / Regel:** Einfach `uv sync` erneut ausführen – repariert die venv. Nicht mit `--no-sync` weiterarbeiten, sonst laufen Tests gegen eine kaputte Umgebung.
+
 ### .venv im Dropbox-Ordner synchronisiert #uv #dropbox #windows
 *2026-11-05 · Quelle: Preset python*
 - **Symptom:** Dropbox lädt tausende Dateien hoch, `uv sync` scheitert mit „Zugriff verweigert", kaputte venv auf dem Zweitgerät.
@@ -64,6 +70,12 @@
 - **Ursache:** `open()`/`read_text()` ohne `encoding` nutzt unter Windows cp1252, auf dem Server UTF-8.
 - **Lösung / Regel:** Immer `encoding="utf-8"` angeben (auch bei `subprocess.run(..., text=True)`).
 
+### Umlaute in der Konsolenausgabe kaputt unter Windows #windows #encoding
+*2026-11-06 · Quelle: Spec 003*
+- **Symptom:** `uv run trading-bot signals` zeigt „Abw�rtstrend" statt „Abwärtstrend"; Tests mit `io.StringIO` sind grün.
+- **Ursache:** `sys.stdout` nutzt unter Windows die Konsolen-Codepage (cp1252), nicht UTF-8; die Strategie-Begründungen der Arena sind deutsch.
+- **Lösung / Regel:** In `main()` `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` (nur wenn `io.TextIOWrapper`). Nicht `PYTHONUTF8` global setzen – das verdeckt Datei-Encoding-Fehler (siehe oben).
+
 ### Tests grün unter Windows, rot in der Linux-CI #windows #pfade #ci
 *2026-11-05 · Quelle: Preset python*
 - **Symptom:** Datei/Modul „nicht gefunden" nur in CI bzw. auf dem Server.
@@ -71,6 +83,12 @@
 - **Lösung / Regel:** `pathlib.Path`, Dateinamen exakt schreiben, Testdaten über `tmp_path`.
 
 ## Prozess & Werkzeuge
+
+### Golden-Fixtures beweisen Gleichheit nur mit Grenzfällen #test #strategie
+*2026-11-06 · Quelle: Spec 003 (Prüfer-Blocker)*
+- **Symptom:** Alle Golden-Tests grün, jeder BUY/SELL/HOLD-Zweig abgedeckt – trotzdem blieben 23 von 44 Schwellen-/Gewichtsänderungen unentdeckt.
+- **Ursache:** Zufallsszenarien treffen die Ergebnisse, aber nicht die Werte nahe den Schwellen (ADX nur in Clustern weit weg von 18/19/20/24); „Zweig erreicht" ≠ „Bedingung geprüft".
+- **Lösung / Regel:** Je Bedingung Eingaben knapp unter/auf/über der Schwelle erzeugen, Erwartung aus dem Original berechnen; mit einem Mutationstest (`tools/golden/mutation_check.py`) nachweisen, dass Änderungen auffallen. Überlebende nur akzeptieren, wenn ihre Äquivalenz begründet ist.
 
 ### Argumente mit Leerzeichen über ssh zerfallen #ssh #deploy
 *2026-11-05 · Quelle: Spec 002*

@@ -15,7 +15,7 @@ Stack: Python 3.12 / uv / pytest / ruff / mypy (strict) · Ziel: Hetzner Cloud C
 |---|---|
 | Build | `uv sync` |
 | Test (Host) | `uv run pytest` |
-| Lint/Format | `uv run ruff check . && uv run ruff format --check . && uv run mypy src && uv run shellcheck deploy/*.sh scripts/*.sh` (Fix: `uv run ruff check --fix . && uv run ruff format .`) |
+| Lint/Format | `uv run ruff check . && uv run ruff format --check . && uv run mypy src tests tools && uv run shellcheck deploy/*.sh scripts/*.sh` (Fix: `uv run ruff check --fix . && uv run ruff format .`) |
 | Run (lokal) | `uv run trading-bot` (Dienst läuft später endlos → nur mit Timeout/im Hintergrund) |
 | Deploy | – (folgt in M1 Nr. 6; nie ohne Zustimmung) |
 | Logs (Server) | – (geplant `journalctl -u <unit>`; `-f` nur mit Timeout) |
