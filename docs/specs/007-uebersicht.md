@@ -47,7 +47,7 @@ was zuletzt entschieden wurde und warum, was GPT heute gekostet hat und welche v
   `tests/web/test_server.py::test_overview_refreshes_*`, bestehende Header-Tests
 - [ ] AK10: `trading-bot web --data-dir <dir> [--db <pfad>]`, Standard `<dir>/bot.db` (wie `paper-cycle` die
   `secrets.env` neben der DB erwartet). — Nachweis: `tests/test_cli.py::test_web_db_*`
-- [ ] AK11: [manuell] Übersicht im Browser mit einer echten Paper-DB (z. B. aus `paper-cycle`): Desktop und 375 px
+- [x] AK11: [manuell] Übersicht im Browser mit einer echten Paper-DB (z. B. aus `paper-cycle`): Desktop und 375 px
   ohne seitliches Scrollen; während eines laufenden `paper-cycle` bleibt die Seite benutzbar.
 - [ ] AK12: Lint, Format, `mypy src tests tools`, CI grün; keine echten Kontostände, Trades oder Server-Daten in
   Code, Tests oder Doku (öffentliches Repo). — Nachweis: Befehle aus `CLAUDE.md`, CI
@@ -108,6 +108,7 @@ was zuletzt entschieden wurde und warum, was GPT heute gekostet hat und welche v
   Depots mit Abstand zu Buy & Hold, Equity-Chart, Entscheidungen mit LLM-Begründungen, Trades; 1280 px und 375 px
   ohne seitliches Scrollen (breite Tabellen scrollen in ihrem Panel). Lesen während eines laufenden Schreibers ist
   per Test belegt (`test_reader_sees_the_last_committed_state_while_the_bot_writes`); der Nutzer prüft AK11 noch selbst.
+- 2026-11-06: AK11 vom Nutzer abgenommen („Passt“); PR #9 gemergt.
 
 ## Ergebnis
 - **Erreicht:** …
