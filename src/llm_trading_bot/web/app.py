@@ -4,11 +4,12 @@
 in a standard-library HTTP server bound to 127.0.0.1 only.
 """
 
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from http.cookies import SimpleCookie
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TextIO
 from urllib.parse import parse_qs
@@ -26,6 +27,9 @@ from llm_trading_bot.web.auth import (
 from llm_trading_bot.web.credentials import SecretsFile
 
 LOCALHOST = "127.0.0.1"
+# LEARNING(#web): Formular-POST hängt: einfädiger HTTPServer wartet auf leere Browser-Verbindung
+# Browsers open spare connections that stay silent; they must not block real requests.
+SOCKET_TIMEOUT = 10
 MAX_BODY = 16 * 1024
 COOKIE = "session"
 SECURITY_HEADERS = {
@@ -187,9 +191,13 @@ class WebApp:
 
 
 def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
+    # One request at a time through the app: sessions, lockout and file writes stay consistent.
+    app_lock = threading.Lock()
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "llm-trading-bot"
         sys_version = ""
+        timeout = SOCKET_TIMEOUT
 
         def _send(self, response: Response) -> None:
             body = response.body.encode("utf-8")
@@ -220,7 +228,9 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
                 raw = self.rfile.read(length).decode("utf-8", errors="replace")
                 form = parse_qs(raw, keep_blank_values=True)
             path = self.path.split("?", 1)[0]
-            self._send(app.handle(method, path, self.headers.get("Cookie"), form))
+            with app_lock:
+                response = app.handle(method, path, self.headers.get("Cookie"), form)
+            self._send(response)
 
         def do_GET(self) -> None:
             self._dispatch("GET")
@@ -235,11 +245,13 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def make_server(app: WebApp, host: str, port: int) -> HTTPServer:
+def make_server(app: WebApp, host: str, port: int) -> ThreadingHTTPServer:
     # ADR-0005/0014: never reachable from the network; on the server only through an SSH tunnel.
     if host != LOCALHOST:
         raise ValueError(f"the web UI binds to {LOCALHOST} only, not {host!r}")
-    return HTTPServer((host, port), make_handler(app))
+    server = ThreadingHTTPServer((host, port), make_handler(app))
+    server.daemon_threads = True
+    return server
 
 
 def serve(data_dir: Path, *, port: int, out: TextIO, host: str = LOCALHOST) -> None:

@@ -76,6 +76,15 @@
 - **Ursache:** `sys.stdout` nutzt unter Windows die Konsolen-Codepage (cp1252), nicht UTF-8; die Strategie-Begründungen der Arena sind deutsch.
 - **Lösung / Regel:** In `main()` `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` (nur wenn `io.TextIOWrapper`). Nicht `PYTHONUTF8` global setzen – das verdeckt Datei-Encoding-Fehler (siehe oben).
 
+### Formular-POST hängt: einfädiger HTTPServer wartet auf leere Browser-Verbindung #web #http #test
+*2026-11-06 · Quelle: Spec 006*
+- **Symptom:** Klick auf „Passwort festlegen“ tut scheinbar nichts; im Browser stehen POST-Requests auf „pending“
+  bzw. `ERR_ABORTED`; alle Tests (eine Verbindung je Request) grün.
+- **Ursache:** `http.server.HTTPServer` bearbeitet eine Verbindung nach der anderen. Browser öffnen vorab eine
+  Reserve-Verbindung und senden darauf nichts; der Server blockiert beim Lesen dieser Verbindung, der echte POST wartet.
+- **Lösung / Regel:** `ThreadingHTTPServer` mit `daemon_threads` und Socket-`timeout` im Handler; App-Logik hinter
+  einem Lock. Test mit einer offenen, stummen Verbindung vor dem eigentlichen Request.
+
 ### Sperre eines beendeten Prozesses wird unter Windows verzögert frei #windows #lock #test
 *2026-11-06 · Quelle: Spec 005 (Lock-Test aus Spec 004 wurde lokal flaky)*
 - **Symptom:** `test_lock_of_a_killed_process_is_released` scheitert lokal etwa jedes zweite Mal mit

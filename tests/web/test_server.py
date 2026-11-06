@@ -249,3 +249,16 @@ def test_client_hanging_up_does_not_break_the_server(running: Running) -> None:
     sock.sendall(f"GET /setup HTTP/1.1\r\nHost: 127.0.0.1:{running.browser.port}\r\n\r\n".encode())
     sock.close()  # hang up before reading the answer
     assert running.browser.request("GET", "/setup")[0] == 200
+
+
+def test_silent_spare_connection_does_not_block_a_form_post(running: Running) -> None:
+    """Browsers pre-open connections and send nothing on them; a POST must still be answered."""
+    import socket
+
+    idle = socket.create_connection(("127.0.0.1", running.browser.port), timeout=5)
+    try:
+        form = {"code": running.app.setup_code or "", "password": PASSWORD, "password2": PASSWORD}
+        status, _, _ = running.browser.request("POST", "/setup", form)
+        assert status == 303
+    finally:
+        idle.close()
