@@ -1,6 +1,6 @@
 # ADR-0011: Eine GPT-Anfrage für BTC und ETH mit eigenem Prompt v1, 4/h plus Ereignisse, Effort low
 
-- **Status:** vorgeschlagen
+- **Status:** angenommen
 - **Löst ab:** [ADR-0009](0009-llm-agent-openai-budget.md)
 - **Datum:** 2026-11-06
 - **Bereich:** #llm #budget #persistenz

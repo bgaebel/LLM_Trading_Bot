@@ -1,6 +1,6 @@
 # ADR-0010: Drei GPT-Depots zum Modellvergleich plus Buy & Hold; Schema bleibt versioniert
 
-- **Status:** vorgeschlagen
+- **Status:** angenommen
 - **Löst ab:** [ADR-0008](0008-paper-schema-ein-agent.md)
 - **Datum:** 2026-11-06
 - **Bereich:** #persistenz #paper #llm
