@@ -20,3 +20,4 @@
 | [0013](0013-gpt-abfragen-nur-bei-bedarf.md) | GPT nur bei Bedarf: stündlich, bei ≥ 1,8 % Bewegung oder Wechsel eines Referenzsignals, max. 4/h; sonst wie 0011 (löst 0011 ab) | angenommen |
 | [0014](0014-weboberflaeche-zugangsdaten.md) | Weboberfläche für Zugangsdaten nur auf 127.0.0.1, Passwort-Login mit Einrichtungscode, secrets.env (600) außerhalb des Repos | abgelöst durch [0015](0015-weboberflaeche-passwort-8.md) |
 | [0015](0015-weboberflaeche-passwort-8.md) | Weboberfläche wie 0014, Passwort mindestens 8 Zeichen (löst 0014 ab) | angenommen |
+| [0016](0016-weboberflaeche-liest-bot-db.md) | Weboberfläche liest die Bot-DB nur lesend (`mode=ro`, `query_only`); genau ein Schreiber | angenommen |

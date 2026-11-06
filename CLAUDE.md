@@ -93,7 +93,8 @@ brauchen, benenne ich ausdrücklich als **offen – manuell prüfen** und behaup
   oder echten Trades in Code, Doku, Commits oder PRs – in Anleitungen Platzhalter wie `<server>` verwenden.
 - Fail closed: bei fehlenden/veralteten Kursen oder ungültigen LLM-Antworten keine neue Order;
   nur abgeschlossene Kerzen; BTC-Fehler blockiert ETH nicht und umgekehrt.
-- Handelshistorie nie still zurücksetzen oder migrieren; nie zwei Prozesse auf derselben DB.
+- Handelshistorie nie still zurücksetzen oder migrieren; nie zwei schreibende Prozesse auf derselben DB
+  (weitere Prozesse nur lesend mit `mode=ro`, ADR-0016).
 - Gebühren, Slippage, Strategieregeln und Prompts nur mit Tests und neuer Strategieversion ändern.
 - HTTP bindet nur an `127.0.0.1`; Zugriff per SSH-Tunnel (ADR-0005).
 - Befehle auf dem Hetzner-Server (SSH, Deploy, Neustart) nur mit Zustimmung des Nutzers.

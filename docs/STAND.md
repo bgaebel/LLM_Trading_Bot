@@ -10,11 +10,11 @@
 
 ## Nächster Schritt
 1. `/abschluss 005` und `/abschluss 006` (Nutzer startet; Prüfer, Ergebnis-Abschnitt, Status „fertig").
-2. Wunsch des Nutzers prüfen: Startseite/Übersicht in der Weboberfläche (Depots, Equity, letzte GPT-Aufrufe) – neue Spec.
+2. Spec 007 Übersicht (freigegeben, ADR-0016): `/umsetzen 007` auf `feat/s007-uebersicht`.
 3. Dann nächste M1-Spec laut `docs/ROADMAP.md` (Dauerbetrieb/Deploy auf Hetzner).
 
 ## In Arbeit
-- Spec: 005, 006 (alle AKs erfüllt, Abschluss offen)
+- Spec: 005, 006 (alle AKs erfüllt, Abschluss offen), 007 (freigegeben)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
