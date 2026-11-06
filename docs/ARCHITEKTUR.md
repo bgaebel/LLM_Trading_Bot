@@ -192,8 +192,11 @@ Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariab
 [0, 0,05]; `OPENAI_API_KEY`; `LLM_EFFORT` (`low`); `LLM_DAILY_BUDGET_EUR` (3) und `LLM_DAILY_BUDGET_EUR_GPT_LUNA`/
 `_GPT_SOL` (0,50/2,50); `LLM_MIN_INTERVAL_SECONDS` (3600), `LLM_EVENT_COOLDOWN_SECONDS` (600),
 `LLM_EVENT_MOVE_THRESHOLD` (0,018), `LLM_MAX_CALLS_PER_HOUR` (4); optional `OPENAI_MODEL_<DEPOT>` mit
-`LLM_PRICE_IN_EUR_<DEPOT>`/`LLM_PRICE_OUT_EUR_<DEPOT>`. Auf dem Server in `__DATA_DIR__/secrets.env` (600, Dienstbenutzer, geschrieben von der Weboberfläche, ADR-0015);
-der Dienst liest sie jede Runde neu, Umgebungswerte gewinnen (ADR-0017). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.
+`LLM_PRICE_IN_EUR_<DEPOT>`/`LLM_PRICE_OUT_EUR_<DEPOT>`. In `__DATA_DIR__/secrets.env` (600, Dienstbenutzer,
+geschrieben von der Weboberfläche, ADR-0015) stehen nur `OPENAI_API_KEY`, `BOT_AGENTS`, `LLM_EFFORT` und die drei
+Budgets (`web/credentials.FIELDS`); andere Zeilen dort werden ignoriert und beim nächsten Speichern entfernt. Alle
+übrigen Variablen kommen nur aus der Umgebung des Prozesses (auf dem Server: Unit bzw. Drop-in, Nr. 6). Der Dienst
+liest Umgebung und `secrets.env` jede Runde neu, Umgebungswerte gewinnen (ADR-0017). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.
 Dazu `LOG_LEVEL` (Standard `INFO`) für `run`. Server ist gehärtet (Spec 002, Ablauf und Prüfbefehle:
 `docs/betrieb/server.md`); die systemd-Dateien liegen geprüft in `deploy/` (Spec 008: `Type=notify`,
 `WatchdogSec=60`, `TimeoutStopSec=90`, `Restart=on-failure`, Härtung, Journal ≤ 200 MB / 14 Tage). Installation,

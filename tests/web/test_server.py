@@ -242,8 +242,12 @@ def test_login_without_form_token_is_refused(running: Running) -> None:
         {"Origin": "https://evil.example"},
         {"Sec-Fetch-Site": "cross-site"},
         {"Origin": "null", "Sec-Fetch-Site": "cross-site"},
+        # Another local port shares our cookies and could plant the pre-session token; older
+        # browsers send no Sec-Fetch-Site, so the Origin port must decide.
+        {"Origin": "http://127.0.0.1:1"},
+        {"Origin": "http://localhost"},
     ],
-    ids=["origin", "fetch-site", "sandboxed-frame"],
+    ids=["origin", "fetch-site", "sandboxed-frame", "other-local-port", "local-default-port"],
 )
 def test_cross_site_posts_are_refused_and_do_not_count_as_failures(
     running: Running, headers: dict[str, str]
@@ -387,6 +391,56 @@ def test_connection_check_uses_the_stored_key_and_shows_no_key(running: Running)
     running.browser.request("POST", "/settings", form)
     _, _, page = running.browser.request("POST", "/settings/test", {"csrf": csrf})
     assert "in Ordnung" in page and KEY not in page and running.checked == [KEY]
+
+
+def test_a_slow_connection_check_does_not_block_the_other_pages(running: Running) -> None:
+    setup(running)
+    csrf = running.browser.csrf()
+    form: FormData = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
+    running.browser.request("POST", "/settings", form)
+    entered, release = threading.Event(), threading.Event()
+
+    def slow_check(key: str) -> str:
+        entered.set()
+        release.wait(20)
+        return ""
+
+    running.app.key_check = slow_check
+    result: list[str] = []
+    tester = Browser(running.browser.port, dict(running.browser.cookies))
+    worker = threading.Thread(
+        target=lambda: result.append(tester.request("POST", "/settings/test", {"csrf": csrf})[2])
+    )
+    worker.start()
+    try:
+        assert entered.wait(10)
+        started = time.monotonic()
+        status, _, _ = running.browser.request("GET", "/settings")
+        assert status == 200 and time.monotonic() - started < 5  # not waiting for the check
+    finally:
+        release.set()
+        worker.join(30)
+    assert result and "in Ordnung" in result[0] and KEY not in result[0]
+
+
+def test_clearing_the_key_over_http_and_unknown_fields_are_dropped(running: Running) -> None:
+    setup(running)
+    csrf = running.browser.csrf()
+    saved: FormData = {
+        "csrf": csrf,
+        "OPENAI_API_KEY": KEY,
+        "agents": ["trend"],
+        "EXTRA": "x",
+        "OPENAI_MODEL_GPT_LUNA": "gpt-other",
+    }
+    assert running.browser.request("POST", "/settings", saved)[0] == 200
+    stored = load_env_file(running.data / "secrets.env")
+    assert stored["OPENAI_API_KEY"] == KEY
+    assert "EXTRA" not in stored and "OPENAI_MODEL_GPT_LUNA" not in stored
+    cleared: FormData = {"csrf": csrf, "agents": ["trend"], "clear_key": "1"}
+    status, _, page = running.browser.request("POST", "/settings", cleared)
+    assert status == 200 and "Gespeichert." in page
+    assert "OPENAI_API_KEY" not in load_env_file(running.data / "secrets.env")
 
 
 def test_failed_connection_check_names_only_the_error_type(running: Running) -> None:
