@@ -254,6 +254,16 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--cyan); outline-off
 .legend .l-free::before { background: repeating-linear-gradient(45deg, var(--line-hot) 0 2px,
   transparent 2px 4px); }
 
+/* reasoning cost table */
+.costs { width: 100%; margin-top: 14px; border-collapse: collapse; font: 11.5px/1.35 var(--mono); }
+.costs th, .costs td { padding: 7px 6px; border-bottom: 1px dashed var(--line); text-align: right;
+  vertical-align: top; }
+.costs thead th { color: var(--cyan); font-weight: 600; letter-spacing: 0.08em; }
+.costs thead th:last-child { color: var(--magenta); }
+.costs tbody th { text-align: left; font-weight: 400; color: var(--muted); }
+.costs td { color: var(--text); white-space: nowrap; }
+.costs tbody tr:nth-child(n+2):nth-child(-n+4) td { color: var(--lime); }
+
 /* buttons */
 button { position: relative; overflow: hidden; margin-top: 20px; padding: 12px 24px; border: 0;
   cursor: pointer; font: 700 12.5px/1 var(--mono); letter-spacing: 0.16em;

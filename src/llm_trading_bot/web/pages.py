@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from html import escape
 
-from llm_trading_bot.llm.agents import LLM_DEFAULTS
+from llm_trading_bot.llm.agents import LLM_DEFAULTS, MAX_OUTPUT_TOKENS, MODEL_PRICES
 from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.web import chart
 from llm_trading_bot.web.credentials import AGENT_CHOICES, mask
@@ -256,6 +256,77 @@ def _gauge(total: Decimal, luna: Decimal, sol: Decimal) -> str:
     )
 
 
+# Spec 005 AK10, 2026-11-06: one real request per model (BTC+ETH, effort low). Only this level is
+# measured; the other levels are shown by price per token and the hard output limit, not guessed.
+MEASURED_EFFORT = "low"
+MEASURED: Mapping[str, tuple[int, int, int]] = {
+    # model: (input tokens, output tokens, of which reasoning)
+    "gpt-6-luna": (1566, 367, 89),
+    "gpt-6.1-sol": (1566, 259, 0),
+}
+MAX_REQUESTS_PER_DAY = 24 * 4  # ADR-0013: at most 4 requests per hour and depot
+
+
+def _eur(amount: Decimal, places: int = 4) -> str:
+    return f"{amount:.{places}f} €"
+
+
+def _reasoning_costs(effort: str, shares: Mapping[str, Decimal]) -> str:
+    """What the effort costs: price per reasoning token, the measured request and the worst case.
+    The budget per depot caps the day in any case."""
+    million = Decimal(1_000_000)
+    cols = []
+    for depot, (model, _share) in LLM_DEFAULTS.items():
+        price = MODEL_PRICES[model]
+        tokens_in, tokens_out, reasoning = MEASURED[model]
+        measured = (
+            tokens_in * price.input_per_million + tokens_out * price.output_per_million
+        ) / million
+        worst = (
+            tokens_in * price.input_per_million + MAX_OUTPUT_TOKENS * price.output_per_million
+        ) / million
+        day = worst * MAX_REQUESTS_PER_DAY
+        share = shares[depot]
+        cols.append(
+            (
+                depot,
+                _eur(price.output_per_million / 1000),
+                f"{reasoning}",
+                _eur(measured, 5),
+                _eur(measured * MAX_REQUESTS_PER_DAY, 2),
+                _eur(worst),
+                _eur(min(day, share), 2) + (" (Budget)" if day > share else ""),
+            )
+        )
+    rows = (
+        ("je 1.000 Reasoning-Tokens", 1),
+        (f"Reasoning-Tokens gemessen bei {MEASURED_EFFORT}", 2),
+        (f"gemessen bei {MEASURED_EFFORT} je Anfrage", 3),
+        (f"bei {MEASURED_EFFORT}, {MAX_REQUESTS_PER_DAY} Anfragen/Tag (Maximum)", 4),
+        (f"Obergrenze je Anfrage ({MAX_OUTPUT_TOKENS:,} Output-Tokens)".replace(",", "."), 5),
+        (f"Obergrenze pro Tag ({MAX_REQUESTS_PER_DAY} Anfragen)", 6),
+    )
+    head = "".join(f"<th>{escape(c[0])}</th>" for c in cols)
+    body = "".join(
+        f"<tr><th>{escape(label)}</th>"
+        + "".join(f"<td>{escape(c[i])}</td>" for c in cols)
+        + "</tr>"
+        for label, i in rows
+    )
+    note = (
+        "Gemessen ist nur diese Stufe."
+        if effort == MEASURED_EFFORT
+        else f"„{escape(effort)}“ ist nicht gemessen: Das Modell entscheidet selbst, wie viele "
+        "Reasoning-Tokens es braucht – höhere Stufen meist ein Vielfaches."
+    )
+    return (
+        f'<table class="costs"><thead><tr><th>Kosten</th>{head}</tr></thead>'
+        f"<tbody>{body}</tbody></table>"
+        f'<p class="hint">Reasoning-Tokens werden wie Output abgerechnet. {note} Mehr als die '
+        "Obergrenze kann eine Anfrage nicht kosten; das Tagesbudget je Depot stoppt vorher.</p>"
+    )
+
+
 def settings_page(
     values: Mapping[str, str], *, csrf: str, message: str = "", ok: bool = True
 ) -> str:
@@ -313,7 +384,7 @@ def settings_page(
         + readouts
         + '<form method="post" action="/settings" class="grid">'
         + hidden
-        + '<section class="panel span-7">'
+        + '<section class="panel span-5">'
         + _head("01", "OpenAI-Zugang")
         + f'<div class="keystate{"" if key else " off"}"><i class="led"></i>'
         f"API-Key: <strong>{key_state}</strong></div>"
@@ -325,12 +396,14 @@ def settings_page(
         "Echtgeld-Meilenstein.</p>"
         '<label class="check"><input type="checkbox" name="clear_key" value="1"> '
         "gespeicherten Key löschen</label></section>"
-        '<section class="panel span-5">'
+        '<section class="panel span-7">'
         + _head("02", "Reasoning", "amber")
         + '<label for="effort">Reasoning-Effort</label>'
         f'<select id="effort" name="LLM_EFFORT">{efforts}</select>'
         '<p class="hint">Mehr Effort heißt mehr Reasoning-Tokens je Anfrage – und höhere '
-        "Kosten. Standard: <code>low</code>.</p></section>"
+        "Kosten. Standard: <code>low</code>.</p>"
+        + _reasoning_costs(effort, {"gpt-luna": luna, "gpt-sol": sol})
+        + "</section>"
         '<section class="panel span-12">'
         + _head("03", "Depots", "warm")
         + f'<div class="tiles">{depots}</div>'

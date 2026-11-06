@@ -123,6 +123,10 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
   Ersteinrichtung mit neuem Code, Login, Key eingetragen, Test laut Nutzer erledigt. Nachweis: `secrets.env` enthält
   `OPENAI_API_KEY`, `BOT_AGENTS`, `LLM_EFFORT`; Spec 005 AK10 lief mit genau diesem Key (`--secrets`). Rückfrage
   des Nutzers: Es gibt keine Startseite – nach dem Login ist die Einstellungsseite die einzige Seite.
+- 2026-11-06: Nutzer: im Reasoning-Bereich fehlt, wie sich der Effort auf den Preis auswirkt. Kostentabelle je
+  Modell ergänzt: Preis je 1.000 Reasoning-Tokens, gemessene Werte bei `low` (Spec 005 AK10) je Anfrage und für das
+  Tagesmaximum von 96 Anfragen, Obergrenze je Anfrage (8.000 Output-Tokens) und je Tag, gedeckelt durch das
+  Depot-Budget. Nicht gemessene Stufen werden als solche benannt statt geschätzt. Reasoning-Panel breiter (7/12).
 
 ## Ergebnis
 - **Erreicht:** …
