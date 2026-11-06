@@ -25,7 +25,9 @@ BACKUPS="$ROOT/var/backups/llm-trading-bot"
 UNIT_DIR="$ROOT/etc/systemd/system"
 JOURNALD_DIR="$ROOT/etc/systemd"
 UV_CACHE="$ROOT/var/cache/llm-trading-bot-uv"
-LOCK="$ROOT/run/lock/llm-trading-bot-deploy.lock"
+# In the app's own directory: /run/lock belongs to the system (1777) and must not be touched.
+LOCK="$APP/.deploy.lock"
+LOGFILE="$APP/deploy.log"
 UV="${LTB_UV:-$ROOT/usr/local/bin/uv}"
 SYSTEMCTL="${LTB_SYSTEMCTL:-systemctl}"
 ANALYZE="${LTB_ANALYZE:-systemd-analyze}"
@@ -35,9 +37,11 @@ POLL_SECONDS="${LTB_POLL_SECONDS:-3}"
 KEEP_RELEASES=3 # the current one and two before it
 
 # uv in a fixed version; the checksum comes from the release page and the GitHub API (both agree).
-UV_VERSION="0.13.5"
+# It must satisfy the uv_build bound in pyproject.toml, so the build backend is uv itself and
+# nothing unpinned is fetched from PyPI (tests/deploy/test_release.py checks this).
+UV_VERSION="0.13.7"
 UV_URL="${LTB_UV_URL:-https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-x86_64-unknown-linux-gnu.tar.gz}"
-UV_SHA256="${LTB_UV_SHA256:-f68d291c75783122dad58ab77def0e13f3233f358731db5d6d7e8715603b928f}"
+UV_SHA256="${LTB_UV_SHA256:-c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83}"
 
 BOT=llm-trading-bot.service
 WEB=llm-trading-bot-web.service
@@ -48,8 +52,20 @@ JOURNALD_CONF=journald@llm-trading-bot.conf
 
 changes=0
 
-log() { printf '%s\n' "$*"; }
-die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+# Every line also goes to $LOGFILE. Writes to the terminal may fail once the SSH session is gone;
+# that must never stop the script halfway through an update (HUP and PIPE are ignored in main).
+note() {
+  if [ -d "$APP" ]; then printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >>"$LOGFILE" 2>/dev/null || true; fi
+}
+log() {
+  note "$*"
+  printf '%s\n' "$*" 2>/dev/null || true
+}
+die() {
+  note "ERROR: $*"
+  printf 'ERROR: %s\n' "$*" >&2 2>/dev/null || true
+  exit 1
+}
 
 testing() { [ -n "$ROOT" ]; }
 
@@ -212,7 +228,7 @@ verify_units() {
   for unit in "${UNITS[@]}"; do
     paths+=("$tmp/$unit")
   done
-  "$ANALYZE" verify "${paths[@]}" || die "systemd-analyze rejected the units of $release"
+  quietly "$ANALYZE" verify "${paths[@]}" || die "systemd-analyze rejected the units of $release"
   rm -rf "$tmp"
 }
 
@@ -290,63 +306,105 @@ wait_healthy() {
 # --------------------------------------------------------------------------------- activate
 
 stop_all() {
-  "$SYSTEMCTL" stop "$TIMER" "$BOT" "$WEB" 2>/dev/null || true
+  "$SYSTEMCTL" stop "$TIMER" "$BOT" "$WEB" </dev/null >/dev/null 2>&1 || true
+}
+
+# Run a command with its output captured (no pipe to a terminal that may be gone), then log it.
+quietly() {
+  local out rc=0
+  out="$("$@" </dev/null 2>&1)" || rc=$?
+  [ -z "$out" ] || log "$out"
+  return "$rc"
 }
 
 pre_update_backup() {
   local release="$1" service="$2"
   [ -f "$DATA/bot.db" ] || return 0
-  as_service "$service" "$release/.venv/bin/trading-bot" backup --db "$DATA/bot.db" \
-    --dir "$BACKUPS/pre-update" --keep 5 </dev/null
+  quietly as_service "$service" "$release/.venv/bin/trading-bot" backup --db "$DATA/bot.db" \
+    --dir "$BACKUPS/pre-update" --keep 5
 }
 
-# Units, switch, start. Returns 0 healthy, 1 unhealthy, 2 web only (no secrets.env yet).
+wait_web() {
+  local deadline=$((SECONDS + 15))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if "$SYSTEMCTL" is-active --quiet "$WEB"; then return 0; fi
+    sleep "$POLL_SECONDS"
+  done
+  return 1
+}
+
+# Units, switch, start. Returns 0 healthy, 1 unhealthy, 2 web UI only (no secrets.env yet), 3 the
+# web UI did not start. Sets FP_CHANGED when secrets.env or a drop-in differs from FP_BEFORE.
 start_release() {
   local sha="$1" service="$2" since
   install_units "$RELEASES/$sha" "$service"
   switch_to "$sha"
-  "$SYSTEMCTL" enable --now "$WEB" "$TIMER" </dev/null
+  # Compared before the web UI runs again: from then on a saved setting is a legitimate change.
+  [ "$(fingerprint)" = "$FP_BEFORE" ] || FP_CHANGED=1
+  quietly "$SYSTEMCTL" enable --now "$WEB" "$TIMER"
+  wait_web || return 3
   if [ ! -f "$DATA/secrets.env" ]; then
-    "$SYSTEMCTL" disable --now "$BOT" </dev/null 2>/dev/null || true
+    quietly "$SYSTEMCTL" disable --now "$BOT" || true
     return 2
   fi
   since="$(date +%s)"
-  "$SYSTEMCTL" enable "$BOT" </dev/null
-  "$SYSTEMCTL" restart "$BOT" </dev/null
+  quietly "$SYSTEMCTL" enable "$BOT"
+  # Type=notify: restart returns once the new process said READY=1 (or failed).
+  quietly "$SYSTEMCTL" restart "$BOT" || true
   wait_healthy "$since"
 }
 
+# The release to fall back to: the one running before, or - redeploying the same commit - the
+# recorded previous one. Empty when there is none.
+fallback_for() {
+  local sha="$1" old="$2"
+  if [ -n "$old" ] && [ "$old" != "$sha" ]; then
+    printf '%s\n' "$old"
+  elif [ -L "$PREVIOUS" ]; then
+    local prev
+    prev="$(basename "$(readlink "$PREVIOUS")")"
+    if [ "$prev" != "$sha" ] && [ -f "$RELEASES/$prev/.ready" ]; then printf '%s\n' "$prev"; fi
+  fi
+}
+
 activate() {
-  local sha="$1" service="$2" before old result=0
+  local sha="$1" service="$2" old fallback result=0
   old="$(current_sha)"
+  fallback="$(fallback_for "$sha" "$old")"
   if [ -f "$DATA/bot.db" ]; then
-    as_service "$service" "$RELEASES/$sha/.venv/bin/trading-bot" verify-db --db "$DATA/bot.db" \
-      </dev/null || die "the release $sha cannot use the database - nothing changed"
+    quietly as_service "$service" "$RELEASES/$sha/.venv/bin/trading-bot" verify-db \
+      --db "$DATA/bot.db" || die "the release $sha cannot use the database - nothing changed"
   fi
   verify_units "$RELEASES/$sha" "$service"
-  before="$(fingerprint)"
+  # A fallback that cannot be started must be known before anything stops.
+  [ -z "$fallback" ] || verify_units "$RELEASES/$fallback" "$service"
+  FP_BEFORE="$(fingerprint)"
+  FP_CHANGED=0
   stop_all
   if ! pre_update_backup "$RELEASES/$sha" "$service"; then
-    [ -z "$old" ] || start_release "$old" "$service" || true
+    if [ -n "$old" ]; then start_release "$old" "$service" || true; fi
     die "backup before the update failed - stayed on ${old:-nothing}"
   fi
   start_release "$sha" "$service" || result=$?
-  [ "$(fingerprint)" = "$before" ] || die "secrets.env or a drop-in changed during the deploy"
   if [ "$result" -eq 2 ]; then
     log "no secrets.env yet: only the web UI runs. Set password, key and depots through the"
     log "SSH tunnel (setup code: journalctl --namespace=llm-trading-bot -u $WEB), then deploy again."
   elif [ "$result" -ne 0 ]; then
     log "release $sha did not become healthy within $HEALTH_SECONDS s"
-    if [ -z "$old" ] || [ "$old" = "$sha" ]; then
-      stop_all
-      die "no other release to fall back to - bot stopped, web UI stopped"
+    if [ -z "$fallback" ]; then
+      # Nothing to go back to: stop only the bot. The web UI is where settings are fixed, and the
+      # daily backups keep running.
+      quietly "$SYSTEMCTL" disable --now "$BOT" || true
+      quietly "$SYSTEMCTL" enable --now "$WEB" "$TIMER" || true
+      die "no other release to fall back to - the bot is stopped and disabled, the web UI and the" \
+        "backups keep running. Check the journal, fix the settings through the tunnel, deploy again."
     fi
     stop_all
-    log "rolling back to $old (code and units only, the database stays as it is)"
-    if start_release "$old" "$service"; then
-      die "deploy of $sha failed - rolled back to $old, which is healthy"
+    log "rolling back to $fallback (code and units only, the database stays as it is)"
+    if start_release "$fallback" "$service"; then
+      die "deploy of $sha failed - rolled back to $fallback, which is healthy"
     fi
-    die "deploy of $sha failed and $old is not healthy either - check the journal"
+    die "deploy of $sha failed and $fallback is not healthy either - check the journal"
   fi
   if [ -n "$old" ] && [ "$old" != "$sha" ]; then
     ln -sfn "$RELEASES/$old" "$APP/.previous.new"
@@ -354,6 +412,8 @@ activate() {
   fi
   printf '%s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$sha" "active" >>"$APP/deployed.log"
   log "release $sha active${old:+ (previous: $old)}"
+  [ "$FP_CHANGED" -eq 0 ] || die "secrets.env or a drop-in changed while the services were stopped" \
+    "- the release $sha is active, but check them"
 }
 
 prune() {
@@ -374,7 +434,7 @@ prune() {
 }
 
 with_lock() {
-  install -d -m 755 "$(dirname "$LOCK")"
+  [ -d "$APP" ] || die "$APP missing - run install first"
   exec 9>"$LOCK"
   flock -n 9 || die "another deploy is running"
 }
@@ -422,6 +482,8 @@ cmd_status() {
 # command that reads stdin cannot swallow the rest of the piped-in script.
 main() {
   exec </dev/null
+  # An SSH session that drops must not kill an update halfway (before a rollback could run).
+  trap '' HUP PIPE
   local mode="${1:-}"
   case "$mode" in
     install) [ "$#" -eq 2 ] || die "usage: install <service-user>"; cmd_install "$2" ;;

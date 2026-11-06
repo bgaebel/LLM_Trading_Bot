@@ -6,6 +6,8 @@
 [Unit]
 Description=LLM Trading Bot - checked copy of the database
 After=local-fs.target
+# Before the first round (web UI only, Spec 009) there is nothing to copy: skip, do not fail.
+ConditionPathExists=__DATA_DIR__/bot.db
 
 [Service]
 Type=oneshot

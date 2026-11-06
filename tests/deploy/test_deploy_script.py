@@ -32,7 +32,10 @@ cat >"$FAKE_STATE/ssh-$n.stdin"
 # gh run list ... --jq ... -> the number of successful CI runs for the commit.
 FAKE_GH = r"""#!/usr/bin/env bash
 echo "gh $*" >>"$FAKE_STATE/gh"
-cat "$FAKE_STATE/ci-success"
+sha="$(printf '%s\n' "$*" | sed -n 's/.*--commit \([0-9a-f]*\).*/\1/p')"
+answer="$FAKE_STATE/ci-success"
+[ -e "$FAKE_STATE/ci-$sha" ] && answer="$FAKE_STATE/ci-$sha"
+cat "$answer"
 """
 
 
@@ -167,3 +170,24 @@ def test_install_and_rollback_run_the_release_script_of_origin_main(
     ((args, script),) = local.ssh_calls()
     assert args == ["srv", f"sudo bash -s -- {mode} 'botsvc'"]
     assert script == (REPO / "deploy" / "release.sh").read_bytes()
+
+
+def test_rollback_uses_the_newest_green_commit_when_the_tip_is_not_green(local: Local) -> None:
+    green = local.git("rev-parse", "HEAD")
+    script = local.work / "deploy" / "release.sh"
+    tip = local.commit("deploy/release.sh", script.read_text(encoding="utf-8") + "# tip\n")
+    local.git("push", "-q", "origin", "main")
+    (local.state / f"ci-{tip}").write_text("0\n", encoding="utf-8")  # still running or red
+    done = local.run("srv", "botsvc", "rollback")
+    assert done.returncode == 0, done.stderr
+    ((args, sent),) = local.ssh_calls()
+    assert args == ["srv", "sudo bash -s -- rollback 'botsvc'"]
+    assert sent == (REPO / "deploy" / "release.sh").read_bytes()  # the green commit's copy
+    assert b"# tip" not in sent and green != tip
+
+
+def test_deploy_refuses_when_origin_cannot_be_fetched(local: Local) -> None:
+    local.git("remote", "set-url", "origin", str(local.work.parent / "gone.git"))
+    done = local.run("srv", "botsvc", "deploy")
+    assert done.returncode != 0 and "git fetch failed" in done.stderr
+    assert local.ssh_calls() == []

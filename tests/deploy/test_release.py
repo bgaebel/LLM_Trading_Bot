@@ -7,6 +7,7 @@ Linux only (the CI): the script targets Ubuntu and needs GNU tools and flock.
 import hashlib
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -42,14 +43,20 @@ for a in "$@"; do
 done
 cmd="${args[0]}"
 start_unit() {
+  [ "$1" = llm-trading-bot-web.service ] && [ -e "$state/bad-web" ] && return 0
   touch "$state/active-$1"
   if [ "$1" = llm-trading-bot.service ]; then
     pid=$((RANDOM + 1000))
     echo "$pid" >"$state/pid"
     release="$(basename "$(readlink "$FAKE_ROOT/opt/llm-trading-bot/current")")"
+    # stale-<sha>: the new process never writes; the old process's ok status stays behind.
+    [ -e "$state/stale-$release" ] && return 0
     result=ok
     [ -e "$state/bad-$release" ] && result=error
-    at="$(date -u -d @"$(( $(date +%s) + 1 ))" +%Y-%m-%dT%H:%M:%S+00:00)"
+    shift=1
+    # oldround-<sha>: the new pid, but the last ok round is from before the start.
+    [ -e "$state/oldround-$release" ] && shift=-600
+    at="$(date -u -d @"$(( $(date +%s) + shift ))" +%Y-%m-%dT%H:%M:%S+00:00)"
     printf '{"state": "running", "pid": %s, "last_round_at": "%s", "last_result": "%s"}' \
       "$pid" "$at" "$result" >"$FAKE_ROOT/var/lib/llm-trading-bot/service-status.json"
   fi
@@ -286,6 +293,10 @@ def test_no_fallback_on_the_first_release_stops_the_bot(box: Sandbox) -> None:
     result = box.run("deploy", sha(1), "botsvc", check=False)
     assert result.returncode != 0 and "no other release to fall back to" in result.stderr
     assert not (box.state / "active-llm-trading-bot.service").exists()
+    assert not (box.state / "enabled-llm-trading-bot.service").exists()  # no restart loop
+    # The web UI is where the settings get fixed; the backups go on.
+    assert (box.state / "active-llm-trading-bot-web.service").exists()
+    assert (box.state / "active-llm-trading-bot-backup.timer").exists()
 
 
 @pytest.mark.parametrize(
@@ -375,3 +386,92 @@ def test_status_and_bad_arguments(box: Sandbox) -> None:
     assert box.run("deploy", "abc", "botsvc", check=False).returncode != 0
     assert box.run("deploy", sha(2), "Bad User", check=False).returncode != 0
     assert box.run("nonsense", check=False).returncode != 0
+
+
+@pytest.mark.parametrize("trap", ["stale", "oldround"])
+def test_a_status_that_is_not_from_the_new_process_is_not_healthy(box: Sandbox, trap: str) -> None:
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    (box.state / f"{trap}-{sha(2)}").touch()
+    box.upload(sha(2))
+    result = box.run("deploy", sha(2), "botsvc", check=False)
+    assert result.returncode != 0 and f"rolled back to {sha(1)}" in result.stderr
+    assert box.current() == sha(1)
+
+
+def test_a_rollback_reinstalls_the_units_of_the_old_release(box: Sandbox) -> None:
+    installed(box).secrets()
+    unit = (REPO / "deploy" / "llm-trading-bot.service").read_text(encoding="utf-8")
+    for n in (1, 2):
+        box.upload(sha(n), {"deploy/llm-trading-bot.service": f"{unit}# release {n}\n"})
+        if n == 1:
+            box.run("deploy", sha(1), "botsvc")
+    (box.state / f"bad-{sha(2)}").touch()
+    assert box.run("deploy", sha(2), "botsvc", check=False).returncode != 0
+    installed_unit = box.root / "etc/systemd/system/llm-trading-bot.service"
+    assert installed_unit.read_text(encoding="utf-8").endswith("# release 1\n")
+
+
+def test_a_failing_redeploy_of_the_same_commit_falls_back_to_the_previous_one(box: Sandbox) -> None:
+    installed(box).secrets()
+    for n in (1, 2):
+        box.upload(sha(n))
+        box.run("deploy", sha(n), "botsvc")
+    (box.state / f"bad-{sha(2)}").touch()
+    box.upload(sha(2))
+    result = box.run("deploy", sha(2), "botsvc", check=False)
+    assert result.returncode != 0 and f"rolled back to {sha(1)}" in result.stderr
+    assert box.current() == sha(1)
+
+
+def test_the_previous_release_survives_pruning_even_when_older(box: Sandbox) -> None:
+    installed(box).secrets()
+    for n in (1, 2, 3, 4, 2, 5):  # 2 again: its build is old, but it becomes "previous" for 5
+        box.upload(sha(n))
+        box.run("deploy", sha(n), "botsvc")
+    assert box.current() == sha(5) and os.readlink(box.app / "previous").endswith(sha(2))
+    left = sorted(p.name for p in (box.app / "releases").iterdir())
+    assert left == [sha(2), sha(3), sha(4), sha(5)]
+
+
+def test_without_secrets_a_web_ui_that_does_not_start_is_a_failure(box: Sandbox) -> None:
+    installed(box)
+    (box.state / "bad-web").touch()
+    box.upload(sha(1))
+    assert box.run("deploy", sha(1), "botsvc", check=False).returncode != 0
+
+
+def test_a_dropped_ssh_session_does_not_stop_an_update(box: Sandbox) -> None:
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    box.upload(sha(2))
+    with SCRIPT.open("rb") as script:
+        proc = subprocess.Popen(
+            ["bash", "-s", "--", "deploy", sha(2), "botsvc"],
+            stdin=script,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=box.env,
+        )
+        assert proc.stdout is not None and proc.stderr is not None
+        proc.stdout.close()  # the terminal is gone: every write now fails with EPIPE
+        proc.stderr.close()
+        assert proc.wait(timeout=120) == 0
+    assert box.current() == sha(2)
+    log = (box.app / "deploy.log").read_text(encoding="utf-8")
+    assert f"release {sha(2)} active" in log
+
+
+def test_the_pinned_uv_satisfies_the_build_backend_bound() -> None:
+    # Otherwise uv fetches uv_build from PyPI unpinned and runs it as root.
+    version = re.search(r'^UV_VERSION="([\d.]+)"', SCRIPT.read_text(encoding="utf-8"), re.M)
+    pyproject = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    bound = re.search(r'"uv_build>=([\d.]+),<([\d.]+)"', pyproject)
+    assert version and bound
+
+    def parts(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.split("."))
+
+    assert parts(bound.group(1)) <= parts(version.group(1)) < parts(bound.group(2))

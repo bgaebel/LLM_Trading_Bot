@@ -215,7 +215,10 @@ class Service:
             if waited is _Wait.CLOCK_BACK:
                 # ADR-0018: plan from the new time instead of waiting out the jump; a round of a
                 # slot that already ran is harmless (decisions are unique per candle).
-                self.log.warning("wall clock jumped back: next round re-planned")
+                self.log.warning(
+                    "wall clock jumped back: next round re-planned; equity points of a repeated"
+                    " slot are replaced, decisions and trades stay unique per candle"
+                )
                 last_slot = None
                 continue
             last_slot = slot
