@@ -15,6 +15,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import NoReturn, Protocol
 
@@ -113,6 +114,12 @@ def load_settings(env: Mapping[str, str], secrets: Path) -> tuple[BotConfig, Cos
     return load_config(merged), Costs.from_env(merged)
 
 
+class _Wait(Enum):
+    DUE = "due"
+    STOP = "stop"
+    CLOCK_BACK = "clock back"
+
+
 @dataclass
 class _Round:
     done: threading.Event
@@ -202,8 +209,18 @@ class Service:
             if last_slot is not None and (missed := skipped(last_slot, slot)):
                 self.log.warning("round overran: %d slot(s) skipped, no catch-up", missed)
             self._update(next_round_at=iso(slot))
-            if self._wait_until(slot):
+            waited = self._wait_until(slot)
+            if waited is _Wait.STOP:
                 break
+            if waited is _Wait.CLOCK_BACK:
+                # ADR-0018: plan from the new time instead of waiting out the jump; a round of a
+                # slot that already ran is harmless (decisions are unique per candle).
+                self.log.warning(
+                    "wall clock jumped back: next round re-planned; equity points of a repeated"
+                    " slot are replaced, decisions and trades stay unique per candle"
+                )
+                last_slot = None
+                continue
             last_slot = slot
             self._round()
         self._begin_stop()
@@ -221,17 +238,20 @@ class Service:
 
     # ------------------------------------------------------------------ waiting
 
-    def _wait_until(self, slot: float) -> bool:
-        """Wait for the slot; True if a stop came first. Pings the watchdog meanwhile."""
+    def _wait_until(self, slot: float) -> _Wait:
+        """Wait for the slot, pinging the watchdog meanwhile. A slot more than one period away
+        means the wall clock jumped back (NTP step): the caller plans again."""
         last_ping = self.timer.monotonic()
         while (remaining := slot - self.timer.now()) > 0:
+            if remaining > PERIOD + OFFSET:
+                return _Wait.CLOCK_BACK
             if self.timer.wait_stop(self.stop, min(remaining, SLICE_SECONDS)):
-                return True
+                return _Wait.STOP
             if self.timer.monotonic() - last_ping >= PING_SECONDS:
                 self.notifier.watchdog()
                 last_ping = self.timer.monotonic()
         self.notifier.watchdog()
-        return self.stop.is_set()
+        return _Wait.STOP if self.stop.is_set() else _Wait.DUE
 
     # ------------------------------------------------------------------ one round
 

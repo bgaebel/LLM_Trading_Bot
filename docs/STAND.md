@@ -1,19 +1,20 @@
 # Stand
 
-**Aktualisiert:** 2026-11-06 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-06 · **Branch:** `feat/s009-deploy` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-- Spec 009 Deploy (ADR-0018): freigegeben, Umsetzung beginnt. Release je Commit per SSH mit automatischem
-  Code-Rollback, DB-Backups täglich nur auf dem Server (14 Tage), Wiederherstellungsprobe, Neustart-Test.
+- Spec 009 Deploy (ADR-0018): Schritte 1–5 fertig (Backup-Befehle, Uhrsprung, Units, `release.sh`, `deploy.sh`,
+  Doku), Prüfung vor dem Server mit 20 bestätigten Befunden umgesetzt; CI grün (1149 Tests). Draft-PR #15.
 - Specs 001–008 fertig.
 
 ## Nächster Schritt
-1. `/umsetzen 009`: Schritte 1–5 (Backup-Befehle, Uhrsprung, Units, `release.sh`, `deploy.sh`, Doku) hier.
-2. Schritte 6–7 auf dem Server – jeweils erst nach Zustimmung des Nutzers.
-3. Danach Nr. 4 Risiko-Grenzen.
+1. Mit Zustimmung: PR #15 mergen (`deploy.sh` schickt nur Commits von `main`), dann auf dem Server
+   `deploy.sh <alias> <dienst> install` und `deploy` (erst nur Weboberfläche) – AK7.
+2. Nutzer: Einrichtung per Tunnel (Passwort, Key, Depots), dann `deploy` erneut → Bot läuft.
+3. Mit Zustimmung: Update/Rollback, Backup- und Wiederherstellungsprobe, Neustart (AK8–AK10), dann `/abschluss 009`.
 
 ## In Arbeit
-- Spec: 009 (freigegeben)
+- Spec: 009 (in Arbeit, Server-Schritte offen)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf

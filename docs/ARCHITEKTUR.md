@@ -51,11 +51,12 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | `src/llm_trading_bot/strategy/` | Indikatoren, klassische Strategien, LLM-Kontext (reine Logik, ADR-0007) |
 | `src/llm_trading_bot/paper/` | Paper-Ausführung: Schema (`db`), Single-Writer-Sperre (`lock`), virtuelle Orders (`execution`), Zyklus (`cycle`), Ergebnis (`report`) |
 | `src/llm_trading_bot/web/` | Weboberfläche: Login (`auth`), Zugangsdaten-Datei (`credentials`), Seiten (`pages`, Übersicht `overview_page`, Stylesheet `style`, Deko-Chart `chart`), Übersichtsdaten (`overview`), Nur-Lese-Zugriff auf die Bot-DB (`readonly`, ADR-0016), Server und Routen (`app`), private Dateien (`files`) |
+| `src/llm_trading_bot/ops/` | Betrieb: geprüfte Backups, Prüfung und Wiederherstellung der Bot-DB (`backup`, ADR-0018) |
 | `src/llm_trading_bot/llm/` | GPT-Depots: Prompt v1 und Antwortprüfung (`contract`), Takt (`due`), Budget (`budget`), Konfiguration (`agents`), OpenAI-Adapter (`openai_client`), Ablauf je Depot (`cycle`) |
 | `tools/golden/` | Generator der Golden-Fixtures aus dem Arena-Code; `mutation_check.py` prüft, dass die Tests Änderungen an Schwellen/Gewichten erkennen (nur Entwicklung) |
 | `tests/` | pytest-Tests; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests der Strategien; `golden_execution_cases.py`/`golden_execution_runner.py` + `paper/fixtures/` Golden-Tests der Ausführung; `llm_fakes.py` Fake-Modell; Marker `net` = echte API (standardmäßig aus) |
-| `deploy/` | Server-Dateien: `setup-server.sh` härtet einen frischen Server (Spec 002); systemd-Units `llm-trading-bot.service` (Dienst), `llm-trading-bot-web.service` (Weboberfläche) und `journald@llm-trading-bot.conf` mit Platzhaltern (Spec 008, Installation in Nr. 6) |
-| `scripts/` | `docs-check.sh` (Doku-Hygiene), `check-units.sh` (Units mit Testwerten per `systemd-analyze verify`), `github-labels.sh` |
+| `deploy/` | Server-Dateien: `setup-server.sh` härtet einen frischen Server (Spec 002); `release.sh` installiert, aktualisiert und rollt zurück (Spec 009, ADR-0018); systemd-Units `llm-trading-bot.service` (Dienst), `llm-trading-bot-web.service` (Weboberfläche), `llm-trading-bot-backup.service`/`.timer` (tägliches Backup) und `journald@llm-trading-bot.conf` mit Platzhaltern |
+| `scripts/` | `deploy.sh` (Deploy von hier: nur geprüfte Commits von `origin/main`, Spec 009), `docs-check.sh` (Doku-Hygiene), `check-units.sh` (Units mit Testwerten per `systemd-analyze verify`), `github-labels.sh` |
 | `.github/workflows/` | CI (ruff, mypy, pytest, shellcheck, systemd-Units) und Doku-Prüfung |
 
 ## Module & Schnittstellen
@@ -201,12 +202,16 @@ Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariab
 `LLM_PRICE_IN_EUR_<DEPOT>`/`LLM_PRICE_OUT_EUR_<DEPOT>`. In `__DATA_DIR__/secrets.env` (600, Dienstbenutzer,
 geschrieben von der Weboberfläche, ADR-0015) stehen nur `OPENAI_API_KEY`, `BOT_AGENTS`, `LLM_EFFORT` und die drei
 Budgets (`web/credentials.FIELDS`); andere Zeilen dort werden ignoriert und beim nächsten Speichern entfernt. Alle
-übrigen Variablen kommen nur aus der Umgebung des Prozesses (auf dem Server: Unit bzw. Drop-in, Nr. 6). Der Dienst
+übrigen Variablen kommen nur aus der Umgebung des Prozesses (auf dem Server: systemd-Drop-in, das ein Update nie ändert). Der Dienst
 liest Umgebung und `secrets.env` jede Runde neu, Umgebungswerte gewinnen (ADR-0017). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.
 Dazu `LOG_LEVEL` (Standard `INFO`) für `run`. Server ist gehärtet (Spec 002, Ablauf und Prüfbefehle:
 `docs/betrieb/server.md`); die systemd-Dateien liegen geprüft in `deploy/` (Spec 008: `Type=notify`,
-`WatchdogSec=60`, `TimeoutStopSec=90`, `Restart=on-failure`, Härtung, Journal ≤ 200 MB / 14 Tage). Installation,
-Verzeichnisse, Backup und Update/Rollback folgen in M1 Nr. 6.
+`WatchdogSec=60`, `TimeoutStopSec=90`, `Restart=on-failure` außer Exit 3, Härtung, Journal ≤ 200 MB / 14 Tage).
+Deployment (Spec 009, ADR-0018): `scripts/deploy.sh` schickt `git archive` eines Commits von `origin/main` mit grüner
+CI per SSH; `deploy/release.sh` baut daraus `/opt/llm-trading-bot/releases/<sha>` mit eigener venv (uv in fester
+Version, `--frozen --no-dev`), prüft die DB lesend, stoppt, sichert, schaltet `current` atomar um und startet; ohne
+gesunde Runde binnen 3 min zurück auf das vorige Release (nie die Daten). Daten in `/var/lib/llm-trading-bot`,
+Backups täglich (14) und vor jedem Update (5) in `/var/backups/llm-trading-bot`, nur auf dem Server.
 
 ## Teststrategie
 - **Host-Unit-Tests:** pytest, Logik ohne I/O; Netzwerk über schmale Adapter, in Tests ersetzt.

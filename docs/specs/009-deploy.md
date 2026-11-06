@@ -1,6 +1,6 @@
 # Spec 009: Deploy auf Hetzner – Installation, Update/Rollback, Backup und Wiederherstellung
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s009-deploy` · **Meilenstein:** M1 (Nr. 6)
 - **Erstellt:** 2026-11-06
 
@@ -105,11 +105,11 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
 - Verworfen: siehe ADR-0018 (git auf dem Server, In-Place-Checkout, Docker, Off-Site-Backups, Daten-Rollback).
 
 ## Plan
-- [ ] 1. ADR-0018 annehmen; `ops/backup.py` + CLI `backup`, `verify-db`, `restore` mit Tests (AK1, AK2)
-- [ ] 2. Uhrsprung im Dienst + Test (AK3)
-- [ ] 3. Units: `RestartPreventExitStatus=3`, Backup-Service und -Timer; `check-units.sh` und Datei-Tests (AK4)
-- [ ] 4. `deploy/release.sh` + Sandbox-Tests in der CI (AK5)
-- [ ] 5. `scripts/deploy.sh` + Tests (AK6); Doku `docs/betrieb/server.md`, `CLAUDE.md`, ARCHITEKTUR (AK11)
+- [x] 1. ADR-0018 annehmen; `ops/backup.py` + CLI `backup`, `verify-db`, `restore` mit Tests (AK1, AK2)
+- [x] 2. Uhrsprung im Dienst + Test (AK3)
+- [x] 3. Units: `RestartPreventExitStatus=3`, Backup-Service und -Timer; `check-units.sh` und Datei-Tests (AK4)
+- [x] 4. `deploy/release.sh` + Sandbox-Tests in der CI (AK5)
+- [x] 5. `scripts/deploy.sh` + Tests (AK6); Doku `docs/betrieb/server.md`, `CLAUDE.md`, ARCHITEKTUR (AK11)
 - [ ] 6. Mit Zustimmung auf dem Server: `install`, `deploy`, Einrichtung durch den Nutzer, `deploy` (AK7)
 - [ ] 7. Mit Zustimmung: Update, `rollback`, Backup und Wiederherstellungsprobe, Neustart (AK8–AK10); STAND
 
@@ -131,6 +131,28 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
 
 ## Verlauf
 <!-- Während der Umsetzung: Abweichungen vom Plan, Überraschungen, Zwischenstände (datiert, knapp). -->
+- 2026-11-06: Schritte 1–5 umgesetzt. uv 0.13.5 (2026-10-22) statt der lokal genutzten 0.13.7 – ältere, abgehangene
+  Version; Prüfsumme aus Release-Datei und GitHub-API übereinstimmend. Releases werden am endgültigen Ort gebaut, nicht
+  verschoben: uv schreibt den absoluten venv-Pfad in die Startskripte. Projekt mit `--no-editable` in die venv.
+  `release.sh` ist ganz in Funktionen gefasst (`main` am Ende) und liest kein stdin, weil es selbst über stdin kommt.
+  Die Sandbox-Tests (`tests/deploy/`) brauchen GNU-Werkzeuge und `flock` und laufen nur in der Linux-CI (hier gibt es
+  weder WSL noch `flock`); CI: 19 + 10 Tests grün, `systemd-analyze` akzeptiert alle vier Units.
+- 2026-11-06: Ein voller lokaler Lauf unter hoher Last (190 s statt ~70 s) hatte einen Fehlschlag, der sich in vier
+  weiteren Läufen nicht wiederholte; welcher Test, ist unbekannt (pytest-Cache im Dropbox-Ordner wird nicht
+  geschrieben). Kandidat: ein zeitabhängiger Test. Beobachten.
+- 2026-11-06: Prüfung vor dem Server (Workflow, 4 Blickwinkel, je Befund Gegenprüfung): 20 von 24 Befunden bestätigt,
+  kein Blocker, alle umgesetzt außer einem. Wichtigste: ohne Ausweich-Release stoppte ein gescheiterter
+  Gesundheitscheck auch Weboberfläche und Backups (jetzt nur der Bot, deaktiviert); `rollback`/`status`/`install`
+  verlangten eine grüne CI auf dem neuesten `main`-Commit (jetzt: neuester grüner Commit); eine abbrechende
+  SSH-Sitzung beendete das Skript mitten im Update (jetzt HUP/PIPE ignoriert, alles auch in `deploy.log`); uv auf
+  0.13.7 angehoben, weil `uv_build>=0.13.7` sonst ungepinnt von PyPI geladen würde (Test prüft die Grenze); Sperre
+  in `/opt/llm-trading-bot/.deploy.lock` statt `/run/lock` (dessen Rechte `install -d` verändert hätte); Prüfung von
+  `secrets.env`/Drop-ins vor dem Start der Weboberfläche; Ausweich-Release vor dem Stoppen geprüft; erneutes
+  Deploy desselben Commits fällt auf das vorige Release zurück; Backup-Timer überspringt ohne DB; neue Tests für
+  veraltete Statusdatei, Rollback der Units, Aufräumen, abbrechende Sitzung.
+  **Bewusste Abwägung (ADR-0018):** Springt die Uhr zurück, kann eine schon gelaufene Minute erneut laufen; der
+  Equity-Punkt dieses Zeitstempels wird dann ersetzt (Entscheidungen und Trades sind je Kerze eindeutig und bleiben
+  unberührt). Die Alternative wäre, den Sprung abzuwarten (keine Runden). Das Log sagt es ausdrücklich.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

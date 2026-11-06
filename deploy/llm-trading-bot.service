@@ -15,10 +15,12 @@ User=__SERVICE_USER__
 WorkingDirectory=__DATA_DIR__
 Environment=PYTHONUNBUFFERED=1
 ExecStart=__APP_DIR__/.venv/bin/trading-bot run --db __DATA_DIR__/bot.db
-# Exit 1 (settings/schema), 3 (another writer), 4 (round hung) and a missed watchdog all restart;
-# a fixed setting in the web UI is then picked up without a manual restart.
+# Exit 1 (settings/schema), 4 (round hung) and a missed watchdog restart; a fixed setting in the
+# web UI is then picked up without a manual restart. ADR-0018: exit 3 (another writer holds the
+# database) does not - two writers must never take turns.
 Restart=on-failure
 RestartSec=15
+RestartPreventExitStatus=3
 WatchdogSec=60
 TimeoutStartSec=60
 # The service gives a running round 75 s after SIGTERM, then exits hard (ADR-0017).

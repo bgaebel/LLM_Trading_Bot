@@ -17,8 +17,8 @@ Stack: Python 3.12 / uv / pytest / ruff / mypy (strict) · Ziel: Hetzner Cloud C
 | Test (Host) | `uv run pytest` |
 | Lint/Format | `uv run ruff check . && uv run ruff format --check . && uv run mypy src tests tools && uv run shellcheck deploy/*.sh scripts/*.sh` (Fix: `uv run ruff check --fix . && uv run ruff format .`) |
 | Run (lokal) | `uv run trading-bot` (Dienst läuft später endlos → nur mit Timeout/im Hintergrund) |
-| Deploy | – (folgt in M1 Nr. 6; nie ohne Zustimmung) |
-| Logs (Server) | – (geplant `journalctl -u <unit>`; `-f` nur mit Timeout) |
+| Deploy | `bash scripts/deploy.sh <alias> <dienst> deploy` (nur Commits auf `origin/main` mit grüner CI; nie ohne Zustimmung; Ablauf `docs/betrieb/server.md`) |
+| Logs (Server) | `ssh <alias> 'sudo journalctl --namespace=llm-trading-bot -u llm-trading-bot -n 50 --no-pager'` (`-f` nur mit Timeout) |
 
 uv ist per winget installiert; findet die Shell `uv` nicht (PATH erst nach Neustart aktiv), liegt es unter
 `$LOCALAPPDATA/Microsoft/WinGet/Packages/astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe/uv.exe`.

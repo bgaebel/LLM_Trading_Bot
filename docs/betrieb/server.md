@@ -64,29 +64,95 @@ danach `/etc/ssh/sshd_config.d/01-hardening.conf` prüfen bzw. `authorized_keys`
 - Hetzner-Cloud-Firewall mit denselben Regeln als zweite Schicht vor dem Server.
 - Hetzner-Backups oder ein Snapshot nach der Einrichtung.
 
-## Dienst (Spec 008, Installation folgt in Nr. 6)
-Die systemd-Dateien liegen mit Platzhaltern in `deploy/`; die CI prüft sie mit Testwerten (`scripts/check-units.sh`).
-Installiert werden sie erst mit Roadmap Nr. 6 und nur mit Zustimmung:
-- `llm-trading-bot.service`: `trading-bot run --db __DATA_DIR__/bot.db` als `__SERVICE_USER__`, `Type=notify`,
-  Watchdog 60 s, Neustart bei Fehler nach 15 s, Stopp-Frist 90 s (der Dienst selbst gibt einer Runde 75 s).
-- `llm-trading-bot-web.service`: die Weboberfläche auf `127.0.0.1:8787`, gleicher Benutzer (liest `secrets.env`
-  und `service-status.json`, beide 600).
-- `journald@llm-trading-bot.conf`: eigener Journal-Namensraum, höchstens 200 MB und 14 Tage.
+## Bot-Betrieb (Spec 008/009, ADR-0017/0018)
+Alles läuft von hier über `scripts/deploy.sh` (Git Bash) und nur mit Zustimmung des Nutzers. Das Skript schickt
+nur einen Commit von `origin/main` mit grüner CI auf den Server (`git archive`) und führt dort `deploy/release.sh`
+aus demselben Commit aus. `<dienst>` ist der Systembenutzer aus Spec 002.
 
-Platzhalter: `__SERVICE_USER__` (Dienstbenutzer aus Spec 002), `__APP_DIR__` (Checkout mit `.venv`),
-`__DATA_DIR__` (DB, `secrets.env`, Statusdatei; einziges beschreibbares Verzeichnis). Geplante Prüfbefehle:
+| Pfad auf dem Server | Inhalt | Rechte |
+|---|---|---|
+| `/opt/llm-trading-bot/releases/<sha>/` | ein Release je Commit mit eigener `.venv` | root, 755 |
+| `/opt/llm-trading-bot/current`, `…/previous` | Symlinks auf das aktive und das vorige Release | root |
+| `/var/lib/llm-trading-bot/` | `bot.db`, `secrets.env`, `web-auth.json`, `service-status.json` | `<dienst>`, 700 / 600 |
+| `/var/backups/llm-trading-bot/{daily,pre-update}/` | geprüfte DB-Kopien (14 bzw. 5) | `<dienst>`, 700 / 600 |
+| `/usr/local/bin/uv` | uv in fester Version (SHA-256 geprüft) | root |
 
+Units: `llm-trading-bot` (Runde je Minute), `llm-trading-bot-web` (127.0.0.1:8787),
+`llm-trading-bot-backup.timer` (täglich 03:30 UTC). Exit-Codes von `run`: 0 gestoppt, 1 Einstellungen/Schema
+ungültig (Neustart nach 15 s, damit eine korrigierte Einstellung greift), 3 andere Schreibsperre (**kein**
+Neustart, ADR-0018), 4 Runde hing bzw. Stopp-Frist überschritten (Neustart).
+
+### Erstinstallation
 ```bash
-systemctl status llm-trading-bot
-journalctl --namespace=llm-trading-bot -u llm-trading-bot -n 50 --no-pager
+bash scripts/deploy.sh <alias> <dienst> install
+```
+```bash
+bash scripts/deploy.sh <alias> <dienst> deploy
+```
+Ohne `secrets.env` startet `deploy` nur die Weboberfläche und sagt das. Einrichtungscode aus dem Journal holen,
+Tunnel öffnen (Abschnitt „Weboberfläche per SSH-Tunnel"), Passwort, Key und Depots speichern, dann `deploy` noch
+einmal – jetzt startet der Bot mit Gesundheitscheck:
+```bash
+ssh <alias> 'sudo journalctl --namespace=llm-trading-bot -u llm-trading-bot-web -n 20 --no-pager'
 ```
 
-Exit-Codes von `run`: 0 gestoppt, 1 Einstellungen/Schema ungültig, 3 andere Schreibsperre, 4 Runde hing bzw.
-Stopp-Frist überschritten. Bei allen außer 0 startet systemd neu.
+### Update, Rollback, Status
+```bash
+bash scripts/deploy.sh <alias> <dienst> deploy
+```
+Ohne Commit-Angabe gilt `origin/main`; ein bestimmter Commit als viertes Argument. Ablauf: Release bauen und die
+DB lesend prüfen, während der alte Dienst läuft → stoppen → Backup nach `pre-update/` → Units installieren →
+umschalten → starten → bis zu 3 min auf eine Runde mit Ergebnis `ok`. Sonst schaltet das Skript automatisch auf das
+vorige Release zurück (Code und Units, **nie** die Datenbank) und endet mit Fehler.
+```bash
+bash scripts/deploy.sh <alias> <dienst> rollback
+```
+```bash
+bash scripts/deploy.sh <alias> <dienst> status
+```
+
+### Variablen außerhalb von `secrets.env`
+In `secrets.env` stehen nur Key, Depots, Effort und Budgets (Weboberfläche). Gebühren, Takt-Parameter oder
+`LOG_LEVEL` setzt man per Drop-in; ein Update ändert Drop-ins nie (es prüft das sogar):
+```bash
+ssh -t <alias> 'sudo systemctl edit llm-trading-bot'
+```
+Darin z. B. `[Service]` und `Environment=LOG_LEVEL=DEBUG`; danach `sudo systemctl restart llm-trading-bot`.
+
+### Backup und Wiederherstellung
+Der Timer sichert täglich nach `daily/` (14 bleiben), jedes Update vorher nach `pre-update/` (5 bleiben). Jede
+Kopie ist geprüft (`integrity_check`, Schema, Zeilenzahlen) und hat Rechte 600. `secrets.env` und `web-auth.json`
+werden nicht gesichert. Die Backups liegen **nur auf diesem Server** (ADR-0018); Hetzner-Backups lassen sich in der
+Hetzner-Oberfläche jederzeit zuschalten.
+```bash
+ssh <alias> 'sudo systemctl start llm-trading-bot-backup && sudo ls -l /var/backups/llm-trading-bot/daily'
+```
+Probe (ändert nichts am Betrieb):
+```bash
+ssh <alias> 'sudo runuser -u <dienst> -- /opt/llm-trading-bot/current/.venv/bin/trading-bot restore --backup /var/backups/llm-trading-bot/daily/<datei> --db /var/lib/llm-trading-bot/restore-test/bot.db'
+```
+Echte Wiederherstellung – die alte DB wird beiseitegelegt, nie gelöscht, und `restore` schreibt nur in einen
+Pfad, den es noch nicht gibt:
+1. `sudo systemctl stop llm-trading-bot` (beim Stoppen schreibt SQLite die WAL-Datei in die DB zurück).
+2. `bot.db` sowie ggf. `bot.db-wal`/`bot.db-shm` in `/var/lib/llm-trading-bot/` nach `replaced-<datum>/`
+   verschieben (als `<dienst>`).
+3. `trading-bot restore --backup <datei> --db /var/lib/llm-trading-bot/bot.db` als `<dienst>` (wie oben).
+4. `sudo systemctl start llm-trading-bot`, dann `deploy.sh … status`.
+
+### Logs und Prüfbefehle
+```bash
+ssh <alias> 'systemctl status llm-trading-bot llm-trading-bot-web llm-trading-bot-backup.timer --no-pager'
+```
+```bash
+ssh <alias> 'sudo journalctl --namespace=llm-trading-bot -u llm-trading-bot -n 50 --no-pager'
+```
+```bash
+ssh <alias> 'sudo runuser -u <dienst> -- /opt/llm-trading-bot/current/.venv/bin/trading-bot verify-db --db /var/lib/llm-trading-bot/bot.db'
+```
 
 ## Weboberfläche per SSH-Tunnel (Spec 006)
-Die Weboberfläche bindet nur an `127.0.0.1` (ADR-0015). Auf dem Server starten (Deployment als Dienst folgt in Nr. 6),
-dann vom eigenen Rechner einen Tunnel öffnen und `http://127.0.0.1:8787/` im Browser aufrufen:
+Die Weboberfläche bindet nur an `127.0.0.1` (ADR-0015) und läuft als Unit `llm-trading-bot-web`. Vom eigenen
+Rechner einen Tunnel öffnen und `http://127.0.0.1:8787/` im Browser aufrufen:
 
 ```bash
 ssh -N -L 8787:127.0.0.1:8787 <alias>
