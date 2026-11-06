@@ -1,6 +1,6 @@
 # Spec 004: Paper-Ausführung und SQLite-Persistenz
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s004-paper` · **Meilenstein:** M1 (Nr. 3)
 - **Erstellt:** 2026-11-06
 
@@ -85,7 +85,7 @@ Verworfen: Arena-Schema 1:1 mit allen sieben Agenten (der Bot ist kein Vergleich
 ORM/SQLAlchemy (neue Abhängigkeit für vier Tabellen). Migrationen (es gibt keine Bestands-DB).
 
 ## Plan
-- [ ] 1. `db.py` + `lock.py` + Tests (AK1, AK2, AK3)
+- [x] 1. `db.py` + `lock.py` + Tests (AK1, AK2, AK3)
 - [ ] 2. Generator für Ausführungs-Fixtures (Folgen + Grenzfälle) gegen die Arena
 - [ ] 3. `execution.py`: `trade_to_target`, `record_decision`, Kosten + Golden-Tests (AK4, AK5, AK8)
 - [ ] 4. Quotes/Fail-closed + Buy & Hold (AK6, AK7)
