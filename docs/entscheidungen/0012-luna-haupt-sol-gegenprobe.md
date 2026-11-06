@@ -16,7 +16,7 @@ Nutzer wollte nur unter dieser Bedingung wechseln.
 - Standard-Depots (`BOT_AGENTS`): `gpt-luna` (`gpt-6-luna`, Haupt-Trader) und `gpt-sol` (`gpt-6.1-sol`,
   Gegenprobe), plus Buy & Hold. `gpt-terra` entfällt. Klassische Agenten bleiben wählbar.
 - Beide bekommen im selben Zyklus denselben Snapshot, dieselben Regeln und Gebühren (wie ADR-0010).
-- Tagesanteile am Gesamtbudget von 3 € (ADR-0011, jetzt ADR-0013): `gpt-luna` 0,50 €, `gpt-sol` 2,50 € – ersetzt die Anteile
+- Tagesanteile am Gesamtbudget von 3 € (ADR-0011): `gpt-luna` 0,50 €, `gpt-sol` 2,50 € – ersetzt die Anteile
   aus ADR-0011 (sol 2,00 / terra 0,90 / luna 0,10). Erwartet: luna ~0,05–0,10 $, sol ~0,96–1,92 $ pro Tag.
 - Weiter gültig aus ADR-0010/0008: versioniertes Schema, keine automatische Migration.
 
