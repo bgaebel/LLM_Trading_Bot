@@ -135,6 +135,64 @@ def test_equity_thinning_keeps_the_last_value_of_each_slice() -> None:
     assert overview.thin(points, 3) == [(0.0, 1.0), (1.0, 2.0), (4.0, 5.0)]
 
 
+def _history(path: Path, rows: dict[str, list[int]]) -> None:
+    """Equity rows per agent at the given epoch seconds (values vary, so order matters)."""
+    open_db(path, agents=tuple(rows)).close()
+    con = sqlite3.connect(path)
+    try:
+        with con:
+            con.executemany(
+                "INSERT INTO equity(ts,agent,value,cash,btc,eth) VALUES (?,?,?,0,0,0)",
+                [
+                    (iso(t), agent, 10_000 + (t * 7919 + n) % 977)
+                    for agent, times in rows.items()
+                    for n, t in enumerate(times)
+                ],
+            )
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize("limit", [2, 3, 7, 240])
+def test_indexed_thinning_equals_thinning_the_whole_history(tmp_path: Path, limit: int) -> None:
+    start = int(NOW)
+    rows = {
+        "trend": [start + 60 * i for i in range(1_500)],
+        # Paused for a long stretch (deselected, chosen again later): empty slices in between.
+        "breakout": [start + 60 * i for i in (*range(200), *range(1_300, 1_500))],
+        "meanrev": [start + 60 * i + 5 for i in range(30)],  # short: kept whole up to the limit
+        BUYHOLD: [start + 37 * i for i in range(2_000)],  # odd step: slice edges fall between
+    }
+    path = tmp_path / "bot.db"
+    _history(path, rows)
+    with reading(path) as con:
+        for agent in rows:
+            full = [
+                (overview.epoch(r["ts"]), float(r["value"]))
+                for r in con.execute(
+                    "SELECT ts, value FROM equity WHERE agent=? ORDER BY ts", (agent,)
+                )
+            ]
+            assert overview._agent_series(con, agent, limit) == overview.thin(full, limit)
+
+
+def test_a_long_history_is_read_with_a_few_queries_per_slice(tmp_path: Path) -> None:
+    # A year of minute rounds is ~525 000 rows per depot; reading them all took seconds per page.
+    start = int(NOW)
+    path = tmp_path / "bot.db"
+    _history(path, {a: [start + 60 * i for i in range(40_000)] for a in ("trend", BUYHOLD)})
+    statements: list[str] = []
+    with reading(path) as con:
+        con.set_trace_callback(statements.append)
+        series = overview.equity_series(con)
+        con.set_trace_callback(None)
+    assert [len(s.points) for s in series] == [overview.MAX_POINTS] * 2
+    # Per depot: head, newest, then two indexed lookups per slice - never a full read.
+    assert len(statements) <= 1 + 2 * (2 + 2 * (overview.MAX_POINTS - 1))
+    reads = [s for s in statements if "FROM equity" in s]
+    assert reads and all(" LIMIT " in s for s in reads)  # no unbounded read of the table
+
+
 def test_short_series_are_not_thinned() -> None:
     points = [(0.0, 1.0), (5.0, 2.0)]
     assert overview.thin(points, 240) == points

@@ -72,6 +72,15 @@
 - **Ursache:** Statt `except Exception` nur `(OSError, ValueError, …)` gefangen. `urllib` reicht `http.client.HTTPException` (`IncompleteRead`, `BadStatusLine`) und `OverflowError`/`RecursionError` aus dem Parsen unverpackt durch.
 - **Lösung / Regel:** An der Transportgrenze alle bekannten Fehlertypen in eigene Fehler übersetzen (`TransportError`) und die Isolation Ende-zu-Ende über den echten Transport testen, nicht nur mit einem Fake, der saubere Fehler wirft.
 
+### Sich selbst neu ladende Seite darf nicht die ganze Historie lesen #web #sqlite #performance
+*2026-11-06 · Quelle: Spec 007 (Abschlussprüfung)*
+- **Symptom:** Übersicht in Tests und mit wenigen Tagen Daten schnell; mit einem Jahr Minutenrunden (~1,6 Mio.
+  Equity-Zeilen) ~6,7 s je Laden – bei Neuladen alle 15 s und globaler App-Sperre hängt die ganze Oberfläche.
+- **Ursache:** `SELECT … FROM equity` ohne Grenze, ausgedünnt erst in Python. Die Datenmenge wächst mit dem Takt
+  des Dienstes, die Testdaten nicht.
+- **Lösung / Regel:** Was jede Seite lädt, mit festen Grenzen lesen (`LIMIT`, Index-Abfragen je Abschnitt) und mit
+  einer künstlichen Jahres-DB messen. Test: alle Abfragen auf die wachsende Tabelle tragen ein `LIMIT`.
+
 ### Encoding-Fehler nur unter Windows #windows #encoding
 *2026-11-05 · Quelle: Preset python*
 - **Symptom:** `UnicodeDecodeError`/kaputte Umlaute beim Lesen von Dateien, nur unter Windows.

@@ -6,6 +6,7 @@ in a standard-library HTTP server bound to 127.0.0.1 only.
 
 import re
 import secrets
+import sqlite3
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -173,7 +174,7 @@ class WebApp:
         now = self.wall_clock()
         try:
             service = overview.service_pulse(read_status(status_path(self.db)), now)
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, TypeError) as exc:  # TypeError: a field of the wrong type
             service = overview.service_pulse(
                 None, now, problem=f"Statusdatei unlesbar ({type(exc).__name__})"
             )
@@ -182,8 +183,13 @@ class WebApp:
             with reading(self.db) as con:
                 view = overview.load(con, now, shares, service=service)
         except DbUnavailable as exc:
-            return Response(200, overview_page(None, csrf=session.csrf, problem=str(exc), now=now))
-        return Response(200, overview_page(view, csrf=session.csrf, now=now))
+            problem = str(exc)
+        except (sqlite3.Error, ValueError, ArithmeticError) as exc:
+            # Busy past the timeout or an odd stored value: a message, not an empty response.
+            problem = f"Datenbank nicht lesbar ({type(exc).__name__})."
+        else:
+            return Response(200, overview_page(view, csrf=session.csrf, now=now))
+        return Response(200, overview_page(None, csrf=session.csrf, problem=problem, now=now))
 
     def _settings(
         self, session: Session, message: str = "", ok: bool = True, status: int = 200

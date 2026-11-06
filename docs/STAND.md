@@ -3,20 +3,18 @@
 **Aktualisiert:** 2026-11-06 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-- Spec 005 LLM-Strategie: fertig; Fix aus der Abschlussprüfung (kein Handel, wenn der Quote-Abruf nach den
-  Antworten scheitert) mit PR #12 gemergt.
-- Spec 008 Dienst (ADR-0017): fertig, PR #11 gemergt.
-- Spec 006, 007: gemergt (PR #6–#10), alle AKs erfüllt, nur `/abschluss` offen.
-- Fertig davor: Spec 004 (PR #4), 003 (PR #3), 001 (PR #2), 002 (PR #1).
+- Specs 001–008 fertig. Zuletzt abgeschlossen (je mit Fixes aus der Abschlussprüfung): 005 (PR #12), 006 (PR #13),
+  007 (Equity-Reihe per Index ausgedünnt, Ladefehler als Meldung), 008 (PR #11).
+- Offen in M1: Nr. 6 Deploy auf Hetzner, Nr. 4 Risiko-Grenzen, Nr. 8 Echtgeld-Schnittstelle als Entwurf.
 
 ## Nächster Schritt
-1. `/abschluss 006`, `/abschluss 007`.
-2. Dann Nr. 6 Deploy auf Hetzner (nur mit Zustimmung). Dabei entscheiden (Spec 008, „Offen / Folgearbeit“):
-   Verhalten bei Uhrsprung (NTP), `RestartPreventExitStatus`/StartLimit für Exit 1 und 3.
-3. Danach Nr. 4 Risiko-Grenzen.
+1. Nr. 6 Deploy auf Hetzner (Spec anlegen; alles auf dem Server nur mit Zustimmung). Dabei entscheiden (Spec 008,
+   „Offen / Folgearbeit“): Verhalten bei Uhrsprung (NTP), `RestartPreventExitStatus`/StartLimit für Exit 1 und 3;
+   Variablen außerhalb von `secrets.env` per Unit/Drop-in (Spec 006).
+2. Danach Nr. 4 Risiko-Grenzen.
 
 ## In Arbeit
-- Spec: 006, 007 (alle AKs erfüllt, Abschluss offen)
+- Spec: –
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf

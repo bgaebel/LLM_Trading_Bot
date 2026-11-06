@@ -552,6 +552,56 @@ def test_overview_survives_a_broken_status_file(running: Running) -> None:
     assert status == 200 and "Statusdatei unlesbar (JSONDecodeError)" in page
 
 
+def test_overview_survives_a_status_field_of_the_wrong_type(running: Running) -> None:
+    _bot_db(running.data / "bot.db")
+    now = time.time()
+    write_status(
+        running.data / "service-status.json", ServiceStatus("running", 1, iso(now), iso(now), 60, 5)
+    )
+    path = running.data / "service-status.json"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(f'"{iso(now)}"', "5"), encoding="utf-8"
+    )
+    setup(running)
+    status, _, page = running.browser.request("GET", "/")
+    assert status == 200 and "Statusdatei unlesbar (TypeError)" in page
+
+
+def test_a_failing_query_shows_a_message_not_an_empty_answer(
+    running: Running, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from llm_trading_bot.web import overview
+
+    def busy(*_a: object, **_kw: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    _bot_db(running.data / "bot.db")
+    setup(running)
+    monkeypatch.setattr(overview, "load", busy)
+    status, _, page = running.browser.request("GET", "/")
+    assert status == 200 and "Datenbank nicht lesbar (OperationalError)." in page
+
+
+def test_overview_takes_the_budget_shares_from_the_saved_settings(running: Running) -> None:
+    from llm_trading_bot.paper.db import open_db
+    from llm_trading_bot.paper.execution import BUYHOLD
+
+    open_db(running.data / "bot.db", agents=("gpt-luna", "gpt-sol", BUYHOLD)).close()
+    setup(running)
+    form: FormData = {
+        "csrf": running.browser.csrf(),
+        "OPENAI_API_KEY": KEY,
+        "agents": ["gpt-luna", "gpt-sol"],
+        "LLM_DAILY_BUDGET_EUR_GPT_LUNA": "0.20",
+    }
+    assert running.browser.request("POST", "/settings", form)[0] == 200
+    page = running.browser.request("GET", "/")[2]
+    assert "0.0000 € von 0.20 €" in page  # luna: saved share
+    assert "0.0000 € von 2.50 €" in page  # sol: ADR-0012 default
+
+
 def test_overview_reads_an_explicit_db_path(tmp_path: Path) -> None:
     db = tmp_path / "elsewhere" / "bot.db"
     _bot_db(db)
