@@ -1,7 +1,11 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (adapted) - llm_due
-"""When a depot's model is asked again (ADR-0011): on a fixed interval, or after a large move of
-either market, never more than a fixed number of attempts per rolling hour."""
+"""When a depot's model is asked again (ADR-0013): as rarely as possible, as often as needed.
 
+New information for the model appears when an hour has passed, a market moved strongly, or a classic
+strategy changed its verdict. Asking more often only repeats the same picture.
+"""
+
+import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -12,23 +16,25 @@ from llm_trading_bot.market.models import Symbol
 HOUR = 3600
 _REF_COLUMN = {Symbol.BTCEUR: "ref_mid_btc", Symbol.ETHEUR: "ref_mid_eth"}
 
+ReferenceSignals = Mapping[Symbol, Mapping[str, str]]
+
 
 @dataclass(frozen=True)
 class Cadence:
     """Lower bounds keep a typo in the environment from turning into a flood of paid calls."""
 
-    min_interval: int = 900
-    event_cooldown: int = 300
+    min_interval: int = 3600
+    event_cooldown: int = 600
     move_threshold: float = 0.018
-    max_calls_per_hour: int = 8
+    max_calls_per_hour: int = 4
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Cadence":
         return cls(
-            max(600, int(env.get("LLM_MIN_INTERVAL_SECONDS", "900"))),
-            max(300, int(env.get("LLM_EVENT_COOLDOWN_SECONDS", "300"))),
+            max(900, int(env.get("LLM_MIN_INTERVAL_SECONDS", "3600"))),
+            max(300, int(env.get("LLM_EVENT_COOLDOWN_SECONDS", "600"))),
             max(0.005, float(env.get("LLM_EVENT_MOVE_THRESHOLD", ".018"))),
-            max(0, int(env.get("LLM_MAX_CALLS_PER_HOUR", "8"))),
+            max(0, int(env.get("LLM_MAX_CALLS_PER_HOUR", "4"))),
         )
 
 
@@ -36,16 +42,32 @@ def iso(epoch: float) -> str:
     return datetime.fromtimestamp(int(epoch), UTC).isoformat(timespec="seconds")
 
 
+def _previous_signals(context: str) -> dict[str, object]:
+    try:
+        markets = json.loads(context)["markets"]
+    except (ValueError, KeyError, TypeError):
+        return {}
+    if not isinstance(markets, dict):
+        return {}
+    return {
+        name: part.get("reference_signals")
+        for name, part in markets.items()
+        if isinstance(part, dict)
+    }
+
+
 def llm_due(
     con: sqlite3.Connection,
     agent: str,
     mids: Mapping[Symbol, float],
+    signals: ReferenceSignals,
     now_epoch: float,
     cadence: Cadence,
 ) -> bool:
     """Every attempt counts as asked, also blocked or failed ones (Arena: attempts, not answers)."""
     row = con.execute(
-        "SELECT ts,ref_mid_btc,ref_mid_eth FROM llm_calls WHERE agent=? ORDER BY id DESC LIMIT 1",
+        "SELECT ts,ref_mid_btc,ref_mid_eth,context FROM llm_calls WHERE agent=?"
+        " ORDER BY id DESC LIMIT 1",
         (agent,),
     ).fetchone()
     if not row:
@@ -59,7 +81,9 @@ def llm_due(
         ref = row[_REF_COLUMN[symbol]]
         if ref is not None and ref > 0 and abs(mid / ref - 1) >= cadence.move_threshold:
             return True
-    return False
+    previous = _previous_signals(row["context"])
+    # A market that was not part of the last request counts as changed: its picture is new.
+    return any(previous.get(symbol.market) != dict(now) for symbol, now in signals.items())
 
 
 def attempts_last_hour(con: sqlite3.Connection, agent: str, now_epoch: float) -> int:
