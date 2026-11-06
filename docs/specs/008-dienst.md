@@ -113,6 +113,13 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
   (immer nur ein Thread). Stopp vor dem GPT-Schritt erscheint als Status `STOPPING`, zählt nicht als Fehler.
   Key-Redaktion bewusst ohne Wortgrenze (lieber ein verstümmeltes Wort als ein Key im Log).
   Hart-Exit bei Stall und überschrittener Stopp-Frist: Exit 4.
+- 2026-11-06: Probelauf lokal mit echten Bitvavo-Daten (`trend,breakout`): 3 Runden je um :05, 1,3–4,8 s, Status
+  korrekt (AK11 selbst bleibt beim Nutzer). Buy-&-Hold-Käufe bekommen eine eigene Logzeile.
+- 2026-11-06: Review (5 Prüfer, je Befund Gegenprüfung): 3 von 12 Befunden bestätigt und behoben – seltener
+  Deadlock, wenn der Signal-Handler `stop.set()` ausführt, während der Hauptthread in `stop.wait()` steckt (jetzt
+  `sleep` + `is_set`, Regressionstest im Unterprozess, Learning #signal); fehlender Test „Stopp während des
+  Wartens“ (AK5); ARCHITEKTUR nannte noch `/etc/llm-trading-bot/env`. Dazu Tests für GPT-Kosten in der Rundenzeile
+  (AK9) und READY erst nach geöffneter DB (AK6).
 
 ## Ergebnis
 - **Erreicht:** …

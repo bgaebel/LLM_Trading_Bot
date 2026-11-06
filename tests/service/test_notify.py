@@ -10,6 +10,7 @@ import pytest
 
 from llm_trading_bot.service.notify import Notifier
 from llm_trading_bot.service.run import PING_SECONDS
+from llm_trading_bot.service.status import read_status, status_path
 from service_fakes import harness
 
 unix_only = pytest.mark.skipif(
@@ -62,10 +63,20 @@ def test_ready_comes_after_the_db_is_open_and_then_regular_watchdog_pings(
     tmp_path: Path,
 ) -> None:
     h = harness(tmp_path, limit=3)
+    seen_at_ready: list[object] = []
+    send = h.notifier.ready
+
+    def ready_probe(status: str) -> bool:
+        # What a starting systemd sees at READY=1: the database is open, nothing ran yet.
+        state = read_status(status_path(h.db))
+        seen_at_ready.append((h.db.exists(), state and state.state, len(h.rounds.started)))
+        return send(status)
+
+    h.notifier.ready = ready_probe  # type: ignore[method-assign]
     h.service.run()
     sent = h.notifier.sent
     ready = next(i for i, m in enumerate(sent) if m[0] == "READY=1")
-    assert ready == 0 and h.db.exists()
+    assert ready == 0 and seen_at_ready == [(True, "running", 0)]
     # Three rounds a minute apart: never more than PING_SECONDS without a ping while waiting.
     assert h.notifier.lines().count("WATCHDOG=1") >= 3 * (60 // PING_SECONDS) - 1
     assert any(line.startswith("STATUS=running, last round ok at ") for line in h.notifier.lines())

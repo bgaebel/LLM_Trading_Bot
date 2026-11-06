@@ -3,6 +3,7 @@
 import hashlib
 import io
 import json
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Any
 import pytest
 
 from fakes import ScenarioClient
+from llm_fakes import KEY
 from llm_trading_bot.cli import EXIT_LOCKED as CLI_LOCKED
 from llm_trading_bot.cli import run_paper_cycle
 from llm_trading_bot.llm.due import iso
@@ -45,6 +47,15 @@ def test_an_overrun_skips_slots_and_says_so(tmp_path: Path) -> None:
     assert h.service.run() == EXIT_OK
     assert h.rounds.started == [MINUTE + 65, MINUTE + 245]
     assert "round overran: 2 slot(s) skipped, no catch-up" in h.log()
+
+
+def test_round_line_shows_each_gpt_result_with_its_cost(tmp_path: Path) -> None:
+    secrets = f"BOT_AGENTS=gpt-luna,gpt-sol\nOPENAI_API_KEY={KEY}\n"
+    h = harness(tmp_path, limit=1, secrets_text=secrets)
+    assert h.service.run() == EXIT_OK
+    line = next(x for x in h.log().splitlines() if x.startswith("INFO round "))
+    assert re.search(r"\| gpt gpt-luna ASKED 0\.\d{4} EUR, gpt-sol ASKED 0\.\d{4} EUR \|", line)
+    assert KEY not in h.log()
 
 
 def test_each_round_logs_one_summary_line_and_its_trades(tmp_path: Path) -> None:
@@ -87,7 +98,7 @@ def test_second_writer_is_refused_while_the_service_runs(tmp_path: Path) -> None
     assert "refused: another process owns" in seen["service_log"]
 
 
-def test_second_writer_is_refused_and_the_lock_is_free_after_a_stop(tmp_path: Path) -> None:
+def test_the_lock_is_free_again_after_a_stop(tmp_path: Path) -> None:
     assert harness(tmp_path, limit=1).service.run() == EXIT_OK
     assert harness(tmp_path, limit=1).service.run() == EXIT_OK
 

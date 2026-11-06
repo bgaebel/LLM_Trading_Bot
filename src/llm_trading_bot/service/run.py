@@ -71,7 +71,12 @@ class RealTimer:
         return time.monotonic()
 
     def wait_stop(self, stop: threading.Event, seconds: float) -> bool:
-        return stop.wait(seconds)
+        # LEARNING(#python): Signal-Handler setzt Event, auf das der Hauptthread wartet
+        # Not stop.wait(): Event.wait holds the Event's non-reentrant lock for a moment, and the
+        # signal handler (stop.set) runs in this same thread - it could deadlock on that lock.
+        # A signal interrupts the sleep anyway; is_set() takes no lock.
+        time.sleep(seconds)
+        return stop.is_set()
 
     def wait_done(self, done: threading.Event, seconds: float) -> bool:
         return done.wait(seconds)
