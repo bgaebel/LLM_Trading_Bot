@@ -1,6 +1,6 @@
 # Stand
 
-**Aktualisiert:** 2026-11-05 · **Branch:** `feat/s003-strategien` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-06 · **Branch:** `feat/s003-strategien` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
 Spec 002 (Server-Härtung) ist fertig und gemergt (PR #1). Spec 001 (Marktdaten) ist fertig und gemergt (PR #2): Bitvavo-Quotes und Kerzen, geprüfte Snapshots, `trading-bot market`. Der Server ist zu: nur Key-Login über den Admin-Benutzer, kein Root-

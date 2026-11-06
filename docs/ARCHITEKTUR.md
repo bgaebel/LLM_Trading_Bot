@@ -38,7 +38,7 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | `src/llm_trading_bot/core.py` | Reine Logik ohne I/O (aktuell: Modusauflösung) |
 | `src/llm_trading_bot/market/` | Marktdaten: Modelle, HTTP-Transport, Bitvavo-Client, Snapshot-Prüfung |
 | `src/llm_trading_bot/strategy/` | Indikatoren, klassische Strategien, LLM-Kontext (reine Logik, ADR-0007) |
-| `tools/golden/` | Generator der Golden-Fixtures aus dem Arena-Code (nur Entwicklung) |
+| `tools/golden/` | Generator der Golden-Fixtures aus dem Arena-Code; `mutation_check.py` prüft, dass die Tests Änderungen an Schwellen/Gewichten erkennen (nur Entwicklung) |
 | `tests/` | pytest-Tests; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests; Marker `net` = echte API (standardmäßig aus) |
 | `deploy/` | Server-Skripte; `setup-server.sh` härtet einen frischen Server (Spec 002) |
 | `.github/workflows/` | CI (ruff, mypy, pytest, shellcheck) und Doku-Prüfung |
@@ -72,7 +72,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
     `STRATEGIES`, `STRATEGY_VERSION = "v0.3.1"`, `run_strategy(name, snapshot, indicators, current_weight)`
   - `payload`: `feature_payload(...)` (Kontext der LLM-Agenten), `cost_roundtrip(spread_bps, fee, slippage)`
 - **Invarianten:** identisch zu Arena@7563724, belegt durch `tests/strategy/fixtures/strategy_golden_v0.3.1.json`
-  (relativ 1e-12, Texte exakt). Änderungen nur als neue Strategieversion; Fixtures nie anpassen (ADR-0007).
+  (relativ 1e-12, Texte exakt; Grenzfälle und LLM-JSON exakt per SHA-256). Änderungen nur als neue
+  Strategieversion; Fixtures nie anpassen (ADR-0007). `uv run python tools/golden/mutation_check.py` muss
+  alle Mutationen außer den dokumentierten äquivalenten erkennen.
   Rechenreihenfolge nicht umformen. Deutsche `reason`-Texte sind Teil des Vertrags.
 
 ## Datenfluss & Nebenläufigkeit

@@ -33,6 +33,7 @@ def feature_payload(
 ) -> dict[str, Any]:
     current = s.quote.mid
     return {
+        # The Symbol enum names (BTCEUR, ETHEUR) are the Arena's market ids (arena.py SYMBOLS).
         "market": s.symbol.name,
         "utc": _utc(s.fetched_at),
         "closed_bars_utc": {str(tf): _utc(s.bars[tf][-1].ts) for tf in INTERVALS},

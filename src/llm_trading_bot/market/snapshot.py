@@ -13,7 +13,8 @@ from llm_trading_bot.market.http import HTTPFailure, TransportError
 from llm_trading_bot.market.models import SYMBOLS, Candle, MarketDataError, Quote, Symbol
 
 INTERVALS: tuple[int, ...] = (1, 15, 60, 240)
-# Arena defaults; the strategy (M1 Nr. 2) decides the real minimum per interval.
+# Equal to the Arena strategies' MIN_BARS (strategies.py); Spec 003 keeps them and a golden test
+# checks the equality.
 DEFAULT_MIN_BARS: Mapping[int, int] = {1: 45, 15: 110, 60: 110, 240: 55}
 # Indicators like EMA/RSI/ADX assume equal time steps, so recent bars must be gap-free.
 GAP_WINDOW = 60

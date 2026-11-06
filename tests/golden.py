@@ -29,7 +29,8 @@ def snapshot_for(params: Params) -> MarketSnapshot:
     rows = build_bars(params)
     bars = {tf: tuple(Candle(*r) for r in rows[tf]) for tf in rows}
     bid, ask = quote_for(params, rows)
-    return MarketSnapshot(Symbol.BTCEUR, bars, Quote(bid, ask), NOW, NOW, {tf: 0 for tf in rows})
+    symbol = Symbol[params.get("symbol", "BTCEUR")]
+    return MarketSnapshot(symbol, bars, Quote(bid, ask), NOW, NOW, {tf: 0 for tf in rows})
 
 
 def assert_same(actual: Any, expected: Any, path: str = "") -> None:
