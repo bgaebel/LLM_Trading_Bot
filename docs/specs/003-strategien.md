@@ -1,6 +1,6 @@
 # Spec 003: Indikatoren und klassische Strategien aus der Arena
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s003-strategien` · **Meilenstein:** M1 (Nr. 2)
 - **Erstellt:** 2026-11-06
 
@@ -13,28 +13,28 @@ eigene Spec nach der Persistenz, weil sie die Budgetsperre in SQLite braucht. Di
 keine Orders, kein Netz, keine Persistenz.
 
 ## Akzeptanzkriterien
-- [ ] AK1: `ema`, `rsi`, `atr`, `adx` und `indicators()` liefern auf den Golden-Fixtures dieselben Werte wie
+- [x] AK1: `ema`, `rsi`, `atr`, `adx` und `indicators()` liefern auf den Golden-Fixtures dieselben Werte wie
   Arena@7563724. Gleitkommazahlen sind gleich bis auf relative Abweichung ≤ 1e-12, Texte (z. B. `regime`) exakt.
   — Nachweis: `uv run pytest tests/strategy/test_golden_indicators.py`
-- [ ] AK2: Alle fünf Strategien liefern auf den Fixtures dieselben Ausgaben wie die Arena: `action`,
+- [x] AK2: Alle fünf Strategien liefern auf den Fixtures dieselben Ausgaben wie die Arena: `action`,
   `target_fraction`, `confidence` und `reason`, jeweils für `current_weight` 0, 0.25 und 0.45.
   — Nachweis: `uv run pytest tests/strategy/test_golden_signals.py`
-- [ ] AK3: Die Fixtures decken jeden Zweig ab: BUY, SELL und HOLD je Strategie; die Marktphasen TREND, RANGE
+- [x] AK3: Die Fixtures decken jeden Zweig ab: BUY, SELL und HOLD je Strategie; die Marktphasen TREND, RANGE
   und TRANSITION beim Ensemble; zu kurze Reihen bei RSI/ATR/ADX (Rückfallwerte).
   — Nachweis: `uv run pytest tests/strategy/test_golden_coverage.py` (zählt die Zweige in den Fixtures)
-- [ ] AK4: `feature_payload()` liefert für die Fixtures denselben Inhalt wie die Arena (Schlüssel und Werte), dazu
+- [x] AK4: `feature_payload()` liefert für die Fixtures denselben Inhalt wie die Arena (Schlüssel und Werte), dazu
   `cost_roundtrip(spread, fee, slippage)` = 2·(fee+slippage) + Spread. Gebühr und Slippage sind Parameter, keine
   Umgebungsvariablen. — Nachweis: `uv run pytest tests/strategy/test_golden_payload.py`
-- [ ] AK5: Ein Signal ist ein geprüfter Typ: `action` ∈ BUY/SELL/HOLD, `target_fraction` ∈ {0, 0.25, 0.45},
+- [x] AK5: Ein Signal ist ein geprüfter Typ: `action` ∈ BUY/SELL/HOLD, `target_fraction` ∈ {0, 0.25, 0.45},
   `confidence` ∈ [0, 1], nicht leerer `reason`, dazu Strategiename und Strategieversion `v0.3.1`.
   Eine unbekannte Strategie ist ein Fehler. — Nachweis: `uv run pytest tests/strategy/test_signal.py`
-- [ ] AK6: Die Fixtures sind reproduzierbar. `tools/golden/generate_strategy_golden.py <arena-pfad>` erzeugt sie aus
+- [x] AK6: Die Fixtures sind reproduzierbar. `tools/golden/generate_strategy_golden.py <arena-pfad>` erzeugt sie aus
   dem Arena-Checkout neu; die Datei nennt Arena-Commit und Generator. Ohne diese Angabe gibt es zur Laufzeit keine
   Abhängigkeit zur Arena. — Nachweis: [manuell] Generator erneut ausführen, `git diff --exit-code tests/strategy/fixtures/`
-- [ ] AK7: `uv run trading-bot signals` holt einmal Live-Daten und zeigt je Markt die Signale aller fünf Strategien
+- [x] AK7: `uv run trading-bot signals` holt einmal Live-Daten und zeigt je Markt die Signale aller fünf Strategien
   mit Grund. Ist der Snapshot ungültig, zeigt es den Grund und endet mit Exit-Code ≠ 0.
   — Nachweis: [manuell] Befehl ausführen, Ausgabe in „Verlauf"
-- [ ] AK8: Lint, Format, `mypy src tests` und CI sind grün.
+- [x] AK8: Lint, Format, `mypy src tests` und CI sind grün.
   — Nachweis: Befehle aus `CLAUDE.md`, CI-Lauf im PR
 
 ## Abgrenzung
@@ -102,8 +102,18 @@ Kostenannahmen: Die Arena nutzt im Code `TAKER_FEE=0.0025` und `SLIPPAGE=0.0005`
 - 2026-11-06: Kostenwerte der Arena (`ARENA_TAKER_FEE` 0,25 %, `ARENA_SLIPPAGE` 0,05 %) als Konstanten in `payload.py`, vorerst nur für die Diagnose; die Werte des Bots legt Nr. 3 fest.
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Unterpaket `strategy` mit Indikatoren, fünf klassischen Strategien, geprüftem `Signal` (Version
+  `v0.3.1`), LLM-Kontext und Kostenmodell, verhaltensgleich zu Arena@7563724; CLI `trading-bot signals`.
+- **Abweichungen vom Plan:** Fixtures speichern Parameter statt Kerzen (deterministischer Aufbau); nach der Prüfung
+  kamen Grenzfälle (SHA-256 der exakten Arena-Ausgabe), gezielte ADX-/Spread-/Dip-/Zero-Volume-/ETH-Szenarien,
+  ein exakter LLM-JSON-Vergleich und `tools/golden/mutation_check.py` dazu. Fehlertexte bei Programmierfehlern
+  englisch (keine Signal-Ausgabe). UTF-8-stdout für die Windows-Konsole.
+- **Nachweise:** `uv run pytest` 446 passed (lokal und CI/Linux, PR #3); ruff, format, `mypy src tests tools`,
+  shellcheck grün; Generator reproduzierbar (`git diff --exit-code` sauber); `mutation_check.py` 51/51 wie
+  erwartet; `trading-bot signals` live Exit 0. Unabhängiger Prüfer: Runde 1 Blocker (Fixtures bewiesen Schwellen
+  nicht, 23/44 Mutationen überlebten), Runde 2 zwei Lücken, Runde 3 bereit – keine nicht-äquivalenten Überlebenden.
+- **Offen / Folgearbeit:** LLM-Strategie (3a) nutzt `feature_payload`; Kostenwerte des Bots in Nr. 3.
+  Äquivalente Mutationen (Gleichheit an Schwellen aus echten Kerzen, 1-ulp-Unterschiede) bewusst nicht abgedeckt.
+- **Neue ADRs / Learnings:** ADR-0007; Learnings „uv-Neuinstall scheitert mit os error 32" und „Umlaute in der
+  Konsolenausgabe kaputt unter Windows". Erkenntnis aus der Prüfung: Golden-Fixtures beweisen Gleichheit nur mit
+  Grenzfällen an jeder Schwelle – ein Mutationstest zeigt, ob sie das tun.

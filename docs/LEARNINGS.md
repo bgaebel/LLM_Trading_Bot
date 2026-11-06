@@ -84,6 +84,12 @@
 
 ## Prozess & Werkzeuge
 
+### Golden-Fixtures beweisen Gleichheit nur mit Grenzfällen #test #strategie
+*2026-11-06 · Quelle: Spec 003 (Prüfer-Blocker)*
+- **Symptom:** Alle Golden-Tests grün, jeder BUY/SELL/HOLD-Zweig abgedeckt – trotzdem blieben 23 von 44 Schwellen-/Gewichtsänderungen unentdeckt.
+- **Ursache:** Zufallsszenarien treffen die Ergebnisse, aber nicht die Werte nahe den Schwellen (ADX nur in Clustern weit weg von 18/19/20/24); „Zweig erreicht" ≠ „Bedingung geprüft".
+- **Lösung / Regel:** Je Bedingung Eingaben knapp unter/auf/über der Schwelle erzeugen, Erwartung aus dem Original berechnen; mit einem Mutationstest (`tools/golden/mutation_check.py`) nachweisen, dass Änderungen auffallen. Überlebende nur akzeptieren, wenn ihre Äquivalenz begründet ist.
+
 ### Argumente mit Leerzeichen über ssh zerfallen #ssh #deploy
 *2026-11-05 · Quelle: Spec 002*
 - **Symptom:** `ssh host 'bash -s' -- prepare a b "ssh-ed25519 AAAA… kommentar"` – das Skript bekommt den Key als drei Argumente.

@@ -8,11 +8,11 @@ oder Passwort-Login, ufw nur SSH, automatische Sicherheitsupdates. Neustart und 
 Zugangsdaten stehen nur lokal (`~/.ssh/config`, Alias), nicht im Repo.
 
 ## Nächster Schritt
-1. `/abschluss 003` (PR → CI grün → Squash-Merge).
+1. PR #3 (Spec 003) mergen, wenn die CI grün ist.
 2. Danach Nr. 3 (Paper-Ausführung + SQLite), dann 3a LLM-Strategie (vom Nutzer für M1 gewählt).
 
 ## In Arbeit
-- Spec: 003 (in Arbeit, alle Plan-Schritte erledigt)
+- Spec: 003 (fertig, PR #3 offen)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
