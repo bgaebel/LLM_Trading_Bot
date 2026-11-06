@@ -1,23 +1,25 @@
 # Stand
 
-**Aktualisiert:** 2026-11-06 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-06 · **Branch:** `feat/s005-llm-strategie` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-Fertig und gemergt: Spec 004 Paper-Ausführung + SQLite (PR #4), davor 002 (PR #1), 001 (PR #2), 003 (PR #3).
-Spec 005 LLM-Strategie (GPT) freigegeben, ADR-0009 angenommen. Nutzerentscheidungen vom
-2026-11-06: nur GPT über die OpenAI-API, Modell `gpt-6.1-sol`, Arena-Takt (30 min + Ereignis, ≤ 60/Tag),
-Budget 3 €/UTC-Tag.
+Spec 005 LLM-Strategie überarbeitet nach Nutzer-Umsteuerung: drei GPT-Depots (`gpt-6.1-sol`, `gpt-6.1-terra`,
+`gpt-6-luna`) plus Buy & Hold, BTC+ETH in einer Anfrage mit Prompt v1, Takt 4/h + ≤ 4 Ereignis/h, Effort `low`,
+Budget 3 €/Tag gesamt (sol 2,00 / terra 0,90 / luna 0,10). ADR-0010 und ADR-0011 vorgeschlagen (lösen 0008/0009 ab).
+Schon umgesetzt und bleibt: Schema v2 mit `llm_calls`, Budget-Reservierung/Abrechnung.
+Fertig davor: Spec 004 (PR #4), 003 (PR #3), 001 (PR #2), 002 (PR #1).
 
 ## Nächster Schritt
-1. `/umsetzen 005` (Spec freigegeben, ADR-0009 angenommen); für AK10 wird ein OpenAI-Key lokal in der Shell gebraucht.
-2. Später Nr. 4 Risiko inkl. 10-%-Drawdown-Stopp, Nr. 5 Dienst (Quotes nur einmal je Zyklus holen).
+1. Überarbeitete Spec 005 und ADR-0010/0011 freigeben.
+2. Danach weiter mit Plan-Schritt 3 (Prompt v1, Prüfung, Takt je Depot, Budget je Depot).
+3. Für AK10 wird ein OpenAI-Key lokal in der Shell gebraucht.
 
 ## In Arbeit
-- Spec: 005 (freigegeben)
+- Spec: 005 (Entwurf, überarbeitet; Schritte 1–2 erledigt)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
-- –
+- Freigabe der überarbeiteten Spec 005 und von ADR-0010/0011.
 
 ## Offen – manuell prüfen
 - Optional in der Hetzner-Oberfläche: Cloud-Firewall als zweite Schicht, Backups/Snapshot (siehe `docs/betrieb/server.md`).

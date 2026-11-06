@@ -33,7 +33,7 @@ Keine ungewollte echte Order und keine verfälschte Handelshistorie – im Zweif
 - **Werkzeuge / Versionen:** Python 3.12 (System-Python von Ubuntu 24.04), uv, pytest, ruff, mypy strict.
 - **Extern vorgegeben:** Bitvavo-REST-API (öffentliche Marktdaten; Trading-API erst ab Echtgeld-Meilenstein),
   OpenAI-/Anthropic-APIs für LLM-Strategien.
-- **Ressourcen:** Serverkosten CX23; LLM-API-Budget 3 € pro UTC-Tag (Nutzer, 2026-11-06; ADR-0009).
+- **Ressourcen:** Serverkosten CX23; LLM-API-Budget 3 € pro UTC-Tag für alle GPT-Depots zusammen (Nutzer, 2026-11-06; ADR-0011).
   Startkapital für den Echtgeld-Betrieb – noch festzulegen.
 
 ## Beteiligte & Umfeld
