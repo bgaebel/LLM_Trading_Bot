@@ -110,6 +110,7 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
   nur per CSS, aus bei `prefers-reduced-motion`; Einblend-Animation nur per Transform (in einem Hintergrund-Tab
   pausiert sie, Inhalte blieben sonst unsichtbar). Im Browser geprüft: Desktop und 375 px ohne seitliches
   Scrollen, Einrichtung → Login → Einstellungen mit separatem Test-Datenverzeichnis.
+- 2026-11-06: Nutzer: weniger Blau, mehr Schwarz → Grundfarben neutral schwarz/grau, Neon-Akzente bleiben.
 
 ## Ergebnis
 - **Erreicht:** …

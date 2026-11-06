@@ -7,10 +7,10 @@ fonts or images; motion stops for visitors who ask for reduced motion.
 CSS = """
 :root {
   color-scheme: dark;
-  --void: #04070d; --deep: #0a1122; --panel: rgba(11, 18, 34, 0.84); --well: rgba(2, 5, 11, 0.72);
-  --line: #1d2b47; --line-hot: #2f4a78; --grid: rgba(64, 196, 255, 0.055);
-  --text: #dce8ff; --muted: #8296bb; --dim: #52648a;
-  --cyan: #2de2e6; --blue: #3d8bff; --magenta: #ff3d8b; --amber: #ffb547; --lime: #6bff9a;
+  --void: #030303; --deep: #0b0b0c; --panel: rgba(12, 12, 14, 0.86); --well: rgba(0, 0, 0, 0.72);
+  --line: #222326; --line-hot: #3a3c42; --grid: rgba(255, 255, 255, 0.032);
+  --text: #e8e9ec; --muted: #94979e; --dim: #5d6067;
+  --cyan: #2de2e6; --blue: #12a5a9; --magenta: #ff3d8b; --amber: #ffb547; --lime: #6bff9a;
   --bad: #ff5c7a;
   --mono: "JetBrains Mono", "Cascadia Code", "Fira Code", Consolas, "SF Mono", monospace;
   --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -20,8 +20,8 @@ html { background: var(--void); }
 body {
   margin: 0; min-height: 100vh; font: 15px/1.55 var(--sans); color: var(--text);
   background:
-    radial-gradient(1100px 620px at 88% -12%, rgba(255, 61, 139, 0.17), transparent 62%),
-    radial-gradient(900px 640px at -12% 112%, rgba(45, 226, 230, 0.15), transparent 60%),
+    radial-gradient(1100px 620px at 88% -12%, rgba(255, 61, 139, 0.08), transparent 62%),
+    radial-gradient(900px 640px at -12% 112%, rgba(45, 226, 230, 0.06), transparent 60%),
     linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 44px 44px,
     linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 44px 44px,
     var(--void);
@@ -46,7 +46,7 @@ body::after {
 .node { fill: var(--void); stroke: rgba(45, 226, 230, 0.45); stroke-width: 1.4; }
 .node.hot { fill: var(--cyan); stroke: none; animation: blink 2.8s ease-in-out infinite; }
 .node.warm { stroke: rgba(255, 61, 139, 0.5); }
-.chip-pad { fill: rgba(10, 17, 34, 0.9); stroke: rgba(45, 226, 230, 0.28); stroke-width: 1.2; }
+.chip-pad { fill: rgba(10, 10, 11, 0.92); stroke: rgba(45, 226, 230, 0.28); stroke-width: 1.2; }
 .chip-pin { stroke: rgba(45, 226, 230, 0.28); stroke-width: 1.2; }
 .candle-up { fill: rgba(45, 226, 230, 0.2); stroke: rgba(45, 226, 230, 0.4); }
 .candle-down { fill: rgba(255, 61, 139, 0.16); stroke: rgba(255, 61, 139, 0.38); }
@@ -54,7 +54,7 @@ body::after {
 .wick-down { stroke: rgba(255, 61, 139, 0.38); }
 .price { fill: none; stroke: rgba(255, 181, 71, 0.55); stroke-width: 1.6;
   stroke-dasharray: 1400; stroke-dashoffset: 1400; animation: draw 5s ease-out 0.4s forwards; }
-.axis { stroke: rgba(130, 150, 187, 0.16); stroke-dasharray: 2 6; }
+.axis { stroke: rgba(150, 152, 158, 0.14); stroke-dasharray: 2 6; }
 @keyframes flow { to { stroke-dashoffset: -630; } }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
@@ -72,7 +72,7 @@ header, .ticker, main, footer { position: relative; z-index: 1; }
 header {
   display: flex; flex-wrap: wrap; gap: 12px 20px; justify-content: space-between;
   align-items: center; padding: 12px 22px;
-  background: linear-gradient(180deg, rgba(10, 17, 34, 0.95), rgba(6, 10, 20, 0.85));
+  background: linear-gradient(180deg, rgba(10, 10, 11, 0.96), rgba(3, 3, 3, 0.88));
   border-bottom: 1px solid var(--line); backdrop-filter: blur(8px);
 }
 header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
@@ -95,7 +95,7 @@ header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px
 .status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .status form { margin: 0; }
 .chip { display: inline-flex; align-items: center; gap: 7px; padding: 4px 10px;
-  border: 1px solid var(--line-hot); border-radius: 2px; background: rgba(2, 5, 11, 0.6);
+  border: 1px solid var(--line-hot); border-radius: 2px; background: rgba(0, 0, 0, 0.6);
   font: 600 11px/1.4 var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
   color: var(--muted); }
 .chip.ok { color: var(--lime); border-color: rgba(107, 255, 154, 0.35); }
@@ -104,7 +104,7 @@ header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px
   box-shadow: 0 0 6px currentColor, 0 0 12px currentColor; animation: blink 2.2s infinite; }
 .chip.lock .led { animation: none; border-radius: 1px; }
 .ticker { overflow: hidden; border-bottom: 1px solid var(--line);
-  background: rgba(3, 6, 13, 0.82); font: 11px/1 var(--mono); letter-spacing: 0.14em;
+  background: rgba(0, 0, 0, 0.82); font: 11px/1 var(--mono); letter-spacing: 0.14em;
   text-transform: uppercase; color: var(--dim); }
 .ticker-track { display: inline-flex; white-space: nowrap; animation: ticker 48s linear infinite; }
 .ticker-track span { padding: 9px 22px; border-right: 1px solid var(--line); }
@@ -114,7 +114,7 @@ header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px
 
 /* ---------------------------------------------------------------- layout */
 main { width: 100%; max-width: 1040px; margin: 30px auto 40px; padding: 0 16px; flex: 1; }
-footer { padding: 14px 22px; border-top: 1px solid var(--line); background: rgba(3, 6, 13, 0.8);
+footer { padding: 14px 22px; border-top: 1px solid var(--line); background: rgba(0, 0, 0, 0.8);
   font: 11px/1.6 var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
   color: var(--dim); display: flex; flex-wrap: wrap; gap: 6px 22px; justify-content: center; }
 footer span::before { content: "\\25C6  "; color: var(--line-hot); }
@@ -236,15 +236,15 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--cyan); outline-off
   border: 1px solid var(--line-hot); }
 .badge.llm { color: var(--magenta); border-color: rgba(255, 61, 139, 0.45); }
 .tile:has(input:checked) { border-color: rgba(45, 226, 230, 0.55);
-  background: linear-gradient(90deg, rgba(45, 226, 230, 0.1), rgba(2, 5, 11, 0.72) 70%); }
+  background: linear-gradient(90deg, rgba(45, 226, 230, 0.1), rgba(0, 0, 0, 0.72) 70%); }
 .tile:has(input:checked) .tile-name { color: var(--cyan); }
 
 /* budget gauge */
 .gauge { display: block; width: 100%; height: auto; margin: 6px 0 8px; }
-.gauge .bed { fill: rgba(2, 5, 11, 0.8); stroke: var(--line); }
+.gauge .bed { fill: rgba(0, 0, 0, 0.8); stroke: var(--line); }
 .gauge .luna { fill: var(--cyan); }
 .gauge .sol { fill: var(--magenta); }
-.gauge .tick { stroke: rgba(220, 232, 255, 0.22); stroke-width: 1; }
+.gauge .tick { stroke: rgba(232, 233, 236, 0.22); stroke-width: 1; }
 .gauge text { fill: var(--dim); font: 9px var(--mono); letter-spacing: 0.1em; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font: 12px/1.4 var(--mono);
   color: var(--muted); }
@@ -309,7 +309,7 @@ button.quiet:hover { color: var(--magenta); border-color: var(--magenta); filter
   animation: ping 2.4s ease-out infinite; }
 .radar .ping.warm { stroke: var(--magenta); animation-delay: -1.2s; }
 .radar text { fill: var(--dim); font: 8px var(--mono); letter-spacing: 0.12em; }
-.console { width: min(360px, 90vw); padding: 14px 16px; background: rgba(2, 5, 11, 0.82);
+.console { width: min(360px, 90vw); padding: 14px 16px; background: rgba(0, 0, 0, 0.82);
   border: 1px solid var(--line); border-radius: 2px; font: 12px/1.75 var(--mono);
   color: var(--muted); }
 .console div { display: flex; gap: 8px; }
