@@ -109,6 +109,9 @@ was zuletzt entschieden wurde und warum, was GPT heute gekostet hat und welche v
   ohne seitliches Scrollen (breite Tabellen scrollen in ihrem Panel). Lesen während eines laufenden Schreibers ist
   per Test belegt (`test_reader_sees_the_last_committed_state_while_the_bot_writes`); der Nutzer prüft AK11 noch selbst.
 - 2026-11-06: AK11 vom Nutzer abgenommen („Passt“); PR #9 gemergt.
+- 2026-11-06: Nachträglich mit Spec 008 geändert: Die Übersicht lädt sich alle 15 s neu statt alle 60 s (AK9) – im
+  Gleichtakt mit den 60-s-Runden des Dienstes zeigte sonst jedes Laden dasselbe Alter. Der Banner zeigt Kurse und
+  Depots statt fester Hinweise; „Letzter Zyklus“ in den Kennzahlen wird per Beschriftung gewählt.
 
 ## Ergebnis
 - **Erreicht:** …

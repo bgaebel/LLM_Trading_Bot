@@ -1,6 +1,6 @@
 # Spec 008: Dienst – Paper-Runde jede Minute, sauberer Stopp, Health, Logging
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s008-dienst` · **Meilenstein:** M1 (Nr. 5)
 - **Erstellt:** 2026-11-06
 
@@ -11,51 +11,51 @@ SIGTERM sauber endet. Ob der Dienst läuft, zeigen die Übersicht (Statusdatei) 
 systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-0017).
 
 ## Akzeptanzkriterien
-- [ ] AK1: Takt: `trading-bot run --db <pfad> [--secrets <datei>]` startet Runden jeweils 5 s nach dem Minutenwechsel
+- [x] AK1: Takt: `trading-bot run --db <pfad> [--secrets <datei>]` startet Runden jeweils 5 s nach dem Minutenwechsel
   (UTC). Dauert eine Runde länger als bis zum nächsten Termin, folgt die nächste am nächsten freien Termin – keine
   nachgeholten Runden. — Nachweis: `tests/service/test_schedule.py` (Uhr und Warten simuliert, Grenzwerte
   :04,999 / :05,000 / Überlauf um 1 und um 3 Termine)
-- [ ] AK2: Ein Schreiber: Der Dienst hält den `WriterLock` die ganze Laufzeit; ein zweites `run` oder `paper-cycle`
+- [x] AK2: Ein Schreiber: Der Dienst hält den `WriterLock` die ganze Laufzeit; ein zweites `run` oder `paper-cycle`
   wird mit Exit 3 abgelehnt; die Weboberfläche liest währenddessen (ADR-0016). — Nachweis:
   `tests/service/test_run.py::test_second_writer_is_refused_*`, `test_web_reads_while_the_service_runs`
-- [ ] AK3: Konfiguration je Runde: Eine Änderung in `secrets.env` greift in der nächsten Runde (z. B. `BOT_AGENTS`,
+- [x] AK3: Konfiguration je Runde: Eine Änderung in `secrets.env` greift in der nächsten Runde (z. B. `BOT_AGENTS`,
   Effort, Budget, Key). Ungültige Werte → letzte gültige Konfiguration bleibt, eine Warnung je neuem Fehlerbild
   (nicht jede Minute). Ungültig schon beim Start → Exit 1. Ein neu gewähltes Depot bekommt 10.000 € Startkapital;
   ein abgewähltes behält Historie und Bestand. Neuer Key → neuer OpenAI-Client. — Nachweis:
   `tests/service/test_config_reload.py`
-- [ ] AK4: Fehler: Wirft eine Runde (z. B. Bitvavo nicht erreichbar), wird Typ und bereinigte Meldung geloggt, die
+- [x] AK4: Fehler: Wirft eine Runde (z. B. Bitvavo nicht erreichbar), wird Typ und bereinigte Meldung geloggt, die
   Statusdatei zeigt `degraded` und die Zahl der Fehler in Folge, die nächste Runde läuft normal; nach einer guten
   Runde wieder `running`. Falsche Schemaversion → Exit 1 ohne Änderung an der DB. Eine Runde über 300 s → Status
   `stalled`, Exit 4. — Nachweis: `tests/service/test_run.py::test_failing_round_*`, `test_schema_*`, `test_stalled_*`
-- [ ] AK5: Stopp: SIGTERM/SIGINT → keine neue Runde; eine laufende Runde startet keine neue GPT-Anfrage mehr
+- [x] AK5: Stopp: SIGTERM/SIGINT → keine neue Runde; eine laufende Runde startet keine neue GPT-Anfrage mehr
   (`paper_cycle` bekommt dafür eine Stopp-Abfrage), bewertet die Depots aber noch; Ende spätestens 75 s nach dem
   Signal, sonst harter Exit mit Logzeile. Danach Status `stopped`, Lock freigegeben, Exit 0. Ohne laufende Runde
   endet der Dienst sofort (Warten wird unterbrochen). — Nachweis: `tests/service/test_shutdown.py`,
   `tests/paper/test_cycle.py::test_stop_request_skips_gpt_*`
-- [ ] AK6: systemd-Benachrichtigung über `NOTIFY_SOCKET` ohne Fremdpaket: `READY=1` nach DB-Öffnung und gültiger
+- [x] AK6: systemd-Benachrichtigung über `NOTIFY_SOCKET` ohne Fremdpaket: `READY=1` nach DB-Öffnung und gültiger
   Konfiguration, `WATCHDOG=1` aus der Hauptschleife mindestens alle 20 s (auch während einer langen Runde, solange
   sie unter 300 s bleibt), `STATUS=…`, `STOPPING=1` beim Stopp; ohne `NOTIFY_SOCKET` keine Wirkung. — Nachweis:
   `tests/service/test_notify.py` (echter Unix-Datagramm-Socket; unter Windows übersprungen)
-- [ ] AK7: Statusdatei `service-status.json` neben der DB, atomar geschrieben (Rechte 600 unter POSIX): Zustand
+- [x] AK7: Statusdatei `service-status.json` neben der DB, atomar geschrieben (Rechte 600 unter POSIX): Zustand
   (`starting`/`running`/`degraded`/`stalled`/`stopping`/`stopped`), PID, Start, Takt, letzte Runde (Beginn, Dauer,
   Ergebnis, Fehlertyp), Fehler in Folge, nächster Termin, Konfigurationswarnung. Nie ein Key oder Secret. —
   Nachweis: `tests/service/test_status.py`
-- [ ] AK8: Übersicht: neues Lebenszeichen „Dienst“ aus der Statusdatei – „läuft“ (Zustand `running` und letzte
+- [x] AK8: Übersicht: neues Lebenszeichen „Dienst“ aus der Statusdatei – „läuft“ (Zustand `running` und letzte
   Runde ≤ 3 min alt), „verzögert“ (`degraded` oder ≤ 15 min), „steht“ (sonst, auch `stopped`/`stalled`), „kein Dienst“
   ohne Datei. Gelesen nur lesend. — Nachweis: `tests/web/test_overview.py::test_service_pulse_*`
-- [ ] AK9: Logging auf stdout: je Runde eine INFO-Zeile (Dauer, GPT-Ergebnis je Depot mit Kosten, Zahl der Trades,
+- [x] AK9: Logging auf stdout: je Runde eine INFO-Zeile (Dauer, GPT-Ergebnis je Depot mit Kosten, Zahl der Trades,
   Equity je Depot), je Trade eine Zeile, Fehler als WARNING/ERROR; Stufe per `LOG_LEVEL` (Standard `INFO`). Ein Key
   (`sk-…`) erscheint nie im Log, auch nicht, wenn eine Fehlermeldung ihn enthält. — Nachweis:
   `tests/service/test_logging.py`
-- [ ] AK10: `deploy/llm-trading-bot.service`, `deploy/llm-trading-bot-web.service`, `deploy/journald@llm-trading-bot.conf`
+- [x] AK10: `deploy/llm-trading-bot.service`, `deploy/llm-trading-bot-web.service`, `deploy/journald@llm-trading-bot.conf`
   mit Platzhaltern (`__SERVICE_USER__`, `__APP_DIR__`, `__DATA_DIR__`): `Type=notify`, `NotifyAccess=main`,
   `WatchdogSec=60`, `Restart=on-failure`, `TimeoutStopSec=90`, Härtung (`ProtectSystem=strict`, `ReadWritePaths` nur
   Datenverzeichnis, `NoNewPrivileges`, `PrivateTmp`, `UMask=0077`), Journal ≤ 200 MB / 14 Tage. CI prüft die
   Units mit Testwerten per `systemd-analyze verify`; keine echten Server-Daten im Repo. — Nachweis:
   `scripts/check-units.sh` in der CI, `tests/test_deploy_files.py`
-- [ ] AK11: [manuell] Lokal `trading-bot run` auf einer Test-DB mindestens 5 Runden (klassische Depots oder mit
+- [x] AK11: [manuell] Lokal `trading-bot run` auf einer Test-DB mindestens 5 Runden (klassische Depots oder mit
   Key): je Minute eine Logzeile, Übersicht zeigt „Dienst läuft“; Strg+C beendet sauber (Status `stopped`).
-- [ ] AK12: Lint, Format, `mypy src tests tools`, shellcheck, CI grün. — Nachweis: Befehle aus `CLAUDE.md`, CI
+- [x] AK12: Lint, Format, `mypy src tests tools`, shellcheck, CI grün. — Nachweis: Befehle aus `CLAUDE.md`, CI
 
 ## Abgrenzung
 - Nicht Teil dieser Spec: Installation auf dem Server, Benutzer/Verzeichnisse/Backup/Update (Nr. 6, nur mit
@@ -128,10 +128,36 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
   gespeicherten Kurse (Mitte, Geld/Brief, Spread, Kerzenschluss, Stand) und jedes Depot mit Wert und Ergebnis. Er läuft
   über das Neuladen hinweg an derselben Stelle weiter (Phasen-Klasse aus der Uhr, kein Skript), und die sich selbst
   neu ladende Seite verzichtet auf die Einblend-Animation. Login- und Einstellungsseite behalten die festen Hinweise.
+- 2026-11-06: AK11 vom Nutzer abgenommen (Runden 18:07–18:16 UTC, Übersicht geprüft, Strg+C sauber, Status
+  `stopped`); PR #11 gemergt (bffa231).
+- 2026-11-06: `/abschluss`-Prüfung: bereit, kein Blocker. Nachgezogen auf `main`: Ein neuer Key wird erst als
+  übernommen vermerkt, wenn sein Client steht (sonst blieb nach einem Fehler beim Anlegen der alte Client unter dem
+  neuen Key; Test `test_a_failing_client_for_a_new_key_is_tried_again_next_round`); Kommentar zu `time.sleep` und
+  Signalen berichtigt (PEP 475).
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** `trading-bot run` ist der Dauerbetrieb des Paper-Bots: ein Prozess mit `WriterLock`, eine Runde je
+  Minute um :05 ohne Nachholen, Einstellungen je Runde neu (ungültig → letzte gültige bleibt), Rundenfehler →
+  `degraded` statt Absturz, Hänger > 300 s → Exit 4, Stopp per SIGTERM/SIGINT ohne neue GPT-Anfrage mit Frist 75 s,
+  systemd-Watchdog über `NOTIFY_SOCKET`, Statusdatei `service-status.json`, Lebenszeichen „Dienst“ in der Übersicht,
+  Logging mit Key-Redaktion. Units für Dienst und Weboberfläche plus Journal-Grenzen liegen geprüft in `deploy/`.
+- **Abweichungen vom Plan:**
+  - Schritte 2–4 in einem Commit (siehe Verlauf).
+  - AK8: `degraded` mit einer letzten Runde älter als 15 min zeigt „steht“, nicht „verzögert“ – sonst bliebe ein
+    abgestürzter Prozess mit eingefrorener Statusdatei für immer „verzögert“ (Test `test_service_pulse_*`, Fall 901 s).
+    Der AK-Text sagt „`degraded` oder ≤ 15 min“; die Grenze von 15 min gilt jetzt für beide.
+  - Übersicht: Neuladen alle 15 s statt 60 s (weicht von Spec 007 AK9 ab, dort im Verlauf vermerkt), Banner mit
+    Kursen und Depots – beides beim AK11-Test entstanden, nicht im ursprünglichen Plan.
+- **Nachweise:** `uv run pytest`: 1063 passed, 5 skipped (POSIX-Rechte, Unix-Sockets unter Windows); in der CI
+  (Linux) 1068 passed ohne diese Skips, `scripts/check-units.sh` grün für beide Units. ruff, ruff format, mypy
+  strict, shellcheck ohne Befund. Unabhängige Prüfung (`pruefer`): bereit, AK1–AK10 und AK12 mit Testnachweis,
+  AK11 manuell beim Nutzer.
+- **Offen / Folgearbeit (Nr. 6, beim Installieren entscheiden):**
+  - Springt die Wanduhr zurück (NTP-Schritt), wartet der Dienst entsprechend lang ohne Runde; der Watchdog merkt
+    das nicht, nur die Übersicht nach 15 min. `After=time-sync.target` bzw. ein Abgleich mit `monotonic` prüfen.
+  - `Restart=on-failure` mit `RestartSec=15` startet bei Exit 1 (Schema) oder Exit 3 (fremder Schreiber) endlos neu;
+    `RestartPreventExitStatus=` oder ein StartLimit bewusst festlegen.
+  - Der Client wird beim Start außerhalb der Fehlerbehandlung angelegt; ein Fehler dort beendet den Prozess (systemd
+    startet neu) – unkritisch, beim Deploy beobachten.
+- **Neue ADRs / Learnings:** ADR-0017 (angenommen mit dieser Spec); Learning „Signal-Handler setzt Event, auf das
+  der Hauptthread wartet“ (#python #signal #dienst).
