@@ -72,7 +72,8 @@ def _pulses(pulses: Sequence[Pulse]) -> str:
     items = "".join(
         f'<div class="pulse-row {_tone(p.level)}"><i class="led"></i><span>{escape(p.label)}</span>'
         f"<b>{escape(p.level)}</b><small>{escape(when(p.at))} · {escape(age(p.age_seconds))}"
-        "</small></div>"
+        + (f" · {escape(p.note)}" if p.note else "")
+        + "</small></div>"
         for p in pulses
     )
     return f'<div class="pulses">{items}</div>'

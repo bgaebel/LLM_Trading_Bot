@@ -89,7 +89,7 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
 - [x] 2. `service/run.py` Grundschleife: Lock, DB, Runden, Fehlerbehandlung, Stall-Grenze, Config-Reload (AK2–AK4)
 - [x] 3. Stopp per Signal mit Frist, Warten unterbrechbar (AK5)
 - [x] 4. `notify.py`, `status.py`, `logs.py` mit Redaktion (AK6, AK7, AK9)
-- [ ] 5. CLI `run`, Lebenszeichen „Dienst“ in der Übersicht (AK2, AK8)
+- [x] 5. CLI `run`, Lebenszeichen „Dienst“ in der Übersicht (AK2, AK8)
 - [ ] 6. `deploy/`-Units, Journal-Konfiguration, `scripts/check-units.sh` + CI-Schritt (AK10); Doku: README,
   ARCHITEKTUR, `docs/betrieb/server.md` (Abschnitt Dienst, Installation folgt Nr. 6), STAND; manuelle Prüfung AK11
 

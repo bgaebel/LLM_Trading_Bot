@@ -15,6 +15,7 @@ from llm_trading_bot.llm.budget import FREE_STATUSES, charged_today, day_bounds
 from llm_trading_bot.market.models import Symbol
 from llm_trading_bot.paper.db import START_CASH
 from llm_trading_bot.paper.execution import BUYHOLD
+from llm_trading_bot.service.status import ServiceStatus
 
 MAX_POINTS = 240
 """Points per equity line; enough for a smooth line, small enough for a quick page."""
@@ -23,6 +24,10 @@ DELAYED_SECONDS = 60 * 60
 TRADES = 20
 
 RUNNING, DELAYED, STOPPED = "läuft", "verzögert", "steht"
+NO_SERVICE = "kein Dienst"
+SERVICE_RUNNING_SECONDS = 3 * 60
+"""The service runs a round every minute (ADR-0017): three missed rounds are a delay."""
+SERVICE_DELAYED_SECONDS = 15 * 60
 
 
 def epoch(ts: str) -> float:
@@ -132,10 +137,40 @@ class Pulse:
     label: str
     at: str | None
     age_seconds: float | None
+    fixed: str | None = None
+    """A level decided from more than the age (the service pulse)."""
+    note: str = ""
 
     @property
     def level(self) -> str:
-        return level(self.age_seconds)
+        return self.fixed or level(self.age_seconds)
+
+
+def service_pulse(status: ServiceStatus | None, now: float, *, problem: str = "") -> Pulse:
+    """Spec 008 AK8: from ``service-status.json`` - is the service doing its rounds?"""
+    label = "Dienst"
+    if problem:
+        return Pulse(label, None, None, STOPPED, problem)
+    if status is None:
+        return Pulse(label, None, None, NO_SERVICE, "noch nie gestartet")
+    at = status.last_round_at or status.updated_at
+    age = max(0.0, now - epoch(at))
+    note = {
+        "starting": "startet",
+        "degraded": f"{status.failures} Runde{'' if status.failures == 1 else 'n'} mit Fehler",
+        "stalled": "Runde hing, Neustart",
+        "stopping": "wird beendet",
+        "stopped": "beendet",
+    }.get(status.state, "")
+    if status.config_warning:
+        note = (note + " · " if note else "") + "Einstellungen ungültig"
+    if status.state in ("stopped", "stalled", "stopping") or age > SERVICE_DELAYED_SECONDS:
+        fixed = STOPPED
+    elif status.state == "running" and age <= SERVICE_RUNNING_SECONDS:
+        fixed = RUNNING
+    else:
+        fixed = DELAYED
+    return Pulse(label, at, age, fixed, note)
 
 
 def liveness(con: sqlite3.Connection, now: float) -> list[Pulse]:
@@ -286,11 +321,17 @@ class Overview:
     trades: list[TradeRow]
 
 
-def load(con: sqlite3.Connection, now: float, shares: Mapping[str, Decimal]) -> Overview:
+def load(
+    con: sqlite3.Connection,
+    now: float,
+    shares: Mapping[str, Decimal],
+    *,
+    service: Pulse | None = None,
+) -> Overview:
     return Overview(
         depots(con),
         equity_series(con),
-        liveness(con, now),
+        ([service] if service else []) + liveness(con, now),
         latest_decisions(con),
         llm_today(con, now, shares),
         recent_trades(con),

@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from llm_trading_bot.llm.agents import LLM_DEFAULTS
 from llm_trading_bot.llm.openai_client import check_key
+from llm_trading_bot.service.status import read_status, status_path
 from llm_trading_bot.web import overview, pages
 from llm_trading_bot.web.auth import (
     LoginGuard,
@@ -147,10 +148,17 @@ class WebApp:
             )
             for agent, (_model, default) in LLM_DEFAULTS.items()
         }
+        now = self.wall_clock()
+        try:
+            service = overview.service_pulse(read_status(status_path(self.db)), now)
+        except (OSError, ValueError) as exc:
+            service = overview.service_pulse(
+                None, now, problem=f"Statusdatei unlesbar ({type(exc).__name__})"
+            )
         try:
             # ADR-0016: one short read-only snapshot per page view, never the WriterLock.
             with reading(self.db) as con:
-                view = overview.load(con, self.wall_clock(), shares)
+                view = overview.load(con, now, shares, service=service)
         except DbUnavailable as exc:
             return Response(200, overview_page(None, csrf=session.csrf, problem=str(exc)))
         return Response(200, overview_page(view, csrf=session.csrf))
