@@ -23,10 +23,10 @@ ReferenceSignals = Mapping[Symbol, Mapping[str, str]]
 class Cadence:
     """Lower bounds keep a typo in the environment from turning into a flood of paid calls."""
 
-    min_interval: int = 3600
-    event_cooldown: int = 600
-    move_threshold: float = 0.018
-    max_calls_per_hour: int = 4
+    min_interval: int
+    event_cooldown: int
+    move_threshold: float
+    max_calls_per_hour: int
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Cadence":

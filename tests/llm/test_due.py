@@ -154,3 +154,15 @@ def test_at_most_4_attempts_per_rolling_hour(con: sqlite3.Connection) -> None:
     # The first attempt leaves the window exactly one hour later.
     assert not hourly_limit_reached(con, "gpt-luna", T + 3600, CADENCE)
     assert not hourly_limit_reached(con, "gpt-sol", now, CADENCE)
+
+
+@pytest.mark.parametrize(("mid", "expected"), [(125.0, True), (124.99, False), (75.0, True)])
+def test_move_threshold_is_inclusive_at_an_exact_value(
+    con: sqlite3.Connection, mid: float, expected: bool
+) -> None:
+    """0.25 is exact in binary floating point, so the >= boundary is hit exactly."""
+    cadence = Cadence.from_env({"LLM_EVENT_MOVE_THRESHOLD": "0.25"})
+    attempt(con, T)
+    mids = {Symbol.BTCEUR: mid, Symbol.ETHEUR: 10.0}
+    signals = {Symbol.BTCEUR: CALM, Symbol.ETHEUR: CALM}
+    assert llm_due(con, "gpt-luna", mids, signals, T + 600, cadence) is expected

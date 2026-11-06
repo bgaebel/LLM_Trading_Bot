@@ -21,7 +21,7 @@ from llm_trading_bot.llm.budget import (
     reserve,
     settle,
 )
-from llm_trading_bot.paper.db import open_db
+from llm_trading_bot.paper.db import open_db, write_tx
 
 DAY = 1_793_059_200  # 2026-10-27 00:00:00 UTC
 SOL = Pricing(Decimal("2.00"), Decimal("10.00"))
@@ -182,3 +182,22 @@ def test_model_without_prices_is_never_called(con: sqlite3.Connection) -> None:
 def test_zero_limit_blocks(con: sqlite3.Connection) -> None:
     with pytest.raises(BudgetBlocked, match="depot budget"):
         book(con, limits=Limits(Decimal(3), Decimal(0), SOL))
+
+
+@pytest.mark.parametrize(("output_tokens", "exceeded"), [(10_000, 0), (10_001, 1)])
+def test_exceeded_flag_starts_just_above_the_reservation(
+    con: sqlite3.Connection, output_tokens: int, exceeded: int
+) -> None:
+    attempt_id = book(con, make(chars=0, out=10_000))  # reservation exactly 0.10
+    settle(con, attempt_id, SOL, status="OK", usage=Usage(0, output_tokens), latency_seconds=1.0)
+    assert stored(con, attempt_id)["reservation_exceeded"] == exceeded
+
+
+def test_sent_attempt_without_any_amount_counts_as_unlimited(con: sqlite3.Connection) -> None:
+    attempt_id = book(con)
+    with write_tx(con):
+        con.execute("UPDATE llm_calls SET reserved_eur=NULL WHERE id=?", (attempt_id,))
+    used, _ = charged_today(con, DAY + 3600)
+    assert used == Decimal("Infinity")
+    with pytest.raises(BudgetBlocked, match="budget reached"):
+        book(con)

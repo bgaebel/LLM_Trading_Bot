@@ -145,6 +145,12 @@ Claude Haiku 5.5 (gleicher Preis wie luna; ADR-0012), Raspberry Pi (ADR-0005 ble
   ohne Nutzerangabe auf 0,50 / 2,50 € von 3 € gesetzt (Gesamtgrenze unverändert).
 - 2026-11-06: Nutzer: Abfragen „so gering wie möglich, so viel wie nötig". Takt auf stündlich + Ereignis
   (≥ 1,8 % oder Wechsel eines Referenzsignals, frühestens nach 10 min), max. 4/h umgestellt (ADR-0013).
+- 2026-11-06: Schritt 5 umgesetzt (`agents.py`, `llm/cycle.py`, `paper/report.py`, mehrere Depots im Zyklus,
+  CLI mit Tokens/Kosten je Depot). `BOT_AGENT` ersetzt durch `BOT_AGENTS`. Nach der Antwort holt der Zyklus neue
+  Quotes (einzelner Prozess, kein Quote-Worker bis Nr. 5), sonst würde eine langsame Antwort immer `STALE_QUOTE`.
+- 2026-11-06: Mutationstest LLM 41/41 wie erwartet. Gefunden und geschlossen: exakter Grenzfall der Bewegungs-
+  schwelle, Grenze „Kosten knapp über Reservierung", Zeile ohne Betrag, totes Duplikat der Takt-Standardwerte.
+  Gleichwertig: `isfinite` bei `confidence` (NaN/inf scheitern schon an 0 ≤ x ≤ 1).
 
 ## Ergebnis
 - **Erreicht:** …
