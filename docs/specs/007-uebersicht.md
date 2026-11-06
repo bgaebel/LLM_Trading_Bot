@@ -80,7 +80,7 @@ was zuletzt entschieden wurde und warum, was GPT heute gekostet hat und welche v
 ## Plan
 - [x] 1. ADR-0016 + `web/readonly.py` mit Tests (Schreibversuch, Datei unverändert, paralleler Schreiber, fehlende
   DB, falsche Version) (AK2)
-- [ ] 2. `web/overview.py` mit Fixture-DB aus echten `paper_cycle`-Läufen: Depots, Lebenszeichen, Entscheidungen,
+- [x] 2. `web/overview.py` mit Fixture-DB aus echten `paper_cycle`-Läufen: Depots, Lebenszeichen, Entscheidungen,
   GPT heute, Trades, Equity-Reihen + Ausdünnung (AK3–AK8 Daten)
 - [ ] 3. `overview_page` + Equity-Chart + Navigation + Meta-Refresh in `pages.py`/`style.py` (AK1, AK4, AK6, AK9 Darstellung)
 - [ ] 4. Route `/`, Redirects, `web --db` (AK1, AK9, AK10), Server- und CLI-Tests
