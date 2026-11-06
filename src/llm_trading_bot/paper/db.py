@@ -44,6 +44,7 @@ CREATE TABLE llm_calls (
   markets TEXT NOT NULL, ref_mid_btc REAL, ref_mid_eth REAL, status TEXT NOT NULL,
   model TEXT NOT NULL, prompt_version TEXT NOT NULL, prompt_sha256 TEXT NOT NULL,
   max_output_tokens INTEGER NOT NULL, effort TEXT NOT NULL, context TEXT NOT NULL,
+  trigger_signals TEXT NOT NULL DEFAULT '{}',
   reserved_eur TEXT, cost_eur TEXT, reservation_exceeded INTEGER NOT NULL DEFAULT 0,
   response_id TEXT, input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER,
   cached_tokens INTEGER, latency_seconds REAL, error TEXT);
@@ -96,6 +97,7 @@ COLUMNS: Mapping[str, tuple[str, ...]] = {
         "max_output_tokens",
         "effort",
         "context",
+        "trigger_signals",
         "reserved_eur",
         "cost_eur",
         "reservation_exceeded",

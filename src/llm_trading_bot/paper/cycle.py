@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Mapping
 
 from llm_trading_bot.llm.agents import BotConfig
-from llm_trading_bot.llm.cycle import llm_cycle
+from llm_trading_bot.llm.cycle import run_llm_depots
 from llm_trading_bot.llm.due import iso
 from llm_trading_bot.llm.openai_client import SignalModel
 from llm_trading_bot.market.models import SYMBOLS, Symbol
@@ -38,7 +38,6 @@ from llm_trading_bot.paper.execution import (
 from llm_trading_bot.paper.report import (
     CycleReport,
     Equity,
-    LlmOutcome,
     MarketResult,
     decision_result,
 )
@@ -148,26 +147,18 @@ def paper_cycle(
             raise ValueError("GPT depots configured but no model client given")
 
         def refresh() -> Quotes | None:
-            # The answer may take a while; trade only on quotes fetched after it (Arena recheck).
             return _store_quotes(con, client, clock)[0]
 
-        for llm_agent in config.llm.agents:
-            try:
-                outcome, results = llm_cycle(
-                    con,
-                    llm_agent,
-                    config.llm,
-                    model,
-                    snaps,
-                    qs,
-                    costs,
-                    refresh_quotes=refresh,
-                    clock=clock,
-                )
-            except Exception as exc:
-                # One depot's failure never blocks the other depots (ADR-0012).
-                outcome = LlmOutcome(llm_agent.name, llm_agent.model, "ERROR", type(exc).__name__)
-                results = []
+        for outcome, results in run_llm_depots(
+            con,
+            config.llm.agents,
+            config.llm,
+            model,
+            snaps,
+            costs,
+            refresh_quotes=refresh,
+            clock=clock,
+        ):
             report.llm.append(outcome)
             report.markets.extend(results)
 

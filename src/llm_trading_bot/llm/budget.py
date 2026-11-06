@@ -36,10 +36,14 @@ def amount(value: object, name: str) -> Decimal:
 
 @dataclass(frozen=True)
 class Pricing:
-    """EUR per 1M tokens."""
+    """EUR per 1M tokens. Zero would switch the budget off for that depot, so it is refused."""
 
     input_per_million: Decimal
     output_per_million: Decimal
+
+    def __post_init__(self) -> None:
+        if self.input_per_million <= 0 or self.output_per_million <= 0:
+            raise ValueError("prices must be greater than 0 EUR per 1M tokens")
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,10 @@ class Attempt:
     context: str
     input_chars: int
     """Characters of instructions, schema and message; an upper bound for input tokens."""
+    trigger_signals: str = "{}"
+    """Market-only reference signals (weight 0) the cadence compares against next time."""
+    max_requests: int = 1
+    """HTTP requests this attempt may send (1 + retries); each may be billed."""
 
 
 @dataclass(frozen=True)
@@ -76,13 +84,18 @@ class Usage:
     cached_tokens: int | None = None
 
 
-def reservation(attempt: Attempt, pricing: Pricing) -> Decimal:
-    """Worst case: one token per input character plus the full output allowance, rounded up."""
+def request_worst_case(attempt: Attempt, pricing: Pricing) -> Decimal:
+    """One request: one token per input character plus the full output allowance, rounded up."""
     worst = (
         Decimal(attempt.input_chars) * pricing.input_per_million
         + Decimal(attempt.max_output_tokens) * pricing.output_per_million
     ) / MILLION
     return worst.quantize(CENT_FRACTION, rounding=ROUND_CEILING)
+
+
+def reservation(attempt: Attempt, pricing: Pricing) -> Decimal:
+    """Every request the attempt may send, at its worst case."""
+    return request_worst_case(attempt, pricing) * attempt.max_requests
 
 
 def _day_bounds(now_epoch: float) -> tuple[str, str]:
@@ -146,8 +159,8 @@ def reserve(
             reason = _blocking_reason(con, attempt, limits, hold, now_epoch)
         cursor = con.execute(
             "INSERT INTO llm_calls(ts,agent,markets,ref_mid_btc,ref_mid_eth,status,model,"
-            "prompt_version,prompt_sha256,max_output_tokens,effort,context,reserved_eur,error)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "prompt_version,prompt_sha256,max_output_tokens,effort,context,trigger_signals,"
+            "reserved_eur,error) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 now,
                 attempt.agent,
@@ -161,6 +174,7 @@ def reserve(
                 attempt.max_output_tokens,
                 attempt.effort,
                 attempt.context,
+                attempt.trigger_signals,
                 None if reason or hold is None else str(hold),
                 reason or None,
             ),
@@ -192,13 +206,18 @@ def settle(
     response_id: str | None = None,
     error: str | None = None,
     sent: bool = True,
+    extra_cost: Decimal = Decimal(0),
 ) -> Decimal | None:
-    """Replace the reservation by the actual estimate; unknown usage keeps the reservation."""
+    """Replace the reservation by the actual estimate; unknown usage keeps the reservation.
+
+    ``extra_cost`` covers requests before the last one (retries): their usage is unknown, so the
+    caller books them at their worst case.
+    """
     with write_tx(con):
         row = con.execute("SELECT reserved_eur FROM llm_calls WHERE id=?", (attempt_id,)).fetchone()
         if row is None:
             raise KeyError(f"unknown llm attempt {attempt_id}")
-        cost = Decimal(0) if not sent else cost_of(usage, pricing) if usage else None
+        cost = Decimal(0) if not sent else cost_of(usage, pricing) + extra_cost if usage else None
         reserved = amount(row["reserved_eur"], "reserved_eur") if row["reserved_eur"] else None
         exceeded = cost is not None and reserved is not None and cost > reserved
         con.execute(

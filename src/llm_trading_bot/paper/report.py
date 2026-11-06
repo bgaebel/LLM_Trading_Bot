@@ -20,6 +20,8 @@ class MarketResult:
     traded: bool = False
     reason: str = ""
     error: str = ""
+    attempt: int | None = None
+    """For GPT decisions: the llm_calls attempt the decision came from."""
 
 
 @dataclass(frozen=True)
@@ -29,7 +31,7 @@ class LlmOutcome:
     agent: str
     model: str
     status: str
-    """ASKED, NOT_DUE, HOURLY_LIMIT, BUDGET_BLOCKED, NO_MARKETS, HALTED or ERROR."""
+    """ASKED, NOT_DUE, HOURLY_LIMIT, BUDGET_BLOCKED, NO_QUOTES, NO_MARKETS, HALTED or ERROR."""
     detail: str = ""
     attempt_id: int | None = None
     usage: Usage | None = None
@@ -66,7 +68,13 @@ class CycleReport:
 
 
 def decision_result(
-    con: sqlite3.Connection, agent: str, symbol: Symbol, bar_ts: int, new: bool
+    con: sqlite3.Connection,
+    agent: str,
+    symbol: Symbol,
+    bar_ts: int,
+    new: bool,
+    *,
+    attempt: int | None = None,
 ) -> MarketResult:
     row = con.execute(
         "SELECT d.action, d.target, d.status, d.reason,"
@@ -84,4 +92,5 @@ def decision_result(
         row["status"],
         row["n"] > 0,
         row["reason"],
+        attempt=attempt,
     )

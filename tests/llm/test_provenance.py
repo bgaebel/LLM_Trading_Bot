@@ -63,6 +63,7 @@ def test_attempt_row_holds_the_full_provenance(tmp_path: Path) -> None:
     assert row["ref_mid_btc"] > 0 and row["ref_mid_eth"] > 0
     assert "gpt-luna (gpt-6-luna): ASKED" in text and "cost ~0.0005 EUR" in text
     assert "reasoning 300" in text
+    assert f"gpt-luna BTC-EUR: attempt {row['id']} new: BUY" in text
 
 
 def test_key_appears_nowhere_even_when_the_provider_echoes_it(tmp_path: Path) -> None:

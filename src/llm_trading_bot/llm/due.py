@@ -42,18 +42,17 @@ def iso(epoch: float) -> str:
     return datetime.fromtimestamp(int(epoch), UTC).isoformat(timespec="seconds")
 
 
-def _previous_signals(context: str) -> dict[str, object]:
+def trigger_state(signals: ReferenceSignals) -> str:
+    """What the next attempt compares against: market-only signals, stored as JSON."""
+    return json.dumps({symbol.market: dict(now) for symbol, now in signals.items()}, sort_keys=True)
+
+
+def _previous_signals(stored: str) -> dict[str, object]:
     try:
-        markets = json.loads(context)["markets"]
-    except (ValueError, KeyError, TypeError):
+        markets = json.loads(stored)
+    except (ValueError, TypeError):
         return {}
-    if not isinstance(markets, dict):
-        return {}
-    return {
-        name: part.get("reference_signals")
-        for name, part in markets.items()
-        if isinstance(part, dict)
-    }
+    return markets if isinstance(markets, dict) else {}
 
 
 def llm_due(
@@ -66,7 +65,7 @@ def llm_due(
 ) -> bool:
     """Every attempt counts as asked, also blocked or failed ones (Arena: attempts, not answers)."""
     row = con.execute(
-        "SELECT ts,ref_mid_btc,ref_mid_eth,context FROM llm_calls WHERE agent=?"
+        "SELECT ts,ref_mid_btc,ref_mid_eth,trigger_signals FROM llm_calls WHERE agent=?"
         " ORDER BY id DESC LIMIT 1",
         (agent,),
     ).fetchone()
@@ -81,7 +80,9 @@ def llm_due(
         ref = row[_REF_COLUMN[symbol]]
         if ref is not None and ref > 0 and abs(mid / ref - 1) >= cadence.move_threshold:
             return True
-    previous = _previous_signals(row["context"])
+    # ``signals`` must not depend on the depot's own position (computed with weight 0): otherwise
+    # the depot's own trade would look like new market information and trigger another paid call.
+    previous = _previous_signals(row["trigger_signals"])
     # A market that was not part of the last request counts as changed: its picture is new.
     return any(previous.get(symbol.market) != dict(now) for symbol, now in signals.items())
 

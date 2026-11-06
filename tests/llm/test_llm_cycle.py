@@ -1,8 +1,9 @@
-"""Spec 005 AK5-AK7: GPT depots in the paper cycle - asked when due, fail closed, isolated."""
+"""Spec 005 AK3-AK7: GPT depots in the paper cycle - asked when due, in parallel, fail closed."""
 
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -14,16 +15,58 @@ from fakes import ScenarioClient
 from golden_scenarios import NOW
 from llm_fakes import KEY, FakeModel, entry, valid_reply
 from llm_trading_bot.llm.agents import BotConfig, load_config
-from llm_trading_bot.llm.cycle import llm_cycle
+from llm_trading_bot.llm.budget import Attempt, Pricing, request_worst_case
+from llm_trading_bot.llm.contract import SYSTEM, response_schema
+from llm_trading_bot.llm.cycle import market_triggers, run_llm_depots
+from llm_trading_bot.llm.due import iso, llm_due, trigger_state
 from llm_trading_bot.llm.openai_client import ModelReply
 from llm_trading_bot.market.models import Quote, Symbol
-from llm_trading_bot.market.snapshot import build_snapshots
+from llm_trading_bot.market.snapshot import MarketSnapshot, build_snapshots
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db, write_tx
-from llm_trading_bot.paper.execution import BUYHOLD, Costs, latest_quotes, record_quotes
-from llm_trading_bot.paper.report import CycleReport
+from llm_trading_bot.paper.execution import BUYHOLD, Costs, Quotes, latest_quotes, record_quotes
+from llm_trading_bot.paper.report import CycleReport, LlmOutcome, MarketResult
+from llm_trading_bot.strategy.indicators import indicators
+from llm_trading_bot.strategy.payload import cost_roundtrip
+from llm_trading_bot.strategy.signals import run_strategy
 
 ENV = {"OPENAI_API_KEY": KEY}
+REFERENCE = ("trend", "breakout", "meanrev")
+
+
+class Clock:
+    def __init__(self, now: float = NOW) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def slow(
+    seconds: float, clock: Clock, then: Callable[[list[str]], ModelReply] = valid_reply
+) -> Any:
+    """A reply that takes ``seconds`` of (fake) time."""
+
+    def reply(markets: list[str]) -> ModelReply:
+        clock.now = max(clock.now, NOW + seconds)
+        return then(markets)
+
+    return reply
+
+
+class ShiftingClient(ScenarioClient):
+    """Quotes move by ``factor`` for ``symbol`` from the n-th ticker call on."""
+
+    def __init__(self, symbol: Symbol, factor: float, from_call: int) -> None:
+        super().__init__()
+        self.symbol, self.factor, self.from_call = symbol, factor, from_call
+
+    def quotes(self) -> dict[Symbol, Quote]:
+        result = super().quotes()
+        if self.quote_calls >= self.from_call:
+            q = result[self.symbol]
+            result[self.symbol] = Quote(q.bid * self.factor, q.ask * self.factor)
+        return result
 
 
 @pytest.fixture
@@ -42,7 +85,7 @@ def cycle(
     model: FakeModel,
     *,
     client: ScenarioClient | None = None,
-    at: float = NOW,
+    clock: Callable[[], float] | None = None,
     **env: str,
 ) -> CycleReport:
     return paper_cycle(
@@ -51,11 +94,11 @@ def cycle(
         config(**env),
         costs=Costs(),
         model=model,
-        clock=lambda: at,
+        clock=clock or Clock(),
     )
 
 
-def by_agent(report: CycleReport) -> dict[str, Any]:
+def by_agent(report: CycleReport) -> dict[str, LlmOutcome]:
     return {o.agent: o for o in report.llm}
 
 
@@ -64,52 +107,129 @@ def calls(con: sqlite3.Connection) -> list[sqlite3.Row]:
     return rows
 
 
-def test_both_depots_get_the_same_request_luna_first(con: sqlite3.Connection) -> None:
+def decisions(report: CycleReport, agent: str) -> dict[Symbol, MarketResult]:
+    return {m.symbol: m for m in report.markets if m.agent == agent}
+
+
+# ------------------------------------------------------------------ the regular path
+
+
+def test_both_depots_get_the_same_request(con: sqlite3.Connection) -> None:
     model = FakeModel()
     report = cycle(con, model)
-    assert [o.status for o in report.llm] == ["ASKED", "ASKED"]
-    assert [c["model"] for c in model.calls] == ["gpt-6-luna", "gpt-6.1-sol"]
-    assert model.calls[0]["message"] == model.calls[1]["message"]  # same snapshot, same data
-    assert model.calls[0]["markets"] == ["BTC-EUR", "ETH-EUR"]
-    assert {(c["effort"], c["max_output_tokens"]) for c in model.calls} == {("low", 8000)}
-    decisions = [(m.agent, m.symbol, m.action, m.status, m.traded) for m in report.markets]
-    assert decisions == [
-        ("gpt-luna", Symbol.BTCEUR, "BUY", "OK", True),
-        ("gpt-luna", Symbol.ETHEUR, "BUY", "OK", True),
-        ("gpt-sol", Symbol.BTCEUR, "BUY", "OK", True),
-        ("gpt-sol", Symbol.ETHEUR, "BUY", "OK", True),
+    assert [(o.agent, o.status) for o in report.llm] == [
+        ("gpt-luna", "ASKED"),
+        ("gpt-sol", "ASKED"),
     ]
+    assert sorted(c["model"] for c in model.calls) == ["gpt-6-luna", "gpt-6.1-sol"]
+    assert model.calls[0]["message"] == model.calls[1]["message"]  # same snapshot, same data
+    assert {tuple(c["markets"]) for c in model.calls} == {("BTC-EUR", "ETH-EUR")}
+    assert {(c["effort"], c["max_output_tokens"]) for c in model.calls} == {("low", 8000)}
+    for agent in ("gpt-luna", "gpt-sol"):
+        made = decisions(report, agent)
+        assert {(m.action, m.status, m.traded) for m in made.values()} == {("BUY", "OK", True)}
     assert report.complete
-    luna = by_agent(report)["gpt-luna"]
-    assert luna.regimes == {Symbol.BTCEUR: "UPTREND", Symbol.ETHEUR: "UPTREND"}
+    assert by_agent(report)["gpt-luna"].regimes == {
+        Symbol.BTCEUR: "UPTREND",
+        Symbol.ETHEUR: "UPTREND",
+    }
     assert [e.agent for e in report.equity] == ["gpt-luna", "gpt-sol", BUYHOLD]
 
 
-def test_second_cycle_soon_after_asks_nobody(con: sqlite3.Connection) -> None:
+def test_second_cycle_within_the_cooldown_asks_nobody(con: sqlite3.Connection) -> None:
     model = FakeModel()
     cycle(con, model)
-    report = cycle(con, model, at=NOW + 5)
+    report = cycle(con, model, clock=Clock(NOW + 5))
     assert [o.status for o in report.llm] == ["NOT_DUE", "NOT_DUE"]
     assert len(model.calls) == 2 and len(calls(con)) == 2
 
 
+def test_own_trades_do_not_trigger_another_request(con: sqlite3.Connection) -> None:
+    """After a buy, the weight-dependent reference signals flip (breakout/meanrev SELL), but the
+    market itself is unchanged: after the cooldown the depot must still not be due."""
+    client = ScenarioClient()
+    cycle(con, FakeModel(), client=client)
+    snaps = build_snapshots(client, clock=lambda: NOW)
+    mids = {s: snap.quote.mid for s, snap in snaps.items()}
+    # Computed here independently of the code under test: market-only means weight 0.
+    triggers = {}
+    for s, snap in snaps.items():
+        ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, 0.0025, 0.0005))
+        triggers[s] = {n: run_strategy(n, snap, ind, 0.0).action for n in REFERENCE}
+    assert market_triggers(snaps, Costs()) == triggers
+    assert calls(con)[0]["trigger_signals"] == trigger_state(triggers)
+    settings = config().llm
+    assert settings is not None
+    for agent in ("gpt-luna", "gpt-sol"):
+        assert not llm_due(con, agent, mids, triggers, NOW + 600, settings.cadence)
+    # A real change of a market-only signal does trigger.
+    changed = {**triggers, Symbol.ETHEUR: {**triggers[Symbol.ETHEUR], "trend": "SELL"}}
+    assert llm_due(con, "gpt-luna", mids, changed, NOW + 600, settings.cadence)
+
+
+def test_decision_links_to_its_attempt_and_regime(con: sqlite3.Connection) -> None:
+    clock = Clock()
+    cycle(con, FakeModel({"gpt-6-luna": slow(30, clock)}), clock=clock)
+    attempt_id = calls(con)[0]["id"]
+    row = con.execute(
+        "SELECT ts, bar_ts, model, inputs FROM decisions WHERE agent='gpt-luna' AND symbol='BTCEUR'"
+    ).fetchone()
+    # Stamped when the decision was taken, not when the cycle started.
+    assert row["ts"] == iso(NOW + 30)
+    assert row["bar_ts"] == int(NOW + 30) * 10000 + attempt_id
+    meta = json.loads(row["inputs"])["_llm"]
+    assert (meta["attempt"], meta["market_regime"], meta["prompt_version"]) == (
+        attempt_id,
+        "UPTREND",
+        "llm-v1",
+    )
+
+
+# ------------------------------------------------------------------ isolation and timing (AK7)
+
+
 def test_timeout_of_one_depot_does_not_block_the_other(con: sqlite3.Connection) -> None:
+    clock = Clock()
+
     def timeout(_markets: list[str]) -> ModelReply:
+        clock.now = NOW + 60
         raise openai.APITimeoutError(request=httpx2.Request("POST", "https://api.openai.com"))
 
-    report = cycle(con, FakeModel({"gpt-6-luna": timeout}))
+    report = cycle(con, FakeModel({"gpt-6-luna": timeout}), clock=clock)
     luna, sol = report.llm
     assert (luna.status, luna.detail, sol.status) == ("ERROR", "APITimeoutError", "ASKED")
     assert {m.agent for m in report.markets} == {"gpt-sol"}
+    assert {m.status for m in report.markets} == {"OK"}
     assert not report.complete
     luna_row = calls(con)[0]
-    # Unknown cost: the reservation stays booked.
+    # Unknown cost: the whole reservation stays booked.
     assert (luna_row["status"], luna_row["error"], luna_row["cost_eur"]) == (
         "ERROR",
         "APITimeoutError",
         None,
     )
     assert luna_row["reserved_eur"] is not None
+
+
+def test_a_slow_depot_does_not_cost_the_other_its_snapshot(con: sqlite3.Connection) -> None:
+    """Both requests run at the same time: 100 s for luna leave sol's answer usable."""
+    clock = Clock()
+    model = FakeModel({"gpt-6-luna": slow(100, clock)})
+    report = cycle(con, model, clock=clock)
+    assert [o.status for o in report.llm] == ["ASKED", "ASKED"]
+    assert {m.status for m in report.markets} == {"OK"}
+
+
+@pytest.mark.parametrize(("seconds", "status"), [(120, "OK"), (121, "STALE_QUOTE")])
+def test_answer_older_than_the_snapshot_limit_is_not_traded(
+    con: sqlite3.Connection, seconds: int, status: str
+) -> None:
+    clock = Clock()
+    report = cycle(con, FakeModel({"gpt-6-luna": slow(seconds, clock)}), clock=clock)
+    assert {m.status for m in decisions(report, "gpt-luna").values()} == {status}
+
+
+# ------------------------------------------------------------------ unusable answers
 
 
 @pytest.mark.parametrize(
@@ -123,6 +243,7 @@ def test_timeout_of_one_depot_does_not_block_the_other(con: sqlite3.Connection) 
             lambda m: ModelReply("completed", None, "I can't help", None, "r", None, None),
             "refusal",
         ),
+        (lambda m: ModelReply("completed", None, None, None, "r", None, None), "no output text"),
         (
             lambda m: ModelReply("incomplete", None, None, "max_output_tokens", "r", None, None),
             "status incomplete (max_output_tokens)",
@@ -132,21 +253,33 @@ def test_timeout_of_one_depot_does_not_block_the_other(con: sqlite3.Connection) 
             "inconsistent action and target",
         ),
     ],
-    ids=["not-json", "refusal", "incomplete", "half-invalid"],
+    ids=["not-json", "refusal", "no-text", "incomplete", "half-invalid"],
 )
 def test_unusable_answers_trade_nothing(con: sqlite3.Connection, reply: Any, detail: str) -> None:
     report = cycle(con, FakeModel({"gpt-6.1-sol": reply}))
     sol = by_agent(report)["gpt-sol"]
     assert sol.status == "ERROR" and detail in sol.detail
-    assert not [m for m in report.markets if m.agent == "gpt-sol"]
+    assert not decisions(report, "gpt-sol")
     assert con.execute("SELECT COUNT(*) FROM trades WHERE agent='gpt-sol'").fetchone()[0] == 0
     assert calls(con)[1]["status"] == "ERROR"
 
 
-def test_depot_over_budget_is_not_called(con: sqlite3.Connection) -> None:
+# ------------------------------------------------------------------ budget and caps
+
+
+def test_depot_over_its_budget_is_not_called(con: sqlite3.Connection) -> None:
     model = FakeModel()
     report = cycle(con, model, LLM_DAILY_BUDGET_EUR_GPT_SOL="0")
     assert by_agent(report)["gpt-sol"].status == "BUDGET_BLOCKED"
+    assert [c["model"] for c in model.calls] == ["gpt-6-luna"]
+
+
+def test_total_budget_from_the_configuration_binds_across_depots(con: sqlite3.Connection) -> None:
+    model = FakeModel()
+    report = cycle(con, model, LLM_DAILY_BUDGET_EUR="0.10")
+    sol = by_agent(report)["gpt-sol"]
+    assert by_agent(report)["gpt-luna"].status == "ASKED"
+    assert sol.status == "BUDGET_BLOCKED" and "total budget" in sol.detail
     assert [c["model"] for c in model.calls] == ["gpt-6-luna"]
 
 
@@ -165,12 +298,125 @@ def test_hourly_limit_stops_requests(con: sqlite3.Connection) -> None:
     assert model.calls == [] and calls(con) == []
 
 
+def test_reservation_covers_every_possible_request_and_retries_are_billed(
+    con: sqlite3.Connection,
+) -> None:
+    def retried(markets: list[str]) -> ModelReply:
+        reply = valid_reply(markets)
+        return ModelReply(
+            reply.status, reply.text, None, None, "resp_r", None, reply.usage, requests=3
+        )
+
+    cycle(con, FakeModel({"gpt-6-luna": retried}))
+    row = calls(con)[0]
+    luna_prices = Pricing(Decimal("0.10"), Decimal("0.50"))
+    chars = len(SYSTEM) + len(row["context"]) + len(json.dumps(response_schema(list(Symbol))))
+    one = Attempt(
+        "gpt-luna",
+        row["markets"],
+        None,
+        None,
+        row["model"],
+        "llm-v1",
+        "",
+        8000,
+        "low",
+        row["context"],
+        chars,
+    )
+    worst_one = request_worst_case(one, luna_prices)
+    assert Decimal(row["reserved_eur"]) == 3 * worst_one  # 1 request + 2 retries
+    usage_cost = (Decimal(1500) * Decimal("0.10") + Decimal(700) * Decimal("0.50")) / 10**6
+    assert Decimal(row["cost_eur"]) == usage_cost + 2 * worst_one
+
+
+# ------------------------------------------------------------------ fresh quotes (AK6)
+
+
+def _direct(
+    con: sqlite3.Connection,
+    *,
+    quotes_at: float,
+    now: float,
+    refreshed: Callable[[Quotes], Quotes | None] = lambda qs: qs,
+    model: FakeModel | None = None,
+) -> tuple[list[tuple[LlmOutcome, list[MarketResult]]], dict[Symbol, MarketSnapshot]]:
+    client = ScenarioClient()
+    snaps = build_snapshots(client, clock=lambda: NOW)
+    record_quotes(con, client.quotes(), now=iso(quotes_at))
+    stored = latest_quotes(con, now_epoch=quotes_at)
+    assert stored is not None
+    settings = config().llm
+    assert settings is not None
+    out = run_llm_depots(
+        con,
+        settings.agents,
+        settings,
+        model or FakeModel(),
+        snaps,
+        Costs(),
+        refresh_quotes=lambda: refreshed(stored),
+        clock=lambda: now,
+    )
+    return out, snaps
+
+
+def test_no_request_without_fresh_quotes(con: sqlite3.Connection) -> None:
+    model = FakeModel()
+    out, _ = _direct(con, quotes_at=NOW - 21, now=NOW, model=model)
+    assert [o.status for o, _ in out] == ["NO_QUOTES", "NO_QUOTES"]
+    assert model.calls == [] and calls(con) == []
+
+
+@pytest.mark.parametrize(("age", "status"), [(120, "ASKED"), (121, "NO_MARKETS")])
+def test_snapshot_age_limit_before_the_request(
+    con: sqlite3.Connection, age: int, status: str
+) -> None:
+    out, _ = _direct(con, quotes_at=NOW + age, now=NOW + age)
+    assert {o.status for o, _ in out} == {status}
+
+
+@pytest.mark.parametrize(("factor", "status"), [(1.0199, "OK"), (1.0201, "STALE_QUOTE")])
+def test_mid_drift_limit_after_the_answer(
+    con: sqlite3.Connection, factor: float, status: str
+) -> None:
+    def moved(qs: Quotes) -> Quotes:
+        q = qs[Symbol.ETHEUR]
+        return {**qs, Symbol.ETHEUR: Quote(q.bid * factor, q.ask * factor)}
+
+    out, _ = _direct(con, quotes_at=NOW, now=NOW, refreshed=moved)
+    for _outcome, results in out:
+        by_symbol = {m.symbol: m.status for m in results}
+        assert by_symbol == {Symbol.BTCEUR: "OK", Symbol.ETHEUR: status}  # BTC unaffected
+
+
+def test_answer_without_fresh_quotes_afterwards_is_not_traded(con: sqlite3.Connection) -> None:
+    out, _ = _direct(con, quotes_at=NOW, now=NOW, refreshed=lambda qs: None)
+    statuses = {m.status for _o, results in out for m in results}
+    assert statuses == {"STALE_QUOTE"}
+    assert con.execute("SELECT COUNT(*) FROM trades WHERE agent LIKE 'gpt-%'").fetchone()[0] == 0
+
+
+def test_the_cycle_really_fetches_quotes_after_the_answers(con: sqlite3.Connection) -> None:
+    """Ticker calls: 1 at cycle start, 2 for the snapshots, 3 after the answers."""
+    client = ShiftingClient(Symbol.ETHEUR, 1.03, from_call=3)
+    report = cycle(con, FakeModel(), client=client)
+    for agent in ("gpt-luna", "gpt-sol"):
+        made = decisions(report, agent)
+        assert (made[Symbol.BTCEUR].status, made[Symbol.ETHEUR].status) == ("OK", "STALE_QUOTE")
+    assert client.quote_calls == 3
+
+
+# ------------------------------------------------------------------ other skips
+
+
 def test_missing_eth_snapshot_asks_about_btc_only(con: sqlite3.Connection) -> None:
     client = ScenarioClient()
     client.fail_candles = {Symbol.ETHEUR}
     model = FakeModel()
     report = cycle(con, model, client=client)
     assert {tuple(c["markets"]) for c in model.calls} == {("BTC-EUR",)}
+    assert {tuple(json.loads(c["message"])["markets"]) for c in model.calls} == {("BTC-EUR",)}
     assert {m.symbol for m in report.markets} == {Symbol.BTCEUR}
     assert calls(con)[0]["markets"] == "BTC-EUR" and calls(con)[0]["ref_mid_eth"] is None
 
@@ -182,66 +428,3 @@ def test_halted_depot_is_not_asked(con: sqlite3.Connection) -> None:
     report = cycle(con, model)
     assert by_agent(report)["gpt-luna"].status == "HALTED"
     assert [c["model"] for c in model.calls] == ["gpt-6.1-sol"]
-
-
-def _direct(con: sqlite3.Connection, refreshed: Any, at: float) -> Any:
-    client = ScenarioClient()
-    snaps = build_snapshots(client, clock=lambda: NOW)
-    record_quotes(con, client.quotes(), now="2027-01-15T08:00:30+00:00")
-    qs = latest_quotes(con, now_epoch=NOW)
-    assert qs is not None
-    settings = config().llm
-    assert settings is not None
-    return llm_cycle(
-        con,
-        settings.agents[0],
-        settings,
-        FakeModel(),
-        snaps,
-        qs,
-        Costs(),
-        refresh_quotes=lambda: refreshed(qs),
-        clock=lambda: at,
-    )
-
-
-@pytest.mark.parametrize(
-    "refreshed",
-    [
-        lambda qs: None,
-        lambda qs: {
-            **qs,
-            Symbol.ETHEUR: Quote(qs[Symbol.ETHEUR].bid * 1.03, qs[Symbol.ETHEUR].ask * 1.03),
-        },
-    ],
-    ids=["no-fresh-quotes", "eth-moved-3pct"],
-)
-def test_answer_on_stale_prices_is_stored_but_not_traded(
-    con: sqlite3.Connection, refreshed: Any
-) -> None:
-    outcome, results = _direct(con, refreshed, NOW)
-    assert outcome.status == "ASKED"
-    status = {m.symbol: m.status for m in results}
-    assert status[Symbol.ETHEUR] == "STALE_QUOTE"
-    assert con.execute("SELECT COUNT(*) FROM trades WHERE symbol='ETHEUR'").fetchone()[0] == 0
-
-
-def test_snapshot_older_than_120_seconds_is_not_used(con: sqlite3.Connection) -> None:
-    outcome, results = _direct(con, lambda qs: qs, NOW + 121)
-    assert (outcome.status, results) == ("NO_MARKETS", [])
-    assert calls(con) == []
-
-
-def test_decision_links_to_its_attempt_and_regime(con: sqlite3.Connection) -> None:
-    cycle(con, FakeModel())
-    attempt_id = calls(con)[0]["id"]
-    row = con.execute(
-        "SELECT bar_ts, model, inputs FROM decisions WHERE agent='gpt-luna' AND symbol='BTCEUR'"
-    ).fetchone()
-    assert row["bar_ts"] == int(NOW) * 10000 + attempt_id
-    meta = json.loads(row["inputs"])["_llm"]
-    assert (meta["attempt"], meta["market_regime"], meta["prompt_version"]) == (
-        attempt_id,
-        "UPTREND",
-        "llm-v1",
-    )

@@ -113,12 +113,16 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
     `charged_today`, `BudgetBlocked`
   - `agents`: `load_config(env) -> BotConfig` (`classic`, `llm: LlmSettings`), `MODEL_PRICES`
   - `openai_client`: `SignalModel`-Protocol, `OpenAIResponses` (Responses API, strict `json_schema`, `store=False`,
-    60 s, 2 Wiederholungen), `ModelReply.problem()`
-  - `cycle`: `llm_cycle(con, agent, settings, model, snaps, qs, costs, refresh_quotes=, clock=)`
+    60 s je Anfrage, SDK ohne Wiederholung, eigene Wiederholung ≤ 2 nur bei 429/5xx), `ModelReply.problem()`,
+    `ModelReply.requests`
+  - `cycle`: `run_llm_depots(con, agents, settings, model, snaps, costs, refresh_quotes=, clock=)`,
+    `market_triggers(snaps, costs)`
 - **Invarianten:** Prompt und Schema festgeschrieben (Hash-Test); Änderung = neue `PROMPT_VERSION`. Ist ein Teil der
   Antwort ungültig, abgelehnt, unvollständig oder kein JSON: kein Trade. Je Versuch eine Zeile `llm_calls` mit
-  Reservierung vor dem Aufruf; unbekannte Kosten zählen mit; Modell ohne Preis wird nie gefragt. Nach der Antwort
-  frische Quotes (≤ 20 s, Mittelkurs ≤ 2 % vom Snapshot), sonst `STALE_QUOTE`. Fehler werden nur mit Typnamen
+  Reservierung vor dem Aufruf für alle möglichen Anfragen; unbekannte Kosten zählen mit; Wiederholungen werden im
+  schlimmsten Fall abgerechnet; Modell ohne Preis wird nie gefragt. Vor jeder Anfrage frische Quotes (≤ 20 s), nach
+  der Antwort neu geholte Quotes (Mittelkurs ≤ 2 % vom Snapshot, Snapshot ≤ 120 s), sonst `STALE_QUOTE`. Der
+  Signalwechsel-Auslöser vergleicht die Referenzsignale aus Marktsicht (Gewicht 0, `llm_calls.trigger_signals`). Fehler werden nur mit Typnamen
   gespeichert/ausgegeben; der API-Key erscheint nirgends.
 
 ### web
@@ -137,10 +141,11 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 `build_snapshots` holt je Markt die Kerzen für 1/15/60/240 min, danach einmal die Quotes (sie veralten am
 schnellsten), dann die Prüfung je Markt. `paper_cycle`: Quotes holen und speichern → frische Quotes aus der DB
 (sonst Ende ohne Entscheidung) → Buy & Hold initialisieren → Snapshots → je Markt eine Entscheidung pro neuem
-abgeschlossenem Bar des Strategie-Zeitrahmens (trend 60 min, sonst 15 min) → GPT-Depots nacheinander (luna, sol)
-mit demselben Snapshot: fällig? (stündlich, Bewegung ≥ 1,8 % oder Wechsel eines Referenzsignals, ≥ 10 min Abstand,
-≤ 4/h) → Reservierung → Anfrage → Abrechnung → Prüfung → Quotes neu holen → Entscheidung je Markt → Equity-Punkt
-je Depot. Ein Fehler eines Depots blockiert die anderen nicht.
+abgeschlossenem Bar des Strategie-Zeitrahmens (trend 60 min, sonst 15 min) → GPT-Depots (luna, sol) mit demselben
+Snapshot: je Depot frische Quotes? fällig? (stündlich, Bewegung ≥ 1,8 % oder Wechsel eines Referenzsignals, ≥ 10 min
+Abstand, ≤ 4/h) → Reservierung; dann alle Anfragen gleichzeitig (Threads, nur Netz) → Quotes einmal neu holen → je
+Depot Abrechnung → Prüfung → Entscheidung je Markt → Equity-Punkt je Depot. Ein Fehler eines Depots blockiert die
+anderen nicht.
 Worker-Schleife und Takt folgen in M1 Nr. 5. Vorgabe aus der Arena: Marktabfrage, Signal- und LLM-Worker laufen getrennt; ein
 langsamer LLM-Aufruf blockiert die Marktabfrage nicht; ein Fehler bei BTC blockiert ETH nicht.
 

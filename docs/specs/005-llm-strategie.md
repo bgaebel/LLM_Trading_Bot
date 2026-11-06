@@ -18,17 +18,20 @@ nie zu einem Trade. So lässt sich messen, ob das teurere Reasoning sein Geld we
   Test). Die Benutzer-Nachricht ist kompaktes JSON `{"markets": {"BTC-EUR": …, "ETH-EUR": …}}`; der Inhalt je
   Markt ist der Arena-Kontext `feature_payload` (Spec 003, inkl. Referenzsignale der klassischen Strategien,
   Depotgewicht, Kosten). Ein Markt ohne gültigen Snapshot fehlt in Anfrage und Schema. — Nachweis:
-  `uv run pytest tests/llm/test_contract.py`
+  `uv run pytest tests/llm/test_contract.py`, `tests/llm/test_llm_cycle.py::test_missing_eth_snapshot_asks_about_btc_only`
 - [ ] AK2: Strenge Prüfung je Markt nach Arena-Regeln: genau die Felder `action`, `target_fraction` ∈ {0, 0.25,
   0.45}, `confidence` ∈ [0, 1], `market_regime` ∈ {UPTREND, DOWNTREND, SIDEWAYS}, `reason` (nicht leer); BUY nur
   0.25/0.45, SELL nur 0; genau die angefragten Märkte. Ist ein Teil ungültig, wird die ganze Antwort verworfen.
   `incomplete`, Ablehnung (`refusal`), fehlender Text oder ungültiges JSON → Versuch `ERROR`, keine Entscheidung.
-  — Nachweis: `uv run pytest tests/llm/test_response.py` (Grenzfälle an jeder Regel)
+  — Nachweis: `uv run pytest tests/llm/test_response.py` (Grenzfälle an jeder Regel),
+  `tests/llm/test_openai_client.py` (`problem()`) und `tests/llm/test_llm_cycle.py` (`test_unusable_answers_trade_nothing`)
 - [ ] AK3: Takt je Depot (ADR-0013): regulär alle 60 min (`LLM_MIN_INTERVAL_SECONDS`, min. 900); Ereignis
   frühestens 10 min nach dem letzten Versuch (`LLM_EVENT_COOLDOWN_SECONDS`, min. 300), wenn sich ein Markt seit dem
   letzten Versuch um ≥ 1,8 % bewegt hat (`LLM_EVENT_MOVE_THRESHOLD`, min. 0,5 %) oder ein Referenzsignal
-  (`trend`/`breakout`/`meanrev`) eines Marktes gewechselt hat; höchstens 4 Versuche je rollierender Stunde
-  (`LLM_MAX_CALLS_PER_HOUR`). — Nachweis: `uv run pytest tests/llm/test_due.py` (Grenzfälle an jeder Schwelle)
+  (`trend`/`breakout`/`meanrev`) eines Marktes gewechselt hat – verglichen werden die Signale nur aus Marktsicht
+  (Gewicht 0), damit eigene Trades keinen neuen Aufruf auslösen; höchstens 4 Versuche je rollierender Stunde
+  (`LLM_MAX_CALLS_PER_HOUR`). — Nachweis: `uv run pytest tests/llm/test_due.py` (Grenzfälle an jeder Schwelle),
+  `tests/llm/test_llm_cycle.py::test_own_trades_do_not_trigger_another_request`
 - [ ] AK4: Budgetsperre (ADR-0013): Vor jedem Aufruf wird eine Reservierung committet = schlimmster Fall aus den
   Preisen (Eingabezeichen als Tokens plus `max_output_tokens`). Nicht gesendet wird (`BUDGET_BLOCKED`), wenn danach
   die Tagesgrenze des Depots (ADR-0012: `gpt-luna` 0,50 €, `gpt-sol` 2,50 €) oder die Gesamtgrenze
@@ -42,10 +45,15 @@ nie zu einem Trade. So lässt sich messen, ob das teurere Reasoning sein Geld we
   `uv run pytest tests/llm/test_provenance.py` (sucht den Test-Key in allen Zeilen und der CLI-Ausgabe)
 - [ ] AK6: Fail closed wie Arena-`llm_cycle`: kein Aufruf ohne frische Quotes beider Märkte oder mit einem
   Snapshot älter als 120 s. Nach der Antwort je Markt: Quotes nicht frisch (> 20 s) oder Mittelkurs > 2 % vom
-  Snapshot entfernt → Entscheidung `STALE_QUOTE`, kein Trade. — Nachweis: `uv run pytest tests/llm/test_llm_cycle.py`
+  Snapshot entfernt → Entscheidung `STALE_QUOTE`, kein Trade. Frische Quotes werden vor jeder Anfrage geprüft, die
+  Quotes nach der Antwort neu geholt. — Nachweis: `uv run pytest tests/llm/test_llm_cycle.py` (Grenzfälle 120/121 s
+  vor und nach der Antwort, Drift 1,99/2,01 %, Quotes 21 s alt, Abruf nach der Antwort verdrahtet)
 - [ ] AK7: Isolation: Fehler, Timeout oder Budgetsperre eines Depots blockieren weder die anderen Depots noch
-  Buy & Hold; fehlt der Snapshot eines Marktes, wird nur der andere angefragt. Ein Aufruf dauert höchstens 60 s
-  (SDK-Timeout) mit höchstens 2 Wiederholungen bei 429/5xx. — Nachweis: `uv run pytest tests/llm/test_llm_cycle.py`
+  Buy & Hold (die Anfragen der Depots laufen gleichzeitig mit demselben Snapshot); fehlt der Snapshot eines
+  Marktes, wird nur der andere angefragt. Jede HTTP-Anfrage hat 60 s Timeout; wiederholt wird höchstens 2-mal und
+  nur bei 429/5xx (kurze Pause), nie nach einem Timeout; die Reservierung deckt alle möglichen Anfragen, jede
+  zusätzliche Anfrage wird im schlimmsten Fall abgerechnet. — Nachweis: `uv run pytest tests/llm/test_llm_cycle.py
+  tests/llm/test_openai_client.py`
 - [ ] AK8: Schema v2 (`PRAGMA user_version = 2`) mit Tabelle `llm_calls`; eine v1-DB wird mit klarer Meldung
   abgelehnt, nicht migriert (ADR-0012). — Nachweis: `uv run pytest tests/paper/test_db.py`
 - [ ] AK9: Konfiguration: `BOT_AGENTS` (Standard `gpt-luna,gpt-sol`; klassische Agenten wählbar) ersetzt
@@ -84,14 +92,18 @@ Paket `src/llm_trading_bot/llm/`:
 - `contract.py`: `PROMPT_VERSION = "llm-v1"`, `SYSTEM`, `response_schema(markets)`, `user_message(payloads)`,
   `parse_answer(text, markets) -> dict[Symbol, LlmSignal]` (Arena-Regeln je Markt + `market_regime`).
 - `due.py`: `Cadence` (Umgebung, Untergrenzen), `llm_due(con, agent, mids, signals, now)` (Intervall, Bewegung,
-  Wechsel der Referenzsignale gegenüber dem Kontext des letzten Versuchs), Versuche je Stunde.
-- `budget.py` (vorhanden, erweitern): Grenze je Depot und gesamt, Reservierung aus Preisen, `settle`.
+  Wechsel der marktseitigen Referenzsignale gegenüber `llm_calls.trigger_signals` des letzten Versuchs),
+  Versuche je Stunde.
+- `budget.py` (vorhanden, erweitern): Grenze je Depot und gesamt, Reservierung aus Preisen für alle möglichen
+  Anfragen, `settle` mit Zuschlag für Wiederholungen; Preise müssen > 0 sein.
 - `agents.py`: Depot → Modell, Preise, Tagesanteil; Konfiguration aus der Umgebung.
 - `openai_client.py`: `SignalModel`-Protocol, `OpenAIResponses` (Responses API, `text.format` json_schema strict,
-  `reasoning.effort`, `max_output_tokens` 8000, Timeout 60 s, `max_retries` 2); liefert Text, Antwort-ID, Status,
-  Ablehnung, `usage`. Tests nutzen ein Fake, ein `net`-Test den echten Dienst.
-- `cycle.py`: `llm_cycle` je Depot: fällig? → Stundenlimit → Reservierung → Aufruf → Abrechnung → Prüfung →
-  Quote-Recheck je Markt → `record_decision` je Markt (Schlüssel `int(now)*10000 + attempt` wie Arena).
+  `reasoning.effort`, `max_output_tokens` 8000, Timeout 60 s, SDK ohne eigene Wiederholungen; eigene
+  Wiederholung bis 2-mal nur bei 429/5xx); liefert Text, Antwort-ID, Status, Ablehnung, `usage`, Anzahl Anfragen.
+  Tests nutzen ein Fake, ein `net`-Test den echten Dienst.
+- `cycle.py`: `run_llm_depots`: je Depot frische Quotes? → fällig? → Stundenlimit → Reservierung; alle Anfragen
+  gleichzeitig mit demselben Snapshot; danach je Depot Abrechnung → Prüfung → einmal neue Quotes → Recheck je
+  Markt → `record_decision` je Markt (Schlüssel `int(entscheidungszeit)*10000 + attempt` wie Arena).
 - `paper/db.py`: `llm_calls` je Anfrage (Märkte, Referenzkurse BTC/ETH, Prompt-Version); `paper/cycle.py`/CLI:
   mehrere Depots, Buy & Hold, Equity je Depot.
 
@@ -112,7 +124,7 @@ Claude Haiku 5.5 (gleicher Preis wie luna; ADR-0012), Raspberry Pi (ADR-0005 ble
   Budget auf Depots, Gesamtgrenze und berechnete Reservierung umstellen (AK1–AK4, AK8)
 - [x] 4. `uv add openai`, `openai_client.py` mit Fake-Tests und `net`-Test (AK2, AK5, AK7)
 - [x] 5. `agents.py`, `llm_cycle`, mehrere Depots in `paper-cycle`, Konfiguration (AK5–AK7, AK9)
-- [ ] 6. Mutationstest erweitern, Doku (ARCHITEKTUR, README, `docs/betrieb/`), manueller Live-Test (AK10)
+- [x] 6. Mutationstest erweitern, Doku (ARCHITEKTUR, README) – der manuelle Live-Test ist AK10 und noch offen
 
 ## Risiken & offene Fragen
 - Reasoning-Tokens bei `low` sind geschätzt; AK10 misst nach. Weicht es stark ab, Anteile neu festlegen.
@@ -121,7 +133,7 @@ Claude Haiku 5.5 (gleicher Preis wie luna; ADR-0012), Raspberry Pi (ADR-0005 ble
   Version mit neuem ADR statt stiller Änderung.
 - Wenige Wochen Paper-Daten reichen nicht für einen belastbaren Modellvergleich; die Spec liefert die Messung,
   nicht das Urteil.
-- Zwei Anfragen nacheinander verlängern einen Zyklus (je bis zu 60 s); bis Nr. 5 läuft alles in einem Prozess.
+- Beide Anfragen laufen gleichzeitig; ein Zyklus dauert bis zu ~60 s länger (Timeout), bis Nr. 5 in einem Prozess.
 - Wie oft die Referenzsignale wechseln, ist geschätzt; feuert der Auslöser deutlich öfter, begrenzt ihn das
   Stundenlimit, und ADR-0013 nennt die Neubewertung.
 - EUR/USD: Preise sind Schätzwerte (USD 1:1 als EUR, eher zu hoch). Zusätzlich Limit im OpenAI-Konto setzen.
@@ -154,6 +166,16 @@ Claude Haiku 5.5 (gleicher Preis wie luna; ADR-0012), Raspberry Pi (ADR-0005 ble
 - 2026-11-06: Live ohne Key geprüft: alte v1-DB wird abgelehnt („schema version 1, expected 2"), `BOT_AGENTS=trend`
   läuft, Standard-Depots ohne Key → Konfigurationsfehler. Offen bleibt nur AK10 (echter Key). Der Nutzer will Keys
   über eine Weboberfläche eingeben → Spec 006, danach AK10 und `/abschluss` für 005.
+- 2026-11-06: Unabhängige Prüfung (Workflow: 6 Blickwinkel je Spec, jeder Befund von 3 Skeptikern gegengeprüft):
+  21 bestätigte Befunde zu 005, kein Blocker. Behoben: frische Quotes vor jeder Anfrage (AK6, wie Arena); Anfragen
+  der Depots gleichzeitig statt nacheinander (AK7: ein langsames Depot kostete das andere den Snapshot); keine
+  versteckten SDK-Wiederholungen mehr (sie wiederholten auch Timeouts, die schon bezahlt sein können) – eigene
+  Wiederholung nur bei 429/5xx, Reservierung für alle Anfragen, Zuschlag je Wiederholung; Signalwechsel-Auslöser
+  aus Marktsicht (Gewicht 0, eigene Spalte `trigger_signals`), sonst löste jeder eigene Trade einen bezahlten
+  Aufruf aus; Entscheidungen mit Entscheidungszeit statt Zyklusbeginn; Preis 0 wird abgelehnt (sonst kein Budget);
+  CLI zeigt die echte Versuchsnummer. Tests für alle Grenzfälle ergänzt (120/121 s vor und nach der Antwort, Drift
+  1,99/2,01 %, Quotes 21 s alt, Abruf nach der Antwort verdrahtet, Gesamtbudget über die Konfiguration). AK6/AK7
+  präziser formuliert (Inhalt unverändert bzw. strenger). Mutationstest LLM 51/51 wie erwartet.
 
 ## Ergebnis
 - **Erreicht:** …

@@ -32,14 +32,15 @@ Keine ungewollte echte Order und keine verfälschte Handelshistorie – im Zweif
 - **Hardware / Plattform:** Hetzner Cloud Server CX23 (x86-64), Ubuntu (Version bei Einrichtung festhalten; geplant 24.04 LTS), systemd.
 - **Werkzeuge / Versionen:** Python 3.12 (System-Python von Ubuntu 24.04), uv, pytest, ruff, mypy strict.
 - **Extern vorgegeben:** Bitvavo-REST-API (öffentliche Marktdaten; Trading-API erst ab Echtgeld-Meilenstein),
-  OpenAI-/Anthropic-APIs für LLM-Strategien.
-- **Ressourcen:** Serverkosten CX23; LLM-API-Budget 3 € pro UTC-Tag für alle GPT-Depots zusammen (Nutzer, 2026-11-06; ADR-0011).
+  OpenAI-API für die LLM-Strategie (Anthropic/Claude vom Nutzer am 2026-11-06 verworfen, ADR-0012).
+- **Ressourcen:** Serverkosten CX23; LLM-API-Budget 3 € pro UTC-Tag für alle GPT-Depots zusammen (Nutzer, 2026-11-06;
+  ADR-0013, Anteile ADR-0012).
   Startkapital für den Echtgeld-Betrieb – noch festzulegen.
 
 ## Beteiligte & Umfeld
 - Nutzer/Betreiber: Björn (Solo-Projekt).
 - Nachbarsystem: LLM Trading Arena (Quelle übernommener Module, liefert Strategievergleiche).
-- Externe Dienste: Bitvavo, OpenAI, Anthropic, Hetzner Cloud.
+- Externe Dienste: Bitvavo, OpenAI, Hetzner Cloud.
 
 ## Glossar
 | Begriff | Bedeutung |

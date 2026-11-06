@@ -59,6 +59,10 @@ def test_mixed_depots_keep_llm_order_luna_first() -> None:
         ({**KEY, "LLM_DAILY_BUDGET_EUR": "-1"}, "LLM_DAILY_BUDGET_EUR"),
         ({**KEY, "LLM_DAILY_BUDGET_EUR_GPT_SOL": "x"}, "LLM_DAILY_BUDGET_EUR_GPT_SOL"),
         ({**KEY, "LLM_PRICE_IN_EUR_GPT_LUNA": "0.1"}, "set together"),
+        (
+            {**KEY, "LLM_PRICE_IN_EUR_GPT_SOL": "0", "LLM_PRICE_OUT_EUR_GPT_SOL": "10"},
+            "greater than 0",
+        ),
     ],
 )
 def test_unclear_configuration_is_refused(env: dict[str, str], message: str) -> None:

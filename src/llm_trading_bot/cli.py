@@ -163,7 +163,7 @@ def _market_line(m: MarketResult) -> str:
     if m.agent in STRATEGY_TIMEFRAME:
         when = f"{STRATEGY_TIMEFRAME[m.agent]}m bar opened {_utc(m.bar_ts)}"
     else:
-        when = f"attempt {m.bar_ts % 10000}"  # LLM decisions are keyed by attempt (Arena)
+        when = f"attempt {m.attempt}"
     state = "new" if m.new else "already decided"
     trade = "traded" if m.traded else "no trade"
     return (

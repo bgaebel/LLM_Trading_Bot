@@ -5,8 +5,9 @@
 Errors are reported by type name only: provider messages can echo parts of the API key.
 """
 
+import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, Protocol, cast
 
 import openai
@@ -16,7 +17,10 @@ from openai.types.shared_params import Reasoning
 from llm_trading_bot.llm.budget import Usage
 
 TIMEOUT_SECONDS = 60.0
+# Own retries instead of the SDK's: the SDK would also retry timeouts, which may already be billed
+# and would multiply the wait. Only fast, unbilled-looking failures (429, 5xx) are retried here.
 MAX_RETRIES = 2
+RETRY_PAUSES = (1.0, 2.0)
 SCHEMA_NAME = "trade_signals"
 # The SDK's base error class: timeouts, connection problems and HTTP errors all derive from it.
 API_ERRORS = (openai.APIError,)
@@ -34,6 +38,8 @@ class ModelReply:
     response_id: str | None
     model: str | None
     usage: Usage | None
+    requests: int = 1
+    """HTTP requests sent for this reply (1 + retries); earlier ones may have been billed."""
 
     def problem(self) -> str:
         """Why this reply must not be traded on; empty if it may be parsed."""
@@ -101,11 +107,13 @@ class OpenAIResponses:
         api_key: str,
         *,
         client_factory: Callable[..., openai.OpenAI] = openai.OpenAI,
+        sleep: Callable[[float], None] = time.sleep,
         **client_options: Any,
     ) -> None:
         self._client = client_factory(
-            api_key=api_key, timeout=TIMEOUT_SECONDS, max_retries=MAX_RETRIES, **client_options
+            api_key=api_key, timeout=TIMEOUT_SECONDS, max_retries=0, **client_options
         )
+        self._sleep = sleep
 
     def ask(
         self,
@@ -128,17 +136,25 @@ class OpenAIResponses:
                 "strict": True,
             }
         }
-        response = self._client.responses.create(
-            model=model,
-            instructions=instructions,
-            input=message,
-            max_output_tokens=max_output_tokens,
-            reasoning=reasoning,
-            text=text,
-            # Nothing of the trading context is kept on the provider side.
-            store=False,
-        )
-        return reply_from(response)
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = self._client.responses.create(
+                    model=model,
+                    instructions=instructions,
+                    input=message,
+                    max_output_tokens=max_output_tokens,
+                    reasoning=reasoning,
+                    text=text,
+                    # Nothing of the trading context is kept on the provider side.
+                    store=False,
+                )
+            except (openai.RateLimitError, openai.InternalServerError):
+                if attempt == MAX_RETRIES:
+                    raise
+                self._sleep(RETRY_PAUSES[attempt])
+                continue
+            return replace(reply_from(response), requests=attempt + 1)
+        raise AssertionError("unreachable")
 
 
 def check_key(
