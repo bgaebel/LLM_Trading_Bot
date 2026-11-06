@@ -12,6 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from llm_trading_bot.llm.budget import FREE_STATUSES, charged_today, day_bounds
+from llm_trading_bot.llm.due import iso
 from llm_trading_bot.market.models import Symbol
 from llm_trading_bot.paper.db import START_CASH
 from llm_trading_bot.paper.execution import BUYHOLD
@@ -96,6 +97,11 @@ class Series:
     points: tuple[tuple[float, float], ...]
 
 
+def _slice(t: float, start: float, span: float, slices: int) -> int:
+    """Slice of time ``t``; shared by ``thin`` and the indexed read so both cut identically."""
+    return slices - 1 if span <= 0 else min(int((t - start) / span * slices), slices - 1)
+
+
 def thin(
     points: Sequence[tuple[float, float]], limit: int = MAX_POINTS
 ) -> list[tuple[float, float]]:
@@ -110,19 +116,69 @@ def thin(
     slices = limit - 1
     kept: dict[int, tuple[float, float]] = {}
     for point in points[1:]:
-        index = (
-            slices - 1 if span <= 0 else min(int((point[0] - start) / span * slices), slices - 1)
-        )
-        kept[index] = point  # later points of the same slice replace earlier ones
+        kept[_slice(point[0], start, span, slices)] = point  # later points replace earlier ones
     return [points[0], *(kept[i] for i in sorted(kept))]
 
 
+def _point(row: sqlite3.Row) -> tuple[float, float]:
+    return epoch(row["ts"]), float(row["value"])
+
+
+def _agent_series(con: sqlite3.Connection, agent: str, limit: int) -> list[tuple[float, float]]:
+    # LEARNING(#performance): Sich selbst neu ladende Seite darf nicht die ganze Historie lesen
+    """Like ``thin`` over the agent's whole history, but read through the (ts, agent) index:
+    a handful of rows per slice instead of every row (one row per depot and minute since
+    ADR-0017, the page reloads every 15 s). Equity timestamps are whole seconds in one ISO
+    format (``due.iso``), so string order is time order."""
+    if limit < 2:
+        raise ValueError("limit must be at least 2")
+    head = con.execute(
+        "SELECT ts, value FROM equity WHERE agent=? ORDER BY ts LIMIT ?", (agent, limit + 1)
+    ).fetchall()
+    if len(head) <= limit:
+        return [_point(r) for r in head]
+    first = _point(head[0])
+    newest = con.execute(
+        "SELECT ts FROM equity WHERE agent=? ORDER BY ts DESC LIMIT 1", (agent,)
+    ).fetchone()
+    start, end = first[0], epoch(newest["ts"])
+    span, slices = end - start, limit - 1
+
+    def upper(k: int) -> float:
+        """Latest whole second that still falls into slice ``k``."""
+        if k >= slices - 1:
+            return end
+        t = float(int(start + (k + 1) * span / slices))
+        while t > start and _slice(t, start, span, slices) > k:
+            t -= 1
+        while _slice(t + 1, start, span, slices) <= k:
+            t += 1
+        return t
+
+    kept, after = [first], start
+    while True:
+        # The next point after the last kept one names the next non-empty slice (gaps of a
+        # paused depot are skipped in one step); its last point is the newest up to the slice end.
+        found = con.execute(
+            "SELECT ts FROM equity WHERE agent=? AND ts>? ORDER BY ts LIMIT 1", (agent, iso(after))
+        ).fetchone()
+        if found is None:
+            break
+        k = _slice(epoch(found["ts"]), start, span, slices)
+        last = con.execute(
+            "SELECT ts, value FROM equity WHERE agent=? AND ts<=? ORDER BY ts DESC LIMIT 1",
+            (agent, iso(upper(k))),
+        ).fetchone()
+        kept.append(_point(last))
+        after = kept[-1][0]
+        if k >= slices - 1:
+            break
+    return kept
+
+
 def equity_series(con: sqlite3.Connection, limit: int = MAX_POINTS) -> list[Series]:
-    rows = con.execute("SELECT agent, ts, value FROM equity ORDER BY agent, ts, id").fetchall()
-    by_agent: dict[str, list[tuple[float, float]]] = {}
-    for r in rows:
-        by_agent.setdefault(r["agent"], []).append((epoch(r["ts"]), float(r["value"])))
-    series = [Series(agent, tuple(thin(points, limit))) for agent, points in by_agent.items()]
+    agents = [r["agent"] for r in con.execute("SELECT DISTINCT agent FROM portfolios")]
+    series = [Series(a, tuple(points)) for a in agents if (points := _agent_series(con, a, limit))]
     return sorted(series, key=lambda s: (s.agent == BUYHOLD, s.agent))
 
 

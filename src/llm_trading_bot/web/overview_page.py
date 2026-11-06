@@ -276,7 +276,11 @@ def _readouts(view: Overview) -> str:
     cycle = next((p for p in view.pulses if p.label == CYCLE_LABEL), None)
     service = next((p for p in view.pulses if p.label == SERVICE_LABEL), None)
     bot = service or cycle
-    leader = max((d for d in view.depots if not d.reference), key=lambda d: d.value, default=None)
+    # Only depots valued in the newest round: a deselected depot keeps its last, older value.
+    traders = [d for d in view.depots if not d.reference]
+    newest = max((d.at for d in traders if d.at), default=None)
+    current = [d for d in traders if newest is None or d.at == newest]
+    leader = max(current, key=lambda d: d.value, default=None)
     charged = sum((r.charged for r in view.llm), start=0) if view.llm else 0
     budget = sum((r.share for r in view.llm), start=0) if view.llm else 0
     cells = [

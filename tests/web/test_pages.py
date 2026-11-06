@@ -266,6 +266,17 @@ def test_readouts_take_the_last_cycle_by_label_not_from_the_service_pulse() -> N
     assert '<small>Bot</small><b class="off">steht</b>' in page
 
 
+def test_best_depot_is_chosen_among_the_depots_of_the_newest_round() -> None:
+    from llm_trading_bot.web.overview import DepotRow
+    from llm_trading_bot.web.overview_page import overview_page
+
+    old = "2026-11-01T12:00:00+00:00"  # deselected since: last value is days old
+    stale = DepotRow("trend", 12_000.0, 12_000.0, 0, 0, old, False, 2_000.0, 20.0, 20.5)
+    base = _view()
+    page = overview_page(replace(base, depots=[stale, *base.depots]), csrf="t")
+    assert "<small>Bestes Depot</small><b>gpt-luna +1.00 %</b>" in page
+
+
 def test_pulse_times_show_seconds() -> None:
     from llm_trading_bot.web.overview_page import overview_page
 
