@@ -172,3 +172,27 @@ def test_paper_cycle_refuses_a_foreign_database(tmp_path: Path) -> None:
 def test_paper_cycle_needs_a_db_path() -> None:
     with pytest.raises(SystemExit):
         main(["paper-cycle"])
+
+
+def test_paper_cycle_reads_values_saved_by_the_web_ui(tmp_path: Path) -> None:
+    (tmp_path / "secrets.env").write_text("BOT_AGENTS=meanrev\n", encoding="utf-8")
+    out = io.StringIO()
+    code = run_paper_cycle(
+        tmp_path / "bot.db", ScenarioClient(), env={}, out=out, clock=lambda: GOLDEN_NOW
+    )
+    assert code == EXIT_OK and "depots meanrev" in out.getvalue()
+
+
+def test_environment_wins_over_saved_values(tmp_path: Path) -> None:
+    secrets = tmp_path / "elsewhere.env"
+    secrets.write_text("BOT_AGENTS=meanrev\n", encoding="utf-8")
+    out = io.StringIO()
+    code = run_paper_cycle(
+        tmp_path / "bot.db",
+        ScenarioClient(),
+        env={"BOT_AGENTS": "trend"},
+        out=out,
+        clock=lambda: GOLDEN_NOW,
+        secrets=secrets,
+    )
+    assert code == EXIT_OK and "depots trend" in out.getvalue()

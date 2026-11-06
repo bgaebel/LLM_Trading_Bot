@@ -61,8 +61,8 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
 ## Plan
 - [x] 1. `auth.py` + Tests (AK2, AK3)
 - [x] 2. `credentials.py` + Tests (AK5)
-- [ ] 3. `app.py` + `web`-Befehl + Server-Tests (AK1–AK6, AK8)
-- [ ] 4. `paper-cycle --secrets` (AK7)
+- [x] 3. `app.py` + `web`-Befehl + Server-Tests (AK1–AK6, AK8)
+- [x] 4. `paper-cycle --secrets` (AK7)
 - [ ] 5. Doku (ARCHITEKTUR, README, `docs/betrieb/`), Seite im Browser zeigen (AK9)
 
 ## Risiken & offene Fragen

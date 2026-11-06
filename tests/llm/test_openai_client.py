@@ -13,7 +13,7 @@ import pytest
 
 from llm_trading_bot.llm.budget import Usage
 from llm_trading_bot.llm.contract import SYSTEM, response_schema
-from llm_trading_bot.llm.openai_client import OpenAIResponses
+from llm_trading_bot.llm.openai_client import OpenAIResponses, check_key
 from llm_trading_bot.market.models import Symbol
 
 KEY = "sk-test-not-a-real-key-0000"
@@ -181,3 +181,21 @@ def test_timeouts_are_retried_then_raised() -> None:
     with pytest.raises(openai.APITimeoutError):
         ask(model_for(recorder))
     assert len(recorder.requests) == 3
+
+
+def test_key_check_only_looks_up_the_model() -> None:
+    recorder = Recorder(
+        lambda _r: httpx2.Response(
+            200, json={"id": "gpt-6-luna", "object": "model", "created": 0, "owned_by": "openai"}
+        )
+    )
+    problem = check_key(KEY, http_client=httpx2.Client(transport=httpx2.MockTransport(recorder)))
+    (request,) = recorder.requests
+    assert problem == "" and request.method == "GET"
+    assert request.url.path.endswith("/models/gpt-6-luna")
+
+
+def test_key_check_reports_only_the_error_type() -> None:
+    recorder = Recorder(fail(401))
+    problem = check_key(KEY, http_client=httpx2.Client(transport=httpx2.MockTransport(recorder)))
+    assert problem == "AuthenticationError" and len(recorder.requests) == 1

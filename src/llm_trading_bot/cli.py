@@ -31,6 +31,8 @@ from llm_trading_bot.paper.report import CycleReport, LlmOutcome, MarketResult
 from llm_trading_bot.strategy.indicators import indicators
 from llm_trading_bot.strategy.payload import ARENA_SLIPPAGE, ARENA_TAKER_FEE, cost_roundtrip
 from llm_trading_bot.strategy.signals import STRATEGIES, STRATEGY_VERSION, run_strategy
+from llm_trading_bot.web.app import serve
+from llm_trading_bot.web.credentials import load_env_file
 
 EXIT_OK = 0
 EXIT_INVALID = 1
@@ -205,9 +207,15 @@ def run_paper_cycle(
     out: TextIO,
     clock: Callable[[], float] = time.time,
     model_factory: Callable[[str], SignalModel] = OpenAIResponses,
+    secrets: Path | None = None,
 ) -> int:
-    """One live paper cycle on ``db``; refuses to run while another process owns the DB."""
+    """One live paper cycle on ``db``; refuses to run while another process owns the DB.
+
+    Values saved with `trading-bot web` (``secrets.env``, default next to the DB) fill in what the
+    environment does not set; the environment always wins.
+    """
     try:
+        env = {**load_env_file(secrets or db.parent / "secrets.env"), **env}
         config = load_config(env)
         costs = Costs.from_env(env)
     except ValueError as exc:
@@ -241,6 +249,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands.add_parser("signals", help="show the classic strategies' signals on live data")
     cycle = commands.add_parser("paper-cycle", help="run one paper trading cycle on live data")
     cycle.add_argument("--db", type=Path, required=True, help="path of the paper SQLite database")
+    cycle.add_argument(
+        "--secrets",
+        type=Path,
+        default=None,
+        help="credentials file (default: secrets.env next to --db)",
+    )
+    web = commands.add_parser("web", help="local web UI for credentials (127.0.0.1 only)")
+    web.add_argument("--data-dir", type=Path, required=True, help="where secrets.env is kept")
+    web.add_argument("--port", type=int, default=8787)
+    web.add_argument("--host", default="127.0.0.1", help="must stay 127.0.0.1 (ADR-0014)")
     args = parser.parse_args(argv)
     # LEARNING(#windows): Umlaute in der Konsolenausgabe kaputt unter Windows
     # The Windows console defaults to cp1252; strategy reasons contain German umlauts.
@@ -253,6 +271,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "signals":
         return run_signals(BitvavoClient(), out=sys.stdout)
     if args.command == "paper-cycle":
-        return run_paper_cycle(args.db, BitvavoClient(), env=os.environ, out=sys.stdout)
+        return run_paper_cycle(
+            args.db, BitvavoClient(), env=os.environ, out=sys.stdout, secrets=args.secrets
+        )
+    if args.command == "web":
+        try:
+            serve(args.data_dir, port=args.port, host=args.host, out=sys.stdout)
+        except ValueError as exc:
+            print(f"web refused: {exc}", file=sys.stdout)
+            return EXIT_INVALID
+        except KeyboardInterrupt:
+            return EXIT_OK
+        return EXIT_OK
     print(f"llm-trading-bot: mode={mode.value}")
     return EXIT_OK
