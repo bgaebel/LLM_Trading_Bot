@@ -26,9 +26,10 @@ from llm_trading_bot.service.run import (
     EXIT_STALLED,
     STALL_SECONDS,
 )
+from llm_trading_bot.service.schedule import OFFSET, PERIOD
 from llm_trading_bot.service.status import read_status, status_path
 from llm_trading_bot.web.readonly import reading
-from service_fakes import MINUTE, HardExit, MovingClient, harness
+from service_fakes import MINUTE, FakeTimer, HardExit, MovingClient, harness
 
 
 def test_rounds_start_five_seconds_after_each_minute(tmp_path: Path) -> None:
@@ -47,6 +48,52 @@ def test_an_overrun_skips_slots_and_says_so(tmp_path: Path) -> None:
     assert h.service.run() == EXIT_OK
     assert h.rounds.started == [MINUTE + 65, MINUTE + 245]
     assert "round overran: 2 slot(s) skipped, no catch-up" in h.log()
+
+
+class JumpingClock(FakeTimer):
+    """After round 1 the wall clock jumps by ``jump`` seconds (an NTP step) at the first wait."""
+
+    def __init__(self, start: float, rounds: list[float], jump: float) -> None:
+        super().__init__(start)
+        self.rounds, self.jump, self.jumped = rounds, jump, False
+        self.mono_at: list[float] = []
+
+    def wait_stop(self, stop: threading.Event, seconds: float) -> bool:
+        if len(self.rounds) == 1 and not self.jumped:
+            self.jumped = True
+            with self.lock:
+                self.wall += self.jump
+        return super().wait_stop(stop, seconds)
+
+
+def _jump(tmp_path: Path, jump: float) -> tuple[Any, JumpingClock, list[float]]:
+    mono: list[float] = []
+
+    def cycle(con: sqlite3.Connection, client: Any, config: Any, **kw: Any) -> CycleReport:
+        mono.append(h.timer.monotonic())
+        return paper_cycle(con, client, config, **kw)
+
+    h = harness(tmp_path, limit=2, action=cycle)
+    clock = JumpingClock(h.timer.now(), h.rounds.started, jump)
+    h.service.timer = h.rounds.timer = h.timer = clock
+    assert h.service.run() == EXIT_OK
+    return h, clock, mono
+
+
+def test_a_clock_jump_back_re_plans_instead_of_waiting_it_out(tmp_path: Path) -> None:
+    h, clock, mono = _jump(tmp_path, -3600)
+    assert clock.jumped
+    # Round 2 within about a minute of real (monotonic) time, not an hour later.
+    assert mono[1] - mono[0] <= 2 * PERIOD
+    assert (h.rounds.started[1] - OFFSET) % PERIOD == 0  # still on a slot of the new time
+    assert "wall clock jumped back: next round re-planned" in h.log()
+
+
+def test_a_clock_jump_forward_still_skips_without_catch_up(tmp_path: Path) -> None:
+    h, clock, mono = _jump(tmp_path, 3600)
+    # The slot planned before the jump is now in the past: the round runs at once, no burst.
+    assert clock.jumped and mono[1] - mono[0] <= PERIOD
+    assert len(h.rounds.started) == 2 and "jumped back" not in h.log()
 
 
 def test_round_line_shows_each_gpt_result_with_its_cost(tmp_path: Path) -> None:
