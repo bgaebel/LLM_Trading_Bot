@@ -20,6 +20,7 @@ from llm_trading_bot.service.status import ServiceStatus
 from llm_trading_bot.web import overview
 from llm_trading_bot.web.readonly import reading
 
+GAP = "trend ETH-EUR: MarketDataError: ETH-EUR: gap in recent 1m bars - no decision"
 SHARES = {"gpt-luna": Decimal("0.50"), "gpt-sol": Decimal("2.50")}
 AGENTS = ("gpt-luna", "gpt-sol", BUYHOLD)
 
@@ -399,6 +400,43 @@ def test_service_pulse_names_failures_and_configuration_problems() -> None:
     many = overview.service_pulse(_status("degraded", failures=3, config_warning="x"), NOW)
     assert one.note == "1 Runde mit Fehler"
     assert many.note == "3 Runden mit Fehler · Einstellungen ungültig"
+
+
+@pytest.mark.parametrize(
+    ("error", "result", "age", "level", "note"),
+    [
+        (
+            GAP,
+            "incomplete",
+            60,
+            overview.RUNNING,
+            "ETH-EUR ohne Entscheidung: Marktdaten-Lücke bei Bitvavo",
+        ),
+        (
+            GAP,
+            "incomplete",
+            181,
+            overview.DELAYED,
+            "ETH-EUR ohne Entscheidung: Marktdaten-Lücke bei Bitvavo",
+        ),
+        (
+            "trend BTC-EUR: KeyError: 'close'",
+            "incomplete",
+            60,
+            overview.DELAYED,
+            "2 Runden mit Fehler",
+        ),
+        ("quotes: HTTPFailure: HTTP 503", "no_quotes", 60, overview.DELAYED, "2 Runden mit Fehler"),
+        (f"RuntimeError: {GAP}", "error", 60, overview.DELAYED, "2 Runden mit Fehler"),
+    ],
+    ids=["gap", "gap-but-late", "code-error", "no-quotes", "error-quoting-a-gap"],
+)
+def test_a_round_that_only_lacked_market_data_shows_the_bot_running(
+    error: str, result: str, age: float, level: str, note: str
+) -> None:
+    status = _status("degraded", failures=2, last_result=result, last_error=error)
+    pulse = overview.service_pulse(status, NOW + age)
+    assert (pulse.level, pulse.note) == (level, note)
 
 
 def test_service_pulse_of_an_unreadable_file_says_stopped() -> None:

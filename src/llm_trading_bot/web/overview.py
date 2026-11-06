@@ -222,15 +222,31 @@ def service_pulse(status: ServiceStatus | None, now: float, *, problem: str = ""
         "stopping": "wird beendet",
         "stopped": "beendet",
     }.get(status.state, "")
+    gap = data_gap(status)
+    if gap:
+        note = f"{gap} ohne Entscheidung: Marktdaten-Lücke bei Bitvavo"
     if status.config_warning:
         note = (note + " · " if note else "") + "Einstellungen ungültig"
     if status.state in ("stopped", "stalled", "stopping") or age > SERVICE_DELAYED_SECONDS:
         fixed = STOPPED
-    elif status.state == "running" and age <= SERVICE_RUNNING_SECONDS:
+    elif (status.state == "running" or gap) and age <= SERVICE_RUNNING_SECONDS:
+        # A round that only lacked exchange data ran on time: the bot runs (user 2026-11-07).
         fixed = RUNNING
     else:
         fixed = DELAYED
     return Pulse(label, at, age, fixed, note)
+
+
+def data_gap(status: ServiceStatus) -> str:
+    """The market of a degraded round whose only reported problem is missing market data
+    (Bitvavo leaves out minutes without trades), else "". The status file names the first
+    problem of the round, as "<depot> <market>: MarketDataError: ..."."""
+    if status.state != "degraded" or status.last_result != "incomplete":
+        return ""
+    head, sep, rest = status.last_error.partition(": ")
+    if not sep or not rest.startswith("MarketDataError:"):
+        return ""
+    return head.rpartition(" ")[2]
 
 
 def liveness(con: sqlite3.Connection, now: float) -> list[Pulse]:

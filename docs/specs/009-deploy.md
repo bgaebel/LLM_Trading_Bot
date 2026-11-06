@@ -176,6 +176,9 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
 - 2026-11-07: Nutzer entscheidet: Der Gesundheitscheck akzeptiert auch eine Runde, die nur an Marktdaten scheitert
   (`incomplete` mit `MarketDataError`, Zustand `degraded`); andere Fehler rollen weiter zurück. AK5 angepasst, Tests
   für beide Fälle. Grenze: Die Statusdatei nennt nur das erste Problem einer Runde.
+- 2026-11-07: Nutzer: „Bot verzögert“ war irreführend, der Bot lief pünktlich. Fehlen einer Runde nur Marktdaten,
+  zeigt das Lebenszeichen „Dienst“ jetzt „läuft“ mit dem Hinweis „ETH-EUR ohne Entscheidung: Marktdaten-Lücke bei
+  Bitvavo“ (weicht von Spec 008 AK8 ab: dort `degraded` → verzögert); andere Fehler bleiben „verzögert“.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->
