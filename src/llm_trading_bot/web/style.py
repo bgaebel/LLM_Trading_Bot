@@ -4,7 +4,9 @@ Everything is served from ``/app.css`` because the CSP allows neither inline sty
 fonts or images; motion stops for visitors who ask for reduced motion.
 """
 
-CSS = """
+from llm_trading_bot.web import chart
+
+_BASE = """
 :root {
   color-scheme: dark;
   --void: #030303; --deep: #0b0b0c; --panel: rgba(12, 12, 14, 0.86); --well: rgba(0, 0, 0, 0.72);
@@ -52,11 +54,8 @@ body::after {
 .candle-down { fill: rgba(255, 61, 139, 0.16); stroke: rgba(255, 61, 139, 0.38); }
 .wick-up { stroke: rgba(45, 226, 230, 0.4); }
 .wick-down { stroke: rgba(255, 61, 139, 0.38); }
-.price { fill: none; stroke: rgba(255, 181, 71, 0.55); stroke-width: 1.6;
-  stroke-dasharray: 1400; stroke-dashoffset: 1400; animation: draw 5s ease-out 0.4s forwards; }
 .axis { stroke: rgba(150, 152, 158, 0.14); stroke-dasharray: 2 6; }
 @keyframes flow { to { stroke-dashoffset: -630; } }
-@keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes ticker { to { transform: translateX(-50%); } }
@@ -332,6 +331,7 @@ button.quiet:hover { color: var(--magenta); border-color: var(--magenta); filter
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .price { stroke-dashoffset: 0; }
 }
 """
+
+CSS = _BASE + chart.css()

@@ -2,13 +2,13 @@
 (the CSP forbids both), so injected markup cannot run. Decoration is inline SVG with presentation
 attributes and classes from ``/app.css``."""
 
-import math
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from html import escape
 
 from llm_trading_bot.llm.agents import LLM_DEFAULTS
 from llm_trading_bot.llm.openai_client import EFFORTS
+from llm_trading_bot.web import chart
 from llm_trading_bot.web.credentials import AGENT_CHOICES, mask
 from llm_trading_bot.web.style import CSS
 
@@ -26,33 +26,6 @@ TICKER = (
     ("Fail closed", "keine Order ohne frische Kurse"),
     ("Zugang", "127.0.0.1 · SSH-Tunnel"),
 )
-
-
-def _candles() -> str:
-    """A fixed, made-up price walk for the backdrop - decoration, not market data."""
-    parts: list[str] = []
-    closes: list[tuple[float, float]] = []
-    value = 62.0
-    for i in range(40):
-        close = 60 + 9 * math.sin(i * 0.42) + 4 * math.sin(i * 1.63) + i * 0.55
-        high = max(value, close) + 1.5 + (i * 7 % 5) * 0.6
-        low = min(value, close) - 1.5 - (i * 3 % 4) * 0.6
-        x = 790 + i * 16
-
-        def y(v: float) -> float:
-            return round(905 - (v - 38) * 5.6, 1)
-
-        kind = "up" if close >= value else "down"
-        top, bottom = y(max(value, close)), y(min(value, close))
-        parts.append(
-            f'<line class="wick-{kind}" x1="{x + 5}" x2="{x + 5}" y1="{y(high)}" y2="{y(low)}"/>'
-            f'<rect class="candle-{kind}" x="{x}" y="{top}" width="10" '
-            f'height="{max(round(bottom - top, 1), 1.5)}"/>'
-        )
-        closes.append((x + 5, y(close)))
-        value = close
-    line = " ".join(f"{x},{yy}" for x, yy in closes)
-    return "".join(parts) + f'<polyline class="price" points="{line}"/>'
 
 
 _TRACES = (
@@ -94,11 +67,11 @@ def _backdrop() -> str:
     )
     chip = f'<rect class="chip-pad" x="1240" y="248" width="104" height="64" rx="4"/>{pins}'
     axes = "".join(
-        f'<line class="axis" x1="770" x2="1440" y1="{y}" y2="{y}"/>' for y in (560, 660, 760, 860)
+        f'<line class="axis" x1="0" x2="1440" y1="{y}" y2="{y}"/>' for y in (580, 680, 780, 880)
     )
     return (
         '<svg class="backdrop" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMid slice" '
-        f'aria-hidden="true" focusable="false">{axes}{traces}{nodes}{chip}{_candles()}</svg>'
+        f'aria-hidden="true" focusable="false">{axes}{traces}{nodes}{chip}{chart.svg()}</svg>'
     )
 
 
