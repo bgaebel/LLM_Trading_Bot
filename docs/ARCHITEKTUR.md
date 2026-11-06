@@ -8,6 +8,8 @@
 **IST:** Modusprüfung (`paper` ist Standard, `live` wird abgelehnt) und Marktdaten (`market`, Spec 001):
 öffentliche Bitvavo-Quotes und abgeschlossene Kerzen, geprüft zu einem Snapshot je Markt. Darauf Indikatoren,
 die fünf klassischen Strategien und der LLM-Kontext (`strategy`, Spec 003, identisch zu Arena v0.3.1).
+Paper-Ausführung mit SQLite (`paper`, Spec 004): virtuelle Orders, Depot, Entscheidungen, Trades, Equity;
+ein aktiver Agent plus Buy & Hold (ADR-0008). Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`.
 Diagnose per `uv run trading-bot market` und `uv run trading-bot signals`.
 **Zielbild M1** (Bausteine werden schrittweise per Spec aus der Arena übernommen, ADR-0003):
 
@@ -34,12 +36,13 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | Pfad | Verantwortung |
 |---|---|
 | `src/llm_trading_bot/` | Anwendungspaket |
-| `src/llm_trading_bot/cli.py` | Einstiegspunkt `main()` (`uv run trading-bot [market|signals]`) |
+| `src/llm_trading_bot/cli.py` | Einstiegspunkt `main()` (`uv run trading-bot [market|signals|paper-cycle]`) |
 | `src/llm_trading_bot/core.py` | Reine Logik ohne I/O (aktuell: Modusauflösung) |
 | `src/llm_trading_bot/market/` | Marktdaten: Modelle, HTTP-Transport, Bitvavo-Client, Snapshot-Prüfung |
 | `src/llm_trading_bot/strategy/` | Indikatoren, klassische Strategien, LLM-Kontext (reine Logik, ADR-0007) |
+| `src/llm_trading_bot/paper/` | Paper-Ausführung: Schema (`db`), Single-Writer-Sperre (`lock`), virtuelle Orders (`execution`), Zyklus (`cycle`) |
 | `tools/golden/` | Generator der Golden-Fixtures aus dem Arena-Code; `mutation_check.py` prüft, dass die Tests Änderungen an Schwellen/Gewichten erkennen (nur Entwicklung) |
-| `tests/` | pytest-Tests; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests; Marker `net` = echte API (standardmäßig aus) |
+| `tests/` | pytest-Tests; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests der Strategien; `golden_execution_cases.py`/`golden_execution_runner.py` + `paper/fixtures/` Golden-Tests der Ausführung; Marker `net` = echte API (standardmäßig aus) |
 | `deploy/` | Server-Skripte; `setup-server.sh` härtet einen frischen Server (Spec 002) |
 | `.github/workflows/` | CI (ruff, mypy, pytest, shellcheck) und Doku-Prüfung |
 
@@ -77,9 +80,29 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   alle Mutationen außer den dokumentierten äquivalenten erkennen.
   Rechenreihenfolge nicht umformen. Deutsche `reason`-Texte sind Teil des Vertrags.
 
+### paper
+- **Zweck:** Signale in virtuelle Orders umsetzen und alles dauerhaft speichern. Kein Börsenzugang (ADR-0004).
+- **Schnittstelle:**
+  - `db`: `open_db(path, agents=)` (legt Schema an oder prüft es, WAL, `busy_timeout`), `check_schema`,
+    `SchemaError`, `write_tx(con)` (eine `BEGIN IMMEDIATE`-Transaktion), `balance`, `START_CASH = 10_000`
+  - `lock`: `WriterLock(db_path)` (Betriebssystem-Sperre neben der DB), `WriterLockBusy`
+  - `execution`: `Costs` (Gebühr/Slippage, `from_env`), `record_decision`, `trade_to_target`, `mark`,
+    `initialize_buyhold`, `record_quotes`, `latest_quotes`, `value`, `current_weight`
+  - `cycle`: `paper_cycle(con, client, agent, costs=, clock=) -> CycleReport`, `active_agent(env)`,
+    `STRATEGY_TIMEFRAME`
+- **Invarianten:** Schema `user_version = 1`; andere Versionen oder Formen werden abgelehnt, nie migriert
+  (ADR-0008). Genau ein Schreiber (`WriterLock`). Eine Entscheidung je (Agent, Markt, Bar), mit Trade und Depot in
+  einer Transaktion. Ohne frische Quotes beider Märkte (≤ 20 s) kein Trade. Buy & Hold kauft je Markt einmal.
+  Ausführung identisch zu Arena@7563724, belegt durch `tests/paper/fixtures/execution_golden_v0.3.1.json`
+  (Grenzfälle und Verläufe bitgenau per SHA-256) und `mutation_check.py`. Der 10-%-Drawdown-Stopp der Arena ist
+  noch nicht übernommen (M1 Nr. 4); `halted` wird nur gelesen. SQL-Rechnungen nicht umformen.
+
 ## Datenfluss & Nebenläufigkeit
 `build_snapshots` holt je Markt die Kerzen für 1/15/60/240 min, danach einmal die Quotes (sie veralten am
-schnellsten), dann die Prüfung je Markt. Worker-Schleife und Takt folgen in M1 Nr. 5. Vorgabe aus der Arena: Marktabfrage, Signal- und LLM-Worker laufen getrennt; ein
+schnellsten), dann die Prüfung je Markt. `paper_cycle`: Quotes holen und speichern → frische Quotes aus der DB
+(sonst Ende ohne Entscheidung) → Buy & Hold initialisieren → Snapshots → je Markt eine Entscheidung pro neuem
+abgeschlossenem Bar des Strategie-Zeitrahmens (trend 60 min, sonst 15 min) → Equity-Punkt je Agent.
+Worker-Schleife und Takt folgen in M1 Nr. 5. Vorgabe aus der Arena: Marktabfrage, Signal- und LLM-Worker laufen getrennt; ein
 langsamer LLM-Aufruf blockiert die Marktabfrage nicht; ein Fehler bei BTC blockiert ETH nicht.
 
 ## Externe Schnittstellen
@@ -89,7 +112,8 @@ langsamer LLM-Aufruf blockiert die Marktabfrage nicht; ein Fehler bei BTC blocki
 | OpenAI / Anthropic | REST/JSON, API-Key in `.env` auf dem Server | jeweilige API-Doku |
 
 ## Build, Konfiguration & Deployment
-Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariablen (`TRADING_MODE`, später
+Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariablen (`TRADING_MODE`; `BOT_AGENT`
+Standard `trend`; `TAKER_FEE` 0,0025 und `SLIPPAGE` 0,0005 je Seite, erlaubt [0, 0,05]; später
 `.env` auf dem Server, Rechte 600). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.
 Server ist gehärtet (Spec 002, Ablauf und Prüfbefehle: `docs/betrieb/server.md`); das Deployment des Bots
 (Unit, Verzeichnisse, Backup, Update/Rollback) folgt in M1 Nr. 6.

@@ -3,8 +3,12 @@
 
 import re
 from collections.abc import Callable
+from typing import cast
 
+from golden import scenarios
+from golden_scenarios import Params, build_bars, quote_for
 from llm_trading_bot.market.http import HTTPFailure
+from llm_trading_bot.market.models import Candle, Quote, Symbol
 
 
 class FakeTransport:
@@ -61,3 +65,35 @@ def bitvavo_handler(
         return [[(last - i * step) * 1000, "100", "101", "99", "100", "1"] for i in range(200)]
 
     return handler
+
+
+def params(name: str, symbol: str) -> Params:
+    base = next(s["params"] for s in scenarios() if s["params"]["name"] == name)
+    return cast(Params, {**base, "symbol": symbol})
+
+
+class ScenarioClient:
+    """Market client serving golden-scenario bars (trend: BUY on 'up', SELL on 'down')."""
+
+    def __init__(self, btc: str = "up-calm-plain-s1", eth: str = "up-calm-plain-s1") -> None:
+        self.params = {Symbol.BTCEUR: params(btc, "BTCEUR"), Symbol.ETHEUR: params(eth, "ETHEUR")}
+        self.fail_candles: set[Symbol] = set()
+        self.fail_quotes = False
+        self.quote_calls = 0
+
+    def quotes(self) -> dict[Symbol, Quote]:
+        self.quote_calls += 1
+        if self.fail_quotes:
+            raise HTTPFailure(503)
+        result = {}
+        for symbol, p in self.params.items():
+            bid, ask = quote_for(p, build_bars(p))
+            result[symbol] = Quote(bid, ask)
+        return result
+
+    def closed_candles(
+        self, symbol: Symbol, interval: int, *, now_epoch: int
+    ) -> tuple[Candle, ...]:
+        if symbol in self.fail_candles:
+            raise HTTPFailure(500)
+        return tuple(Candle(*row) for row in build_bars(self.params[symbol])[interval])

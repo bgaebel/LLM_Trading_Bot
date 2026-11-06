@@ -1,23 +1,24 @@
 # Stand
 
-**Aktualisiert:** 2026-11-06 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-06 · **Branch:** `feat/s004-paper` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-Fertig und gemergt: Spec 002 Server-Härtung (PR #1), Spec 001 Marktdaten (PR #2), Spec 003 Indikatoren,
-klassische Strategien und LLM-Kontext identisch zu Arena v0.3.1 (PR #3; Golden-Fixtures mit Grenzfällen,
-Mutationstest 51/51). Diagnose: `uv run trading-bot market`, `uv run trading-bot signals`.
+Spec 004 Paper-Ausführung + SQLite fertig, Prüfung „bereit", PR offen (wartet auf CI und Merge-Freigabe).
+Schema v1 (ADR-0008), Single-Writer-Sperre, Ausführung bitgleich zur Arena (Mutationstest 91/91 wie erwartet),
+Fail-closed bei veralteten Quotes, Buy & Hold einmalig, `uv run trading-bot paper-cycle --db <pfad>`.
+Fertig davor: Spec 002 (PR #1), 001 (PR #2), 003 (PR #3).
 
 ## Nächster Schritt
-1. Spec 004 (Paper-Ausführung + SQLite, Entwurf) und ADR-0008 (vorgeschlagen) durchsehen und freigeben.
-   Zu bestätigen: Startkapital 10.000 EUR, Slippage 0,05 %, aktiver Agent `trend` bis zur LLM-Strategie.
-2. Danach `/umsetzen 004`, dann Spec für 3a LLM-Strategie (Budgetsperre, Provenienz).
+1. PR für Spec 004 mergen (nach grüner CI und Freigabe).
+2. Spec für 3a LLM-Strategie (Budgetsperre, Provenienz; Schema-Erweiterung → `user_version` 2).
+3. Danach Nr. 4 Risiko inkl. 10-%-Drawdown-Stopp, Nr. 5 Dienst (Quotes nur einmal je Zyklus holen).
 
 ## In Arbeit
-- Spec: 004 (Entwurf, wartet auf Freigabe)
+- Spec: 004 (fertig, PR offen)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
-- Freigabe von Spec 004 / ADR-0008 durch den Nutzer.
+- Merge-Freigabe für den PR von Spec 004.
 
 ## Offen – manuell prüfen
 - Optional in der Hetzner-Oberfläche: Cloud-Firewall als zweite Schicht, Backups/Snapshot (siehe `docs/betrieb/server.md`).

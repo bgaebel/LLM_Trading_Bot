@@ -4,7 +4,9 @@ Applies one small change at a time (a threshold, weight, window, order) to a tem
 the strategy code and runs tests/strategy. Every mutation must be KILLED; a SURVIVED mutation means
 the golden fixtures would not notice that change. Mutation list from the independent review.
 
-Usage: uv run python tools/golden/mutation_check.py
+Spec 004 adds mutations of the paper execution (paper/execution.py, tests/paper).
+
+Usage: uv run python tools/golden/mutation_check.py [--only strategy|paper]
 """
 
 import os
@@ -20,7 +22,17 @@ REPO = Path(__file__).resolve().parents[2]
 #   breakout BUY and meanrev BUY, which needs adx_1h >= 19 and < 18 at once - impossible for any
 #   input (checked by enumerating all 27 vote combinations per regime, 2026-11-06).
 # - noop control: replaces a text with itself; proves the harness reports survivors.
-EQUIVALENT = {"ensemble buy thr .55->.6", "noop control"}
+# - cash cap p["cash"]/(1+rate): with cash >= 0 and fee <= 5 % the 90 % cap is always smaller
+#   (0.9*cash - 0.1*positions < cash/(1+fee)), so the cash term never decides (Spec 004).
+# - sell clamp MAX(0, col-qty): qty = min(col, ...) <= col, and x - y >= 0 for floats y <= x.
+# - total room floor max(0, ...): a negative room gives spend < MIN_TRADE_EUR, as 0 does.
+EQUIVALENT = {
+    "ensemble buy thr .55->.6",
+    "noop control",
+    "exec cash cap removed",
+    "exec sell clamp at 0",
+    "exec total room floor",
+}
 
 M = [
     (
@@ -188,6 +200,111 @@ M = [
 ]
 
 
+E = "paper/execution.py"
+M += [
+    (E, "MAX_SYMBOL_WEIGHT = 0.45", "MAX_SYMBOL_WEIGHT = 0.44", "exec symbol cap .45->.44"),
+    (E, "MAX_TOTAL_WEIGHT = 0.90", "MAX_TOTAL_WEIGHT = 0.89", "exec total cap .90->.89"),
+    (E, "MIN_TRADE_EUR = 50.0", "MIN_TRADE_EUR = 49.0", "exec min trade 50->49"),
+    (E, "REBALANCE_BAND = 0.02", "REBALANCE_BAND = 0.021", "exec band .02->.021"),
+    (E, "abs(diff) < max(", "abs(diff) <= max(", "exec band < -> <="),
+    (E, "if spend < MIN_TRADE_EUR", "if spend <= MIN_TRADE_EUR", "exec min spend < -> <="),
+    (E, "if notional < MIN_TRADE_EUR", "if notional <= MIN_TRADE_EUR", "exec min sell < -> <="),
+    (E, "max(0.0, target)", "target", "exec target floor removed"),
+    (E, "min(MAX_SYMBOL_WEIGHT, max(", "max(MAX_SYMBOL_WEIGHT, max(", "exec symbol cap min->max"),
+    (E, "fill = q.ask * (1 + slip)", "fill = q.mid * (1 + slip)", "exec buy at mid"),
+    (E, "fill = q.bid * (1 - slip)", "fill = q.mid * (1 - slip)", "exec sell at mid"),
+    (E, "fill = q.ask * (1 + slip)", "fill = q.ask * (1 + rate)", "exec buy slip<->fee"),
+    (E, "fee = spend * rate", "fee = spend * slip", "exec buy fee rate"),
+    (E, "(spend + fee, qty, agent)", "(spend, qty, agent)", "exec buy fee not charged"),
+    (E, "(notional - fee, qty, agent)", "(notional, qty, agent)", "exec sell fee not charged"),
+    (E, "qty = min(p[col], abs(diff) / q.mid)", "qty = abs(diff) / q.mid", "exec sell qty cap"),
+    (E, "{col}=MAX(0,{col}-?)", "{col}={col}-?", "exec sell clamp at 0"),
+    (
+        E,
+        "max(0.0, MAX_TOTAL_WEIGHT * eq - other - present)",
+        "MAX_TOTAL_WEIGHT * eq - other - present",
+        "exec total room floor",
+    ),
+    (E, 'p["cash"] / (1 + rate))', 'p["cash"])', "exec cash cap removed"),
+    (
+        E,
+        'if p["halted"] and target > current_weight',
+        "if False and target > current_weight",
+        "exec halted guard in trade",
+    ),
+    (E, 'action != "HOLD" and not p["halted"]', 'action != "HOLD"', "exec halted skip in decision"),
+    (
+        E,
+        'if action == "HOLD":\n                    target = current',
+        'if action == "HOLD":\n                    pass',
+        "exec HOLD keeps weight",
+    ),
+    (
+        E,
+        'if action == "BUY" and target < current:',
+        'if action == "BUY" and target < 0:',
+        "exec BUY never reduces",
+    ),
+    (
+        E,
+        'if action == "SELL" and target > current:',
+        'if action == "SELL" and target > 1:',
+        "exec SELL never increases",
+    ),
+    (
+        E,
+        "if agent == BUYHOLD and p[_COLUMN[symbol]] > 0:",
+        "if agent == BUYHOLD and p[_COLUMN[symbol]] > 1:",
+        "exec buyhold holds once",
+    ),
+    (E, "if qs is None or set(qs) != set(SYMBOLS):", "if qs is None:", "exec stale on partial"),
+    (E, "sig.reason.strip()[:REASON_MAX]", "sig.reason[:REASON_MAX]", "exec reason strip"),
+    (E, "REASON_MAX = 550", "REASON_MAX = 549", "exec reason length"),
+    (E, "json.dumps(data, ensure_ascii=False)", "json.dumps(data)", "exec inputs ascii"),
+    (
+        E,
+        '"INSERT OR IGNORE INTO decisions"',
+        '"INSERT OR REPLACE INTO decisions"',
+        "exec duplicate bar replaces",
+    ),
+    (E, 'peak = max(eq, p["peak"])', "peak = eq", "exec peak keeps max"),
+    (E, "            mark(con, agent, qs, now)\n", "", "exec mark after trade"),
+    (
+        E,
+        '(BUYHOLD, symbol.name, "BUY")',
+        '(BUYHOLD, symbol.name, "SELL")',
+        "exec buyhold trade check",
+    ),
+    (
+        E,
+        '"BUY",\n            0.45,\n            1.0,',
+        '"BUY",\n            0.25,\n            1.0,',
+        "exec buyhold allocation",
+    ),
+    (
+        E,
+        'con, BUYHOLD, symbol, -1, "BUY&HOLD"',
+        'con, BUYHOLD, symbol, -2, "BUY&HOLD"',
+        "exec buyhold sentinel bar",
+    ),
+    (E, '"initial_allocation_pct": 45,', '"initial_allocation_pct": 45.0,', "exec buyhold context"),
+    (
+        E,
+        "if set(qs) != set(SYMBOLS):\n        raise",
+        "if not qs:\n        raise",
+        "exec buyhold needs both",
+    ),
+    (E, "    for quote in qs.values():\n        quote.validate()\n", "", "exec buyhold validates"),
+    (
+        E,
+        'status, action, target = "STALE_QUOTE", "HOLD", 0',
+        'status, action, target = "STALE_QUOTE", "HOLD", target',
+        "exec stale target 0",
+    ),
+    (E, "if equity > 0 else 0", "if equity > 1e9 else 0", "exec weight zero equity"),
+]
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -197,11 +314,16 @@ def main() -> int:
                 shutil.copytree(source, root / item, ignore=shutil.ignore_patterns("__pycache__"))
             else:
                 shutil.copy2(source, root / item)
-        strategy = root / "src" / "llm_trading_bot" / "strategy"
+        package = root / "src" / "llm_trading_bot"
         env = {**os.environ, "PYTHONPATH": str(root / "src")}
         failures = []
-        for fname, old, new, label in M:
-            path = strategy / fname
+        only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
+        selected = [
+            m for m in M if only is None or (m[0].startswith("paper/") == (only == "paper"))
+        ]
+        for fname, old, new, label in selected:
+            group = "paper" if fname.startswith("paper/") else "strategy"
+            path = package / (fname if group == "paper" else f"strategy/{fname}")
             original = path.read_text(encoding="utf-8")
             if old not in original:
                 print(f"{'PATTERN MISSING':16} {label}")
@@ -218,12 +340,13 @@ def main() -> int:
                         "-x",
                         "-p",
                         "no:cacheprovider",
-                        "tests/strategy",
+                        f"tests/{group}",
                     ],
                     cwd=root,
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
+                    errors="replace",
                     env=env,
                 )
             finally:
@@ -235,7 +358,10 @@ def main() -> int:
             if status == "SURVIVED" and not expected_survivor:
                 failures.append(label)
         print()
-        print(f"{len(M) - len(failures)}/{len(M)} as expected; unexpected survivors: {failures}")
+        print(
+            f"{len(selected) - len(failures)}/{len(selected)} as expected; "
+            f"unexpected survivors: {failures}"
+        )
         return 1 if failures else 0
 
 

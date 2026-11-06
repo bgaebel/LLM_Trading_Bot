@@ -3,10 +3,12 @@
 import argparse
 import io
 import os
+import sqlite3
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TextIO
 
 from llm_trading_bot.core import parse_mode
@@ -19,6 +21,10 @@ from llm_trading_bot.market.snapshot import (
     MarketSnapshot,
     build_snapshots,
 )
+from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME, CycleReport, active_agent, paper_cycle
+from llm_trading_bot.paper.db import SchemaError, open_db
+from llm_trading_bot.paper.execution import BUYHOLD, Costs
+from llm_trading_bot.paper.lock import WriterLock, WriterLockBusy
 from llm_trading_bot.strategy.indicators import indicators
 from llm_trading_bot.strategy.payload import ARENA_SLIPPAGE, ARENA_TAKER_FEE, cost_roundtrip
 from llm_trading_bot.strategy.signals import STRATEGIES, STRATEGY_VERSION, run_strategy
@@ -26,6 +32,7 @@ from llm_trading_bot.strategy.signals import STRATEGIES, STRATEGY_VERSION, run_s
 EXIT_OK = 0
 EXIT_INVALID = 1
 EXIT_FETCH_FAILED = 2
+EXIT_LOCKED = 3
 
 
 def _utc(ts: float) -> str:
@@ -129,11 +136,84 @@ def run_signals(
     return EXIT_OK if len(snaps) == len(SYMBOLS) else EXIT_INVALID
 
 
+def print_cycle(report: CycleReport, costs: Costs, *, out: TextIO) -> None:
+    print(
+        f"Paper cycle {_utc(report.at)}, agent {report.agent}, strategy {STRATEGY_VERSION}, "
+        f"costs: fee {costs.fee_rate:.2%} + slippage {costs.slippage:.2%} per side "
+        "(virtual orders only)",
+        file=out,
+    )
+    if report.quotes_error:
+        print(f"quotes: {report.quotes_error}", file=out)
+    if not report.equity:
+        print("no fresh quotes of both markets - no decisions, nothing traded", file=out)
+        return
+    bought = report.buyhold_bought
+    print(f"buy & hold: {f'bought {bought} market(s)' if bought else 'already invested'}", file=out)
+    tf = STRATEGY_TIMEFRAME[report.agent]
+    for m in report.markets:
+        if m.error:
+            print(f"{m.symbol.market}: no decision - {m.error}", file=out)
+            continue
+        assert m.bar_ts is not None
+        state = "new" if m.new else "already decided"
+        trade = "traded" if m.traded else "no trade"
+        print(
+            f"{m.symbol.market}: {tf}m bar opened {_utc(m.bar_ts)} {state}: "
+            f"{m.action} target {m.target:.2f} "
+            f"[{m.status}] {trade} - {m.reason}",
+            file=out,
+        )
+    for e in report.equity:
+        print(
+            f"equity {e.agent:<9} {e.value:>11.2f} EUR  cash {e.cash:.2f}  "
+            f"BTC {e.btc:.8f}  ETH {e.eth:.8f}",
+            file=out,
+        )
+
+
+def run_paper_cycle(
+    db: Path,
+    client: MarketClient,
+    *,
+    env: Mapping[str, str],
+    out: TextIO,
+    clock: Callable[[], float] = time.time,
+) -> int:
+    """One live paper cycle on ``db``; refuses to run while another process owns the DB."""
+    try:
+        agent = active_agent(env)
+        costs = Costs.from_env(env)
+    except ValueError as exc:
+        print(f"paper-cycle configuration error: {exc}", file=out)
+        return EXIT_INVALID
+    try:
+        with WriterLock(db):
+            con = open_db(db, agents=(agent, BUYHOLD))
+            try:
+                report = paper_cycle(con, client, agent, costs=costs, clock=clock)
+            finally:
+                con.close()
+    except WriterLockBusy as exc:
+        print(f"paper-cycle refused: {exc}", file=out)
+        return EXIT_LOCKED
+    except (SchemaError, sqlite3.DatabaseError) as exc:
+        # Never repair or migrate: the history in that file must stay as it is (ADR-0008).
+        print(f"paper-cycle refused, database error: {type(exc).__name__}: {exc}", file=out)
+        return EXIT_INVALID
+    print_cycle(report, costs, out=out)
+    if not report.equity:
+        return EXIT_FETCH_FAILED
+    return EXIT_OK if report.complete else EXIT_INVALID
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="trading-bot")
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("market", help="fetch live Bitvavo data once and validate it")
     commands.add_parser("signals", help="show the classic strategies' signals on live data")
+    cycle = commands.add_parser("paper-cycle", help="run one paper trading cycle on live data")
+    cycle.add_argument("--db", type=Path, required=True, help="path of the paper SQLite database")
     args = parser.parse_args(argv)
     # LEARNING(#windows): Umlaute in der Konsolenausgabe kaputt unter Windows
     # The Windows console defaults to cp1252; strategy reasons contain German umlauts.
@@ -145,5 +225,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_market(BitvavoClient(), out=sys.stdout)
     if args.command == "signals":
         return run_signals(BitvavoClient(), out=sys.stdout)
+    if args.command == "paper-cycle":
+        return run_paper_cycle(args.db, BitvavoClient(), env=os.environ, out=sys.stdout)
     print(f"llm-trading-bot: mode={mode.value}")
     return EXIT_OK
