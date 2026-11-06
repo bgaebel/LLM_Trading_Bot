@@ -1,6 +1,6 @@
 # Spec 005: LLM-Strategie (GPT) mit Modellvergleich, Budgetsperre und Provenienz
 
-- **Status:** Entwurf
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s005-llm-strategie` · **Meilenstein:** M1 (Nr. 3a)
 - **Erstellt:** 2026-11-06
 
@@ -68,8 +68,8 @@ nie zu einem Trade. So lässt sich messen, ob das teurere Reasoning sein Geld we
   Orders bleiben virtuell, `live` gesperrt.
 - ADR-0007: klassische Strategien, LLM-Kontext je Markt und Ausführung bleiben identisch zur Arena; der LLM-Prompt
   ist ab ADR-0011 eine eigene Version.
-- ADR-0010 (vorgeschlagen, löst ADR-0008 ab): drei GPT-Depots + Buy & Hold; Schema versioniert, keine Migration.
-- ADR-0011 (vorgeschlagen, löst ADR-0009 ab): gemeinsame Anfrage, Prompt v1, Takt 4/h + ≤ 4 Ereignis/h, Effort
+- ADR-0010 (angenommen, löst ADR-0008 ab): drei GPT-Depots + Buy & Hold; Schema versioniert, keine Migration.
+- ADR-0011 (angenommen, löst ADR-0009 ab): gemeinsame Anfrage, Prompt v1, Takt 4/h + ≤ 4 Ereignis/h, Effort
   `low`, `openai`-SDK, Budget je Depot und gesamt in der DB, Provenienz.
 - ADR-0002: Fremdpaket erlaubt, wenn per `uv add` gelockt.
 - CLAUDE.md: Fail closed bei ungültigen LLM-Antworten; BTC-Fehler blockiert ETH nicht; Secrets nie loggen.
