@@ -23,7 +23,7 @@ diese Werte. Keys verlassen den Rechner nicht, werden nie wieder vollständig an
 - [ ] AK5: Einstellungen speichern: `OPENAI_API_KEY` und die Spec-005-Werte (`BOT_AGENTS`, `LLM_DAILY_BUDGET_EUR`,
   Anteile je Depot, `LLM_EFFORT`) werden wie in `load_config` geprüft, atomar in `secrets.env` (600) geschrieben;
   ein gespeicherter Key erscheint nie mehr vollständig im HTML (nur `…abcd`); leeres Key-Feld = unverändert;
-  „Key löschen" entfernt ihn. Unbekannte Felder werden verworfen. — Nachweis: `uv run pytest tests/web/test_secrets.py
+  „Key löschen" entfernt ihn. Unbekannte Felder werden verworfen. — Nachweis: `uv run pytest tests/web/test_credentials.py
   tests/web/test_server.py`
 - [ ] AK6: „Verbindung testen" ruft nur die kostenlose Modell-Abfrage auf und zeigt Erfolg oder den Fehlertyp, nie
   den Key. — Nachweis: `uv run pytest tests/web/test_server.py` (Fake-Client)
@@ -51,7 +51,7 @@ diese Werte. Keys verlassen den Rechner nicht, werden nie wieder vollständig an
 Paket `src/llm_trading_bot/web/`:
 - `auth.py`: `PasswordStore` (scrypt, Datei 600), `LoginGuard` (Fehlversuche, Sperre), `Sessions`
   (Token, CSRF, Ablauf), Einrichtungscode.
-- `secrets.py`: `SecretsFile` (Lesen/Schreiben im env-Format, atomar, 600), Feldliste, Prüfung über
+- `credentials.py`: `SecretsFile` (Lesen/Schreiben im env-Format, atomar, 600), Feldliste, Prüfung über
   `load_config`, Maskierung.
 - `app.py`: Request-Handler (`/setup`, `/login`, `/logout`, `/settings`, `/settings/test`), HTML aus
   `html.escape`-geschützten Vorlagen, Sicherheits-Header; `serve(data_dir, port)`.
@@ -60,7 +60,7 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
 
 ## Plan
 - [x] 1. `auth.py` + Tests (AK2, AK3)
-- [ ] 2. `secrets.py` + Tests (AK5)
+- [x] 2. `credentials.py` + Tests (AK5)
 - [ ] 3. `app.py` + `web`-Befehl + Server-Tests (AK1–AK6, AK8)
 - [ ] 4. `paper-cycle --secrets` (AK7)
 - [ ] 5. Doku (ARCHITEKTUR, README, `docs/betrieb/`), Seite im Browser zeigen (AK9)
