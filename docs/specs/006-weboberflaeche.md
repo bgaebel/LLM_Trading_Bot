@@ -127,6 +127,13 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
   Modell ergänzt: Preis je 1.000 Reasoning-Tokens, gemessene Werte bei `low` (Spec 005 AK10) je Anfrage und für das
   Tagesmaximum von 96 Anfragen, Obergrenze je Anfrage (8.000 Output-Tokens) und je Tag, gedeckelt durch das
   Depot-Budget. Nicht gemessene Stufen werden als solche benannt statt geschätzt. Reasoning-Panel breiter (7/12).
+- 2026-11-06: Nutzer: Chart soll dynamischer wirken – Ausbrüche, Herauszoomen und wieder Hineinzoomen wie bei echten
+  Charts. Kursreihe jetzt aus Seitwärtsphasen (Mean Reversion), Ausbrüchen mit Rücksetzern (300 Kerzen, 5 min
+  Schleife). Auto-Zoom als erzeugte Keyframes (`translateY` + `scaleY`) auf einer Gruppe um das Band: passt die
+  letzten 52 Kerzen ein, weitet schnell (0,6 je Kerze) und engt langsam (0,06); Faktor ~3,2 zwischen eng und weit.
+  Marker, Kurspunkt und Ringe bekommen die inverse Skalierung um ihren Ankerpunkt, Linien `non-scaling-stroke`,
+  Preisraster im Zoom macht das Skalieren sichtbar. Tests: keine sichtbare Kerze außerhalb des Bands, Zoom rein und
+  raus, Gegen-Skalierung = 1. Im Browser gemessen: Maßstab ändert sich laufend, Produkt Zoom × Gegen-Skalierung ≈ 1.
 
 ## Ergebnis
 - **Erreicht:** …

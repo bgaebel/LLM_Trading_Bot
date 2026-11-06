@@ -1,4 +1,5 @@
-"""The decorative chart: born at the scan line, seamless loop, signals flash when they are born."""
+"""The decorative chart: born at the scan line, breakouts with auto-zoom, seamless loop, signals
+flash when they are born."""
 
 import itertools
 import re
@@ -8,6 +9,10 @@ import pytest
 from llm_trading_bot.web import chart
 
 
+def _order() -> list[int]:
+    return sorted(range(chart.COUNT), key=lambda i: chart.crossing(chart.center(i)))
+
+
 def test_candle_tape_loops_without_a_jump() -> None:
     series = chart.candles()
     assert len(series) == chart.COUNT
@@ -15,23 +20,53 @@ def test_candle_tape_loops_without_a_jump() -> None:
     assert all(c.low < min(c.open, c.close) and c.high > max(c.open, c.close) for c in series)
 
 
-def test_walk_is_a_bridge_inside_its_band() -> None:
-    values = chart.walk(11, chart.COUNT, *chart.BAND)
-    assert min(values) == pytest.approx(chart.BAND[0])
-    assert max(values) == pytest.approx(chart.BAND[1])
-    # Not a smooth wave: direction changes often and step sizes vary a lot.
+def test_walk_has_tight_ranges_and_breakouts() -> None:
+    values = chart.walk(11, chart.COUNT)
     steps = [b - a for a, b in itertools.pairwise(values)]
+    # Breakouts: some 10-candle stretches move far more than the typical one.
+    moves = sorted(abs(values[i + 10] - values[i]) for i in range(len(values) - 10))
+    assert moves[-1] > 6 * moves[len(moves) // 2]
+    # Still a jagged chart, not a smooth wave.
     turns = sum(1 for a, b in itertools.pairwise(steps) if a * b < 0)
     assert turns > chart.COUNT // 4
-    assert max(abs(s) for s in steps) > 4 * sorted(abs(s) for s in steps)[len(steps) // 2]
 
 
-def test_candles_and_markers_stay_inside_the_chart_band() -> None:
-    ys = [chart.y(v) for c in chart.candles() for v in (c.high, c.low)]
-    assert min(ys) > 548 and max(ys) < 890
-    pattern = r'class="sig-label" x="[0-9]+" y="([0-9.]+)"'
-    labels = [float(v) for v in re.findall(pattern, chart.svg())]
-    assert labels and min(labels) > 560 and max(labels) < 900
+def test_auto_zoom_rescales_out_and_back_in() -> None:
+    scales = [z.scale for z in chart.zoom_frames(chart.candles())]
+    assert max(scales) / min(scales) > 2.5
+    # Not a one-off: the view zooms in and out several times per loop.
+    directions = [b > a for a, b in itertools.pairwise(scales) if abs(b - a) > 0.01]
+    changes = sum(1 for a, b in itertools.pairwise(directions) if a != b)
+    assert changes >= 4
+
+
+def test_visible_candles_always_fit_the_band() -> None:
+    series = chart.candles()
+    frames = chart.zoom_frames(series)
+    for frame, born in zip(frames, _order(), strict=True):
+        window = [series[(born - k) % chart.COUNT] for k in range(chart.WINDOW)]
+        assert min(frame.screen(c.high) for c in window) >= 540
+        assert max(frame.screen(c.low) for c in window) <= 895
+
+
+def test_zoom_widens_fast_and_narrows_slowly() -> None:
+    assert chart.GROW > 5 * chart.SHRINK
+
+
+def test_markers_and_price_tip_keep_their_size_while_zooming() -> None:
+    svg, css = chart.svg(), chart.css()
+    assert svg.count('<g class="unzoom-down">') + svg.count('<g class="unzoom-up">') == 2 * len(
+        chart.signals(chart.candles())
+    )
+    assert '<g class="head">' in svg and 'class="unzoom-c"><circle class="head-dot"' in svg
+    # The inverse keyframes undo the zoom at every frame.
+    zoom = dict(
+        re.findall(r"([0-9.]+)% \{ transform: translateY\([-0-9.]+px\) scaleY\(([0-9.]+)\)", css)
+    )
+    unzoom = dict(re.findall(r"([0-9.]+)% \{ transform: scaleY\(([0-9.]+)\); \}", css))
+    assert zoom.keys() == unzoom.keys() and len(zoom) >= chart.COUNT
+    for key, scale in zoom.items():
+        assert float(scale) * float(unzoom[key]) == pytest.approx(1, abs=1e-4)
 
 
 def test_eth_line_ends_where_it_starts() -> None:
@@ -41,22 +76,20 @@ def test_eth_line_ends_where_it_starts() -> None:
 
 def test_nothing_right_of_the_scan_line_is_drawn() -> None:
     svg = chart.svg()
-    clip = re.search(r'<clipPath id="past"><rect x="(-?[0-9]+)" y="0" width="([0-9]+)"', svg)
+    clip = re.search(r'<clipPath id="past"><rect x="(-?[0-9]+)" y="[-0-9]+" width="([0-9]+)"', svg)
     assert clip and int(clip.group(1)) + int(clip.group(2)) == chart.CURSOR
-    clipped = svg[svg.index('<g clip-path="url(#past)">') :]
-    # Both tapes sit inside the clipped group, which closes only after them.
-    assert clipped.index('class="eth-tape"') < clipped.index('class="tape"')
-    assert clipped.index('class="tape"') < clipped.index('class="scan-glow"')
-    assert svg.index('class="scan-glow"') > svg.index('<g clip-path="url(#past)">')
+    # Both tapes sit inside a group clipped to the past.
+    assert re.search(r'<g clip-path="url\(#past\)"><g class="eth-tape">', svg)
+    assert re.search(r'<g clip-path="url\(#past\)"><g class="tape">', svg)
 
 
 def test_signals_are_regular_and_never_overlap() -> None:
     found = chart.signals(chart.candles())
-    assert len(found) >= 10 and {s.action for s in found} == {"BUY", "SELL"}
+    assert len(found) >= 15 and {s.action for s in found} == {"BUY", "SELL"}
     starts = sorted(chart.crossing(chart.center(s.index)) * chart.PERIOD for s in found)
     gaps = [b - a for a, b in zip(starts, [*starts[1:], starts[0] + chart.PERIOD], strict=True)]
-    # A log line shows for LOG_SECONDS; the next signal must come later, but not much later.
-    assert min(gaps) > chart.LOG_SECONDS + 0.4 and max(gaps) < 35
+    # A log line shows for LOG_SECONDS; the next signal comes later - and within a minute.
+    assert min(gaps) > chart.LOG_SECONDS + 0.4 and max(gaps) < 60
 
 
 def test_each_signal_flashes_when_its_candle_is_born() -> None:
@@ -72,11 +105,13 @@ def test_each_signal_flashes_when_its_candle_is_born() -> None:
 
 def test_price_tip_follows_the_candle_being_born() -> None:
     series = chart.candles()
-    frames = re.findall(r"([0-9.]+)% \{ transform: translateY\(([0-9.]+)px\); \}", chart.css())
+    block = re.search(r"@keyframes head \{(.*?)\}\n", chart.css())
+    assert block
+    frames = re.findall(r"([0-9.]+)% \{ transform: translateY\(([-0-9.]+)px\); \}", block.group(1))
     stops = {round(float(p), 3): float(v) for p, v in frames}
     assert stops[0.0] == stops[100.0]
     for i, c in enumerate(series):
-        assert stops[round(chart.crossing(chart.center(i)) * 100, 3)] == chart.y(c.close)
+        assert stops[round(chart.crossing(chart.center(i)) * 100, 3)] == chart.base_y(c.close)
 
 
 def test_every_signal_has_marker_log_line_and_timing_class() -> None:
