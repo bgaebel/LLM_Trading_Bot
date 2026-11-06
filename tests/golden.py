@@ -47,6 +47,8 @@ def assert_same(actual: Any, expected: Any, path: str = "") -> None:
             assert_same(a, e, f"{path}[{i}]")
     elif isinstance(expected, float) or isinstance(actual, float):
         assert isinstance(actual, int | float) and not isinstance(actual, bool), path
+        # int vs float matters: json renders 100 and 100.0 differently in the LLM prompt.
+        assert isinstance(actual, float) == isinstance(expected, float), (path, actual, expected)
         assert math.isclose(actual, expected, rel_tol=REL_TOL, abs_tol=0.0) or actual == expected, (
             path,
             actual,

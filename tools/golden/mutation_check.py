@@ -169,6 +169,22 @@ M = [
         'for name in ("trend", "meanrev", "breakout")',
         "payload ref order",
     ),
+    # Second review round: finer mutations that changed real behaviour.
+    ("signals.py", "up and a >= 20", "up and a > 20", "trend adx >= 20 -> > 20"),
+    ("signals.py", "prev_mid - 2 * prev_sd", "prev_mid - 2.05 * prev_sd", "meanrev 2sd->2.05"),
+    (
+        "payload.py",
+        "round(s.quote.spread_bps, 2)",
+        "round(s.quote.spread_bps, 3)",
+        "payload spread round 2->3",
+    ),
+    (
+        "indicators.py",
+        "return 100 if loss == 0",
+        "return 100.0 if loss == 0",
+        "rsi int 100 -> float",
+    ),
+    ("indicators.py", "if sd > 0 else 0,", "if sd > 0 else 0.0,", "z20 int 0 -> float"),
 ]
 
 

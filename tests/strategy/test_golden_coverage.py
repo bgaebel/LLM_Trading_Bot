@@ -56,3 +56,12 @@ def test_snapshot_min_bars_equal_the_arena_strategy_minimum() -> None:
 
 def test_boundary_cases_cover_every_base() -> None:
     assert all(len(seeds) == 800 for seeds in golden()["boundary"].values())
+    assert len(golden()["boundary"]) == 8
+
+
+def test_uneven_spreads_and_int_fallbacks_are_covered() -> None:
+    spreads = {c["payload"]["0.0"]["quote_spread_bps"] for c in scenarios()}
+    assert len(spreads) >= 3
+    ind = [c["indicators"] for c in scenarios()]
+    assert any(i["rsi14_15m"] == 100 and isinstance(i["rsi14_15m"], int) for i in ind)
+    assert any(i["z20_15m"] == 0 and isinstance(i["z20_15m"], int) for i in ind)

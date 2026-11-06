@@ -23,7 +23,7 @@ class Params(TypedDict):
     drift: dict[str, float]  # per interval (as str key), relative change per bar
     vol: dict[str, float]
     volume: float
-    special: str  # "", "spike", "dip", "dump", "zerovol"
+    special: str  # "", "spike", "dip", "dump", "zerovol", "rally15", "flat15"
     spread_bps: float
     symbol: NotRequired[str]  # default "BTCEUR"
     dip_k: NotRequired[float]  # depth of the "dip" in standard deviations, default 3
@@ -76,6 +76,16 @@ def _apply_special(p: Params, bars: dict[int, list[Row]]) -> None:
         for idx in (5, 45):
             ts, o, _h, _lo, _c, _v = b1[idx]
             b1[idx] = (ts, o, o, o, o, 0.0)
+    elif p["special"] == "rally15":
+        # 15 strictly rising 15m closes: RSI has no losses and returns the int 100.
+        base = b15[-16][4]
+        for k, idx in enumerate(range(len(b15) - 15, len(b15)), start=1):
+            b15[idx] = _replace_close(b15[idx], base * (1 + 0.001 * k))
+    elif p["special"] == "flat15":
+        # Last 20 15m closes identical: std 0, so z20 falls back to the int 0.
+        level = b15[-21][4]
+        for idx in range(len(b15) - 20, len(b15)):
+            b15[idx] = _replace_close(b15[idx], level)
     elif p["special"] == "dump":
         # Last 15m close falls below the 48h low.
         low48 = min(r[3] for r in bars[60][-49:-1])
@@ -161,7 +171,9 @@ def sample_indicators(
             ("adx", "di", "close_ema24", "ema24_ema72", "ema12_ema30", "sell", "down")
         )
         i["adx_1h"] = edge(20, 1.5) if knob == "adx" else rng.uniform(19, 26)
-        if knob == "di":
+        if knob == "adx":
+            pass  # adx_1h at 20 with the comfortable uptrend above
+        elif knob == "di":
             i["minus_di_1h"] = edge(30.0, 2.0)
         elif knob == "close_ema24":
             i["close_1h"] = i["ema24_1h"] * (1 + edge(0.0, 0.002))

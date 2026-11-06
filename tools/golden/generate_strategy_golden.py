@@ -204,6 +204,29 @@ def main() -> int:
             "start": 3000.0,
         },
     ]
+    # Uneven spreads (round(spread_bps, 2) in the payload, spread share of the cost).
+    for spread in (1.3412, 2.6789):
+        extra.append(
+            {**sc.make(f"flat-calm-spread{spread}-s1", 1, 0.0, 0.002, ""), "spread_bps": spread}
+        )
+    extra.append(sc.make("up-calm-rally15-s1", 1, 0.0015, 0.002, "rally15"))
+    extra.append(sc.make("flat-calm-flat15-s1", 1, 0.0, 0.002, "flat15"))
+    # Dips whose effective depth (as meanrev measures it: the dipped bar is part of `prior`)
+    # lies just below and just above 2 sigma.
+    dip_bases = []
+    for lo, hi, label in ((1.96, 2.0, "below2"), (2.0, 2.04, "above2")):
+        for k in (1.5 + 0.005 * n for n in range(400)):
+            p = {**sc.make(f"flat-calm-dip-{label}-s1", 1, 0.0, 0.002, "dip"), "dip_k": round(k, 3)}
+            c15 = [b.close for b in env.snapshot(p).bars[15]]
+            prior = c15[-21:-1]
+            k_eff = (sum(prior) / len(prior) - c15[-2]) / env.st.pstdev(prior)
+            if lo < k_eff < hi:
+                extra.append(p)
+                dip_bases.append(p["name"])
+                break
+        else:
+            missing_dips = f"dip {label}"
+            print(f"WARNING: no {missing_dips}", file=sys.stderr)
     cases.extend(env.evaluate(p) for p in extra)
 
     # 4) Boundary cases on a few bases (dip bases make meanrev's snapshot conditions true).
@@ -215,6 +238,7 @@ def main() -> int:
         "up-calm-plain-s1",
         "down-wild-plain-s1",
         "eth-flat-calm-dip-s1",
+        *dip_bases,
     ]
     # Compact: per base, the digest of seed n is at index n.
     boundary = {
@@ -223,7 +247,10 @@ def main() -> int:
     }
 
     missing_final = (
-        sorted(REQUIRED - hit) + sorted(REGIMES - regimes) + [f"adx{w}" for w in windows_open]
+        sorted(REQUIRED - hit)
+        + sorted(REGIMES - regimes)
+        + [f"adx{w}" for w in windows_open]
+        + [f"dip{n}" for n in range(2 - len(dip_bases))]
     )
     if missing_final:
         print(f"WARNING: not reached: {missing_final}", file=sys.stderr)
