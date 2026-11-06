@@ -1,6 +1,6 @@
 # Spec 007: Startseite der Weboberfläche mit Depot-Übersicht
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s007-uebersicht` · **Meilenstein:** M1 (Nr. 7)
 - **Erstellt:** 2026-11-06
 
@@ -78,7 +78,7 @@ was zuletzt entschieden wurde und warum, was GPT heute gekostet hat und welche v
   kleinen Tabellen und einem Betrachter).
 
 ## Plan
-- [ ] 1. ADR-0016 + `web/readonly.py` mit Tests (Schreibversuch, Datei unverändert, paralleler Schreiber, fehlende
+- [x] 1. ADR-0016 + `web/readonly.py` mit Tests (Schreibversuch, Datei unverändert, paralleler Schreiber, fehlende
   DB, falsche Version) (AK2)
 - [ ] 2. `web/overview.py` mit Fixture-DB aus echten `paper_cycle`-Läufen: Depots, Lebenszeichen, Entscheidungen,
   GPT heute, Trades, Equity-Reihen + Ausdünnung (AK3–AK8 Daten)
