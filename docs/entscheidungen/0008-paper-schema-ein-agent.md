@@ -1,6 +1,6 @@
 # ADR-0008: Eigenes versioniertes SQLite-Schema; ein aktiver Agent plus Buy & Hold
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0010](0010-mehrere-llm-depots.md)
 - **Löst ab:** –
 - **Datum:** 2026-11-06
 - **Bereich:** #persistenz #paper

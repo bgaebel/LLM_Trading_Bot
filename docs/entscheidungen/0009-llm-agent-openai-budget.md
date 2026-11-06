@@ -1,6 +1,6 @@
 # ADR-0009: LLM-Agent über die OpenAI-API (gpt-6.1-sol) mit hartem EUR-Tagesbudget in der Datenbank
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0011](0011-gpt-gemeinsame-anfrage.md)
 - **Löst ab:** –
 - **Datum:** 2026-11-06
 - **Bereich:** #llm #budget #persistenz
