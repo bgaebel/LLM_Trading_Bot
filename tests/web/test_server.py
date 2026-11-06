@@ -151,7 +151,7 @@ def test_pages_contain_no_inline_script_or_style(running: Running) -> None:
     assert "<script" not in page and "style=" not in page and "<style" not in page
 
 
-@pytest.mark.parametrize("length", ["-1", "abc", "1e3"])
+@pytest.mark.parametrize("length", ["-1", "abc", "1e3", "²", "1234567"])
 def test_bad_content_length_is_refused(running: Running, length: str) -> None:
     status, _, _ = running.browser.request(
         "POST", "/login", extra={"Content-Length": length}, cookie_header=""
@@ -233,8 +233,12 @@ def test_login_without_form_token_is_refused(running: Running) -> None:
 
 @pytest.mark.parametrize(
     "headers",
-    [{"Origin": "https://evil.example"}, {"Sec-Fetch-Site": "cross-site"}],
-    ids=["origin", "fetch-site"],
+    [
+        {"Origin": "https://evil.example"},
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Origin": "null", "Sec-Fetch-Site": "cross-site"},
+    ],
+    ids=["origin", "fetch-site", "sandboxed-frame"],
 )
 def test_cross_site_posts_are_refused_and_do_not_count_as_failures(
     running: Running, headers: dict[str, str]
@@ -263,6 +267,19 @@ def test_same_origin_post_with_local_origin_header_is_accepted(running: Running)
             "Origin": f"http://localhost:{running.browser.port}",
             "Sec-Fetch-Site": "same-origin",
         },
+    )
+    assert status == 303
+
+
+def test_origin_null_from_a_privacy_context_does_not_lock_the_owner_out(running: Running) -> None:
+    setup(running)
+    guest = Browser(running.browser.port)
+    token = guest.token("/login")
+    status, _, _ = guest.request(
+        "POST",
+        "/login",
+        {"password": PASSWORD, "csrf": token},
+        extra={"Origin": "null", "Sec-Fetch-Site": "same-origin"},
     )
     assert status == 303
 

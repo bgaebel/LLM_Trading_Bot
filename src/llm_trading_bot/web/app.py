@@ -4,6 +4,7 @@
 in a standard-library HTTP server bound to 127.0.0.1 only.
 """
 
+import re
 import secrets
 import threading
 import time
@@ -32,6 +33,7 @@ LOCAL_NAMES = ("127.0.0.1", "localhost")
 # Browsers open spare connections that stay silent; they must not block real requests.
 SOCKET_TIMEOUT = 10
 MAX_BODY = 16 * 1024
+LENGTH = re.compile(r"[0-9]{1,6}")
 # Cookies on 127.0.0.1 are shared by every local app on any port: use names nobody else uses.
 COOKIE = "ltb_session"
 PRE_COOKIE = "ltb_pre"
@@ -277,15 +279,18 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             form: dict[str, list[str]] = {}
             if method == "POST":
                 # Cross-site posts (login lockout, guessing) are refused before anything else.
+                # "null" comes from privacy contexts (sandbox, redirects): no evidence either way, so
+                # Sec-Fetch-Site and the form tokens decide - refusing it would lock the owner out.
                 origin = self.headers.get("Origin")
-                if origin and not is_local_host(urlsplit(origin).netloc):
+                if origin and origin != "null" and not is_local_host(urlsplit(origin).netloc):
                     self._plain(403, "cross-site request")
                     return
                 if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
                     self._plain(403, "cross-site request")
                     return
                 raw_length = self.headers.get("Content-Length") or "0"
-                if not raw_length.isdigit():
+                # isdigit() also accepts digits like "²" that int() rejects: ASCII only.
+                if not LENGTH.fullmatch(raw_length):
                     self._plain(400, "bad length")
                     return
                 length = int(raw_length)

@@ -92,4 +92,7 @@ htmlcov/
 # Credentials and login written by `trading-bot web` (Spec 006) - never commit.
 secrets.env
 web-auth.json
+# temporary files of the atomic writes (crash leftovers)
+.secrets.env.*
+.web-auth.json.*
 backups/
