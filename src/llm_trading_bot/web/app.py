@@ -15,8 +15,9 @@ from pathlib import Path
 from typing import TextIO
 from urllib.parse import parse_qs, urlsplit
 
+from llm_trading_bot.llm.agents import LLM_DEFAULTS
 from llm_trading_bot.llm.openai_client import check_key
-from llm_trading_bot.web import pages
+from llm_trading_bot.web import overview, pages
 from llm_trading_bot.web.auth import (
     LoginGuard,
     PasswordStore,
@@ -26,6 +27,8 @@ from llm_trading_bot.web.auth import (
     same,
 )
 from llm_trading_bot.web.credentials import SecretsFile
+from llm_trading_bot.web.overview_page import overview_page
+from llm_trading_bot.web.readonly import DbUnavailable, reading
 
 LOCALHOST = "127.0.0.1"
 LOCAL_NAMES = ("127.0.0.1", "localhost")
@@ -92,9 +95,14 @@ class WebApp:
         self,
         data_dir: Path,
         *,
+        db: Path | None = None,
         key_check: Callable[[str], str] = check_key,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
+        # Next to secrets.env, like paper-cycle expects it (Spec 007 AK10).
+        self.db = db if db is not None else data_dir / "bot.db"
+        self.wall_clock = wall_clock
         self.passwords = PasswordStore(data_dir / "web-auth.json")
         self.credentials = SecretsFile(data_dir / "secrets.env")
         self.sessions = Sessions(clock)
@@ -110,7 +118,7 @@ class WebApp:
     def _login(self) -> Response:
         session = self.sessions.create()
         cookie = f"{COOKIE}={session.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"
-        return redirect("/settings", **{"Set-Cookie": cookie})
+        return redirect("/", **{"Set-Cookie": cookie})
 
     def _public(
         self,
@@ -130,6 +138,22 @@ class WebApp:
     def _pre_ok(form: Form, cookies: Mapping[str, str]) -> bool:
         expected = cookies.get(PRE_COOKIE, "")
         return bool(expected) and same(_one(form, "csrf"), expected)
+
+    def _overview(self, session: Session) -> Response:
+        values = self.credentials.read()
+        shares = {
+            agent: pages.budget_value(
+                values, f"LLM_DAILY_BUDGET_EUR_{agent.upper().replace('-', '_')}", default
+            )
+            for agent, (_model, default) in LLM_DEFAULTS.items()
+        }
+        try:
+            # ADR-0016: one short read-only snapshot per page view, never the WriterLock.
+            with reading(self.db) as con:
+                view = overview.load(con, self.wall_clock(), shares)
+        except DbUnavailable as exc:
+            return Response(200, overview_page(None, csrf=session.csrf, problem=str(exc)))
+        return Response(200, overview_page(view, csrf=session.csrf))
 
     def _settings(
         self, session: Session, message: str = "", ok: bool = True, status: int = 200
@@ -155,8 +179,10 @@ class WebApp:
             return self._public(
                 pages.login_page, cookies, "Sitzung ungültig – bitte erneut anmelden.", 403
             )
-        if path in ("/", "/setup") and method == "GET":
-            return redirect("/settings")
+        if path == "/" and method == "GET":
+            return self._overview(session)
+        if path == "/setup" and method == "GET":
+            return redirect("/")
         if path == "/logout" and method == "POST":
             self.sessions.drop(session.token)
             return redirect("/login", **{"Set-Cookie": f"{COOKIE}=; Max-Age=0; Path=/"})
@@ -202,7 +228,7 @@ class WebApp:
         self, method: str, form: Form, session: Session | None, cookies: Mapping[str, str]
     ) -> Response:
         if method != "POST":
-            return redirect("/settings") if session else self._public(pages.login_page, cookies)
+            return redirect("/") if session else self._public(pages.login_page, cookies)
         if not self._pre_ok(form, cookies):
             return self._public(pages.login_page, cookies, EXPIRED, 403)
         locked = self.guard.seconds_locked()
@@ -327,11 +353,17 @@ def make_server(app: WebApp, host: str, port: int) -> ThreadingHTTPServer:
     return server
 
 
-def serve(data_dir: Path, *, port: int, out: TextIO, host: str = LOCALHOST) -> None:
-    app = WebApp(data_dir)
+def serve(
+    data_dir: Path, *, port: int, out: TextIO, host: str = LOCALHOST, db: Path | None = None
+) -> None:
+    app = WebApp(data_dir, db=db)
     server = make_server(app, host, port)
     bound = server.server_address[1]
-    print(f"Web UI: http://{LOCALHOST}:{bound}/  (data: {data_dir})", file=out, flush=True)
+    print(
+        f"Web UI: http://{LOCALHOST}:{bound}/  (data: {data_dir}, db: {app.db}, read-only)",
+        file=out,
+        flush=True,
+    )
     if app.setup_code:
         print(f"Einrichtungscode (einmalig): {app.setup_code}", file=out, flush=True)
     try:

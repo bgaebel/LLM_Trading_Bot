@@ -260,3 +260,15 @@ def test_llm_decision_line_shows_the_real_attempt_number() -> None:
         )
     )
     assert "attempt 12345 new: BUY" in line
+
+
+def test_web_db_defaults_to_bot_db_in_the_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from llm_trading_bot import cli
+
+    seen: list[object] = []
+    monkeypatch.setattr(cli, "serve", lambda data_dir, **kw: seen.append((data_dir, kw["db"])))
+    assert main(["web", "--data-dir", str(tmp_path)]) == EXIT_OK
+    assert main(["web", "--data-dir", str(tmp_path), "--db", str(tmp_path / "x.db")]) == EXIT_OK
+    assert seen == [(tmp_path, None), (tmp_path, tmp_path / "x.db")]

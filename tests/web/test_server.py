@@ -105,7 +105,7 @@ def setup(r: Running) -> None:
     status, headers, _ = r.browser.submit(
         "/setup", {"code": r.app.setup_code, "password": PASSWORD, "password2": PASSWORD}
     )
-    assert status == 303 and headers["location"] == "/settings"
+    assert status == 303 and headers["location"] == "/"
 
 
 def setup_form(r: Running, password2: str = PASSWORD, code: str | None = None) -> FormData:
@@ -178,9 +178,9 @@ def test_first_start_needs_the_setup_code(running: Running) -> None:
     setup(running)
     assert running.app.setup_code is None
     assert PASSWORD not in (running.data / "web-auth.json").read_text(encoding="utf-8")
-    # Setup is over: the route only leads to the settings now.
+    # Setup is over: the route only leads to the overview now.
     status, headers, _ = running.browser.request("GET", "/setup")
-    assert (status, headers["location"]) == (303, "/settings")
+    assert (status, headers["location"]) == (303, "/")
 
 
 def test_setup_without_form_token_is_refused(running: Running) -> None:
@@ -206,7 +206,7 @@ def test_login_logout_and_lockout(running: Running) -> None:
     assert (status, headers["location"]) == (303, "/login")
     assert running.browser.submit("/login", {"password": "falsch"})[0] == 401
     status, headers, _ = running.browser.submit("/login", {"password": PASSWORD})
-    assert (status, headers["location"]) == (303, "/settings")
+    assert (status, headers["location"]) == (303, "/")
     assert running.browser.request("GET", "/settings")[0] == 200
     # Five wrong passwords lock the login, also for the right password.
     other = Browser(running.browser.port)
@@ -422,3 +422,73 @@ def test_silent_spare_connection_does_not_block_a_form_post(running: Running) ->
         assert status == 303
     finally:
         idle.close()
+
+
+# ------------------------------------------------------------------ overview (Spec 007)
+
+
+def _bot_db(path: Path) -> None:
+    from fakes import ScenarioClient
+    from golden_scenarios import NOW
+    from llm_trading_bot.llm.agents import BotConfig
+    from llm_trading_bot.paper.cycle import paper_cycle
+    from llm_trading_bot.paper.db import open_db
+    from llm_trading_bot.paper.execution import BUYHOLD, Costs
+
+    con = open_db(path, agents=("trend", BUYHOLD))
+    try:
+        paper_cycle(
+            con, ScenarioClient(), BotConfig(("trend",), None), costs=Costs(), clock=lambda: NOW
+        )
+    finally:
+        con.close()
+
+
+def test_overview_is_the_start_page_after_login(running: Running) -> None:
+    setup(running)
+    status, _, page = running.browser.request("GET", "/")
+    assert status == 200 and "<title>Übersicht" in page
+    assert '<a href="/" class="active" aria-current="page">Übersicht</a>' in page
+    status, headers, _ = running.browser.request("GET", "/login")
+    assert (status, headers["location"]) == (303, "/")
+
+
+def test_overview_needs_a_session(running: Running) -> None:
+    setup(running)
+    stranger = Browser(running.browser.port)
+    status, headers, _ = stranger.request("GET", "/")
+    assert (status, headers["location"]) == (303, "/login")
+
+
+def test_overview_without_database_says_so_and_creates_nothing(running: Running) -> None:
+    setup(running)
+    _, _, page = running.browser.request("GET", "/")
+    assert "Noch keine Daten" in page
+    assert not (running.data / "bot.db").exists()
+
+
+def test_overview_shows_the_bot_database_next_to_the_secrets(running: Running) -> None:
+    _bot_db(running.data / "bot.db")
+    setup(running)
+    _, _, page = running.browser.request("GET", "/")
+    assert "<b>trend</b>" in page and "Referenz" in page and "Letzter Zyklus" in page
+    assert "Noch keine Daten" not in page
+
+
+def test_overview_reads_an_explicit_db_path(tmp_path: Path) -> None:
+    db = tmp_path / "elsewhere" / "bot.db"
+    _bot_db(db)
+    app = WebApp(tmp_path / "data", db=db)
+    assert app.db == db and WebApp(tmp_path / "data").db == tmp_path / "data" / "bot.db"
+
+
+def test_overview_refreshes_itself_settings_page_does_not(running: Running) -> None:
+    setup(running)
+    assert '<meta http-equiv="refresh" content="60">' in running.browser.request("GET", "/")[2]
+    assert "http-equiv" not in running.browser.request("GET", "/settings")[2]
+
+
+def test_navigation_reaches_both_pages(running: Running) -> None:
+    setup(running)
+    settings = running.browser.request("GET", "/settings")[2]
+    assert '<a href="/">Übersicht</a>' in settings and '<a class="brand" href="/">' in settings

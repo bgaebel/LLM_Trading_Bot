@@ -238,7 +238,7 @@ def login_page(message: str = "", *, csrf: str) -> str:
     return _page("Anmelden", _auth("Anmelden", form, (*_CONSOLE, ("sitzung", "keine", "amber"))))
 
 
-def _euro(values: Mapping[str, str], name: str, default: str) -> Decimal:
+def budget_value(values: Mapping[str, str], name: str, default: str | Decimal) -> Decimal:
     try:
         amount = Decimal(values.get(name) or default)
     except InvalidOperation:
@@ -380,9 +380,9 @@ def settings_page(
     efforts = "".join(
         f'<option value="{e}"{" selected" if e == effort else ""}>{e}</option>' for e in EFFORTS
     )
-    total = _euro(values, "LLM_DAILY_BUDGET_EUR", "3")
-    luna = _euro(values, "LLM_DAILY_BUDGET_EUR_GPT_LUNA", "0.50")
-    sol = _euro(values, "LLM_DAILY_BUDGET_EUR_GPT_SOL", "2.50")
+    total = budget_value(values, "LLM_DAILY_BUDGET_EUR", "3")
+    luna = budget_value(values, "LLM_DAILY_BUDGET_EUR_GPT_LUNA", "0.50")
+    sol = budget_value(values, "LLM_DAILY_BUDGET_EUR_GPT_SOL", "2.50")
     active = [a for a in AGENT_CHOICES if a in selected]
 
     def amount(name: str, label: str, default: str) -> str:
