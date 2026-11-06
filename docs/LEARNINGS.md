@@ -58,6 +58,17 @@
 
 ## Laufzeit & Code
 
+### Nachts fehlen ETH-EUR-Minutenkerzen – eine Stunde ohne ETH-Entscheidung #bitvavo #marktdaten #betrieb
+*2026-11-07 · Quelle: Spec 009 (Neustart-Test auf dem Server)*
+- **Symptom:** Nach einem Server-Neustart sind alle Runden `incomplete`, Status `degraded`:
+  „ETH-EUR: gap in recent 1m bars - no decision“; BTC läuft normal. Sieht aus wie ein Neustart-Fehler.
+- **Ursache:** Bitvavo liefert für Minuten ohne Handel keine Kerze. Nachts hat ETH-EUR öfter Lücken von einer Minute,
+  manchmal drei (2026-11-06 23:03–23:05 UTC). Bis zu zwei werden aufgefüllt (`fill_tiny_gaps`), längere sperren den
+  Markt, bis die Lücke aus dem Fenster der letzten 60 Kerzen fällt (bis zu einer Stunde). Gewollt: fail closed.
+- **Lösung / Regel:** Vor einer Fehlersuche die Kerzen prüfen:
+  `curl -s "https://api.bitvavo.com/v2/ETH-EUR/candles?interval=1m&limit=60"` und Abstände > 60 s suchen.
+  Gesundheitschecks dürfen eine Runde, die nur an Marktdaten scheitert, nicht als Code-Fehler werten.
+
 ### Signal-Handler setzt Event, auf das der Hauptthread wartet #python #signal #dienst
 *2026-11-06 · Quelle: Spec 008 (Review, reproduziert)*
 - **Symptom:** Selten hängt der Prozess bei SIGTERM/Strg+C für immer; kein Watchdog-Ping, Statusdatei bleibt `running`.

@@ -45,18 +45,18 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
   `release.sh` aus demselben Commit auf; sendet nie lokale Dateien außerhalb des Archivs. Nimmt den Alias als
   Argument, im Repo steht kein Server-Name. — Nachweis: `tests/deploy/test_deploy_script.py` (Verweigerung mit
   Ersatz für `git`/`gh`/`ssh`), `shellcheck`
-- [ ] AK7: [manuell] Erstinstallation auf dem Server (nur mit Zustimmung): `install`, dann `deploy`; erst läuft nur
+- [x] AK7: [manuell] Erstinstallation auf dem Server (nur mit Zustimmung): `install`, dann `deploy`; erst läuft nur
   die Weboberfläche (ohne `secrets.env` startet `deploy` den Bot nicht und sagt das); der Nutzer richtet per Tunnel
   Passwort, Key und Depots ein; danach `deploy` erneut → Bot gesund. Prüfen: `stat` (Daten 700, Dateien 600, Release
   root/755), `uv --version`, `systemctl is-active` beider Units, eine Rundenzeile je Minute im Journal, Übersicht
   „Dienst läuft“.
-- [ ] AK8: [manuell] Update auf einen neueren Commit mit grüner CI: Gesundheitscheck besteht, Vorgänger liegt noch
+- [x] AK8: [manuell] Update auf einen neueren Commit mit grüner CI: Gesundheitscheck besteht, Vorgänger liegt noch
   da; `rollback` schaltet zurück und der Dienst ist wieder gesund; Zeilenzahlen der DB wachsen nur (vorher/nachher
   `verify-db`).
-- [ ] AK9: [manuell] Neustart des Servers (`sudo reboot`, mit Zustimmung): beide Units laufen danach ohne Eingriff,
+- [x] AK9: [manuell] Neustart des Servers (`sudo reboot`, mit Zustimmung): beide Units laufen danach ohne Eingriff,
   die Runden gehen weiter; keine doppelten Entscheidungen oder Trades (Abfrage auf die eindeutigen Schlüssel ohne
   Treffer), alle Zeilen von vorher sind noch da.
-- [ ] AK10: [manuell] Backup-Timer ist aktiv und hat (bzw. per `systemctl start` einmal) eine Kopie mit Rechten 600
+- [x] AK10: [manuell] Backup-Timer ist aktiv und hat (bzw. per `systemctl start` einmal) eine Kopie mit Rechten 600
   erzeugt; Wiederherstellungsprobe: `restore` der Kopie in ein neues Verzeichnis, `verify-db` zeigt dieselben
   Zeilenzahlen wie beim Backup. Ablauf der echten Wiederherstellung (Dienst stoppen, DB beiseitelegen, nie löschen,
   Kopie einsetzen, starten) steht in `docs/betrieb/server.md`.
@@ -159,6 +159,19 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
   Nutzer hat per Tunnel Passwort, Key und sechs Depots eingerichtet (`secrets.env` 600); zweites `deploy` → Bot gesund:
   erste Runde `ok` in 9,5 s, beide GPT-Depots `ASKED`. Nach dem Deploy ist ein neues Login nötig (Sitzungen nur im
   Speicher, ADR-0015). Kosmetik: Die Meldung nannte beim erneuten Deploy desselben Commits ihn selbst als „previous“.
+- 2026-11-07 (UTC 2026-11-06 23:02–23:14): AK8–AK10 mit Zustimmung auf dem Server.
+  - AK8: Update 5358d59 → b20b7b8 gesund (Backup vorher in `pre-update/`, previous vermerkt), `rollback` gesund,
+    erneutes `deploy` gesund (Release wiederverwendet). `verify-db` jeweils: Zeilen nur gewachsen (Equity 161 → 182).
+  - AK10: `systemctl start llm-trading-bot-backup` → `Result=success`, Kopie 600/Dienstbenutzer, geprüft;
+    `restore` in `restore-test/` → dieselben Zeilenzahlen; `restore` auf die laufende DB → verweigert (Exit 1);
+    Testverzeichnis entfernt.
+  - AK9: `systemctl reboot` um 23:05:32, Boot 23:05:36; alle Units ohne Eingriff aktiv, NTP synchron, Dienst ab
+    23:05:55, 8 Runden bis 23:14; `verify-db`: Integrität und eindeutige Schlüssel ok, Equity 189 → 245, nichts fehlt.
+  - **Befund:** Seit 23:06 sind die Runden `incomplete`: Bitvavo hat für ETH-EUR 23:03–23:05 keine 1m-Kerze (drei
+    Minuten ohne Handel). Bis zu zwei fehlende Minuten werden aufgefüllt (Spec 001, wie Arena), eine längere Lücke in
+    den letzten 60 Kerzen sperrt ETH-Entscheidungen für bis zu eine Stunde (fail closed, gewollt). BTC unberührt.
+    Folge für den Gesundheitscheck (AK5 verlangt eine Runde `ok`): Ein Deploy in so einer Stunde würde fälschlich
+    zurückrollen. Entscheidung des Nutzers offen. Learning angelegt.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->
