@@ -29,16 +29,23 @@ Signale der klassischen Strategien (Arena v0.3.1) auf Live-Daten:
 uv run trading-bot signals
 ```
 
-Einen Paper-Zyklus ausführen (virtuelle Orders, Daten in SQLite; die DB liegt außerhalb des Repos):
+Einen Paper-Zyklus ausführen (virtuelle Orders, Daten in SQLite; die DB liegt außerhalb des Repos). Standard sind
+die GPT-Depots `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprobe) plus Buy & Hold; dafür muss `OPENAI_API_KEY`
+in der Shell gesetzt sein (nie in eine Datei im Repo schreiben):
 
 ```bash
 uv run trading-bot paper-cycle --db <pfad>/bot.db
 ```
 
-Tests gegen die echte API sind standardmäßig aus: `uv run pytest -m net`.
+Ohne Key nur mit klassischen Strategien, z. B. `BOT_AGENTS=trend uv run trading-bot paper-cycle --db <pfad>/bot.db`.
 
-Konfiguration per Umgebungsvariablen: `TRADING_MODE` (Standard `paper`; `live` wird abgelehnt), `BOT_AGENT`
-(aktive Strategie, Standard `trend`), `TAKER_FEE` und `SLIPPAGE` (Standard 0,25 % bzw. 0,05 % je Seite).
+Tests gegen die echten APIs sind standardmäßig aus: `uv run pytest -m net` (der OpenAI-Test nur mit Key, < 0,01 $).
+
+Konfiguration per Umgebungsvariablen: `TRADING_MODE` (Standard `paper`; `live` wird abgelehnt), `BOT_AGENTS`
+(Standard `gpt-luna,gpt-sol`), `TAKER_FEE` und `SLIPPAGE` (Standard 0,25 % bzw. 0,05 % je Seite),
+`LLM_DAILY_BUDGET_EUR` (Standard 3 € pro UTC-Tag), `LLM_EFFORT` (Standard `low`); alle weiteren in
+[docs/ARCHITEKTUR.md](docs/ARCHITEKTUR.md#build-konfiguration--deployment). Zusätzlich ein Ausgabenlimit im
+OpenAI-Konto setzen.
 
 ## Dokumentation
 

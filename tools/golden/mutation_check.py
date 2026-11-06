@@ -6,7 +6,9 @@ the golden fixtures would not notice that change. Mutation list from the indepen
 
 Spec 004 adds mutations of the paper execution (paper/execution.py, tests/paper).
 
-Usage: uv run python tools/golden/mutation_check.py [--only strategy|paper]
+Spec 005 adds mutations of the GPT layer (llm/*.py, tests/llm).
+
+Usage: uv run python tools/golden/mutation_check.py [--only strategy|paper|llm]
 """
 
 import os
@@ -32,6 +34,8 @@ EQUIVALENT = {
     "exec cash cap removed",
     "exec sell clamp at 0",
     "exec total room floor",
+    # - llm confidence finite: NaN and +-inf already fail 0 <= x <= 1 (Spec 005).
+    "llm confidence finite",
 }
 
 M = [
@@ -305,6 +309,164 @@ M += [
 ]
 
 
+C, D, B, Y, OC, A = (
+    "llm/contract.py",
+    "llm/due.py",
+    "llm/budget.py",
+    "llm/cycle.py",
+    "llm/openai_client.py",
+    "llm/agents.py",
+)
+M += [
+    (C, "REASON_MAX = 550", "REASON_MAX = 549", "llm reason length"),
+    (C, "reason.strip()[:REASON_MAX]", "reason[:REASON_MAX]", "llm reason strip"),
+    (
+        C,
+        'REGIMES = ("UPTREND", "DOWNTREND", "SIDEWAYS")',
+        'REGIMES = ("UPTREND", "DOWNTREND")',
+        "llm regime set",
+    ),
+    (C, "not 0 <= confidence <= 1", "not 0 < confidence <= 1", "llm confidence lower bound"),
+    (C, "not 0 <= confidence <= 1", "not 0 <= confidence < 1", "llm confidence upper bound"),
+    (
+        C,
+        'action == "SELL" and target != 0',
+        'action == "SELL" and target > 0.3',
+        "llm SELL consistency",
+    ),
+    (
+        C,
+        'action == "BUY" and target not in (0.25, 0.45)',
+        'action == "BUY" and target == 0.3',
+        "llm BUY consistency",
+    ),
+    (C, "set(data) != set(FIELDS)", "not set(FIELDS) <= set(data)", "llm exact entry fields"),
+    (
+        C,
+        "set(data) != {s.market for s in wanted}",
+        "not {s.market for s in wanted} <= set(data)",
+        "llm exact markets",
+    ),
+    (C, "not math.isfinite(confidence) or ", "", "llm confidence finite"),
+    (
+        D,
+        '"LLM_MIN_INTERVAL_SECONDS", "3600"',
+        '"LLM_MIN_INTERVAL_SECONDS", "3599"',
+        "llm interval env default",
+    ),
+    (
+        D,
+        '"LLM_EVENT_COOLDOWN_SECONDS", "600"',
+        '"LLM_EVENT_COOLDOWN_SECONDS", "599"',
+        "llm cooldown default",
+    ),
+    (D, "max(900, int(", "max(899, int(", "llm interval lower bound"),
+    (
+        D,
+        '"LLM_EVENT_MOVE_THRESHOLD", ".018"',
+        '"LLM_EVENT_MOVE_THRESHOLD", ".019"',
+        "llm move threshold",
+    ),
+    (D, '"LLM_MAX_CALLS_PER_HOUR", "4"', '"LLM_MAX_CALLS_PER_HOUR", "5"', "llm hourly cap"),
+    (
+        D,
+        "abs(mid / ref - 1) >= cadence.move_threshold",
+        "abs(mid / ref - 1) > cadence.move_threshold",
+        "llm move >= -> >",
+    ),
+    (
+        D,
+        "if elapsed >= cadence.min_interval:",
+        "if elapsed > cadence.min_interval:",
+        "llm interval >= -> >",
+    ),
+    (
+        D,
+        "if elapsed < cadence.event_cooldown:",
+        "if elapsed <= cadence.event_cooldown:",
+        "llm cooldown < -> <=",
+    ),
+    (
+        D,
+        "return any(previous.get(symbol.market) != dict(now) for symbol, now in signals.items())",
+        "return False",
+        "llm signal-change trigger",
+    ),
+    (D, "agent=? AND ts>?", "agent=? AND ts>=?", "llm rolling hour edge"),
+    (D, ">= cadence.max_calls_per_hour", "> cadence.max_calls_per_hour", "llm hourly cap >= -> >"),
+    (
+        B,
+        "if agent_used + hold > limits.agent_daily_eur:",
+        "if agent_used + hold >= limits.agent_daily_eur:",
+        "llm depot limit > -> >=",
+    ),
+    (B, "if total_used + hold > limits.total_daily_eur:", "if False:", "llm total limit"),
+    (B, "rounding=ROUND_CEILING", "rounding=ROUND_FLOOR", "llm reservation rounding"),
+    (B, "cost > reserved", "cost >= reserved * 2", "llm exceeded flag"),
+    (
+        B,
+        'FREE_STATUSES = ("BUDGET_BLOCKED", "NOT_SENT")',
+        'FREE_STATUSES = ("BUDGET_BLOCKED",)',
+        "llm not-sent is free",
+    ),
+    (B, 'Decimal("Infinity")', "Decimal(0)", "llm unknown cost counts"),
+    (B, "if agent_exceeded:", "if False:", "llm exceeded blocks"),
+    (Y, "MAX_MID_DRIFT = 0.02", "MAX_MID_DRIFT = 0.04", "llm mid drift"),
+    (Y, "MAX_SNAPSHOT_AGE = 120", "MAX_SNAPSHOT_AGE = 125", "llm snapshot age"),
+    (Y, "fresh = refresh_quotes()", "fresh = qs", "llm quote recheck"),
+    (Y, "if not llm_due(", "if False and not llm_due(", "llm due respected"),
+    (
+        Y,
+        "if hourly_limit_reached(",
+        "if False and hourly_limit_reached(",
+        "llm hourly cap respected",
+    ),
+    (Y, 'if p["halted"]:', "if False:", "llm halted skip"),
+    (OC, "store=False", "store=True", "llm store false"),
+    (OC, '"strict": True', '"strict": False', "llm strict schema"),
+    (OC, "MAX_RETRIES = 2", "MAX_RETRIES = 3", "llm retries"),
+    (OC, "TIMEOUT_SECONDS = 60.0", "TIMEOUT_SECONDS = 61.0", "llm timeout"),
+    (Y, "decided_at - snap.fetched_at > MAX_SNAPSHOT_AGE", "False", "llm answer age recheck"),
+    (
+        Y,
+        'return _outcome(agent, "NO_QUOTES"',
+        'pass  # return _outcome(agent, "NO_QUOTES"',
+        "llm fresh quotes before request",
+    ),
+    (
+        Y,
+        "run_strategy(n, snap, ind, 0.0)",
+        "run_strategy(n, snap, ind, 0.25)",
+        "llm triggers ignore own weight",
+    ),
+    (Y, "* (reply.requests - 1)", "* 0", "llm retries billed"),
+    (Y, "max_requests=1 + MAX_RETRIES", "max_requests=1", "llm reservation covers retries"),
+    (Y, "bar_ts = int(decided_at) * 10000", "bar_ts = int(now_epoch) * 10000", "llm decision time"),
+    (
+        OC,
+        "except (openai.RateLimitError, openai.InternalServerError):",
+        "except openai.RateLimitError:",
+        "llm retry on 5xx",
+    ),
+    (OC, "max_retries=0", "max_retries=2", "llm no hidden sdk retries"),
+    (OC, "RETRY_PAUSES = (1.0, 2.0)", "RETRY_PAUSES = (1.0, 3.0)", "llm retry pauses"),
+    (
+        B,
+        "if self.input_per_million <= 0 or self.output_per_million <= 0:",
+        "if False:",
+        "llm zero price refused",
+    ),
+    (
+        A,
+        '"gpt-luna": ("gpt-6-luna", Decimal("0.50"))',
+        '"gpt-luna": ("gpt-6-luna", Decimal("0.51"))',
+        "llm luna share",
+    ),
+    (A, 'env.get("LLM_EFFORT", "low")', 'env.get("LLM_EFFORT", "medium")', "llm effort default"),
+    (A, "MAX_OUTPUT_TOKENS = 8000", "MAX_OUTPUT_TOKENS = 7999", "llm output tokens"),
+]
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -318,12 +480,14 @@ def main() -> int:
         env = {**os.environ, "PYTHONPATH": str(root / "src")}
         failures = []
         only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
-        selected = [
-            m for m in M if only is None or (m[0].startswith("paper/") == (only == "paper"))
-        ]
+
+        def group_of(fname: str) -> str:
+            return fname.split("/")[0] if "/" in fname else "strategy"
+
+        selected = [m for m in M if only is None or group_of(m[0]) == only]
         for fname, old, new, label in selected:
-            group = "paper" if fname.startswith("paper/") else "strategy"
-            path = package / (fname if group == "paper" else f"strategy/{fname}")
+            group = group_of(fname)
+            path = package / (fname if group != "strategy" else f"strategy/{fname}")
             original = path.read_text(encoding="utf-8")
             if old not in original:
                 print(f"{'PATTERN MISSING':16} {label}")

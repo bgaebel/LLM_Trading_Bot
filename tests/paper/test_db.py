@@ -19,7 +19,7 @@ def digest(path: Path) -> str:
 def test_fresh_db_gets_schema_version_and_pragmas(tmp_path: Path) -> None:
     con = open_db(tmp_path / "sub" / "bot.db", agents=AGENTS)
     try:
-        assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 1
+        assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 2
         assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert con.execute("PRAGMA busy_timeout").fetchone()[0] == 10_000
         tables = {
@@ -54,9 +54,11 @@ def _rebuild_without_unique(con: sqlite3.Connection, table: str, ddl: str) -> No
 @pytest.mark.parametrize(
     ("label", "change", "message"),
     [
-        ("foreign version", lambda c: c.execute("PRAGMA user_version=2"), "version 2"),
+        ("foreign version", lambda c: c.execute("PRAGMA user_version=3"), "version 3"),
+        ("schema v1 of spec 004", lambda c: c.execute("PRAGMA user_version=1"), "version 1"),
         ("older version", lambda c: c.execute("PRAGMA user_version=0"), "version 0"),
         ("missing table", lambda c: c.execute("DROP TABLE equity"), "missing tables"),
+        ("missing llm table", lambda c: c.execute("DROP TABLE llm_calls"), "missing tables"),
         (
             "missing column",
             lambda c: c.execute("ALTER TABLE trades DROP COLUMN slip_rate"),

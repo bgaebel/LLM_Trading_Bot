@@ -16,7 +16,7 @@ Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft,
 | 1 | Marktdaten aus der Arena übernehmen (Bitvavo-Quotes, abgeschlossene Kerzen, Lückenbehandlung) | [001](specs/001-marktdaten.md) | – |
 | 2 | Indikatoren + klassische Strategien + LLM-Kontext aus der Arena (identisch zu v0.3.1) | [003](specs/003-strategien.md) | – |
 | 3 | Paper-Ausführung + SQLite-Persistenz (Gebühren, Slippage, Idempotenz, Single-Writer) | [004](specs/004-paper-ausfuehrung.md) | – |
-| 3a | LLM-Strategie (GPT, gpt-6.1-sol) – vom Nutzer für M1 gewählt: API-Aufruf, strenges JSON-Schema, Budgetsperre, Provenienz | [005](specs/005-llm-strategie.md) | – |
+| 3a | LLM-Strategie (GPT): Depots gpt-6-luna (Haupt-Trader) und gpt-6.1-sol (Gegenprobe) plus Buy & Hold; strenges JSON-Schema, Budgetsperre, Provenienz (ADR-0012/0013) | [005](specs/005-llm-strategie.md) | – |
 | 4 | Risiko-Grenzen und Fail-closed (veraltete Kurse, Feed-/LLM-Ausfall, BTC/ETH entkoppelt) | – | – |
 | 5 | Dienst: Worker-Schleife, sauberer Shutdown, Health, Logging | – | – |
 | 6 | Hetzner-Server: Härtung (SSH-Key, Firewall, Updates), systemd, Backup, Update/Rollback | [002](specs/002-server-grundeinrichtung.md) (Härtung) | – |

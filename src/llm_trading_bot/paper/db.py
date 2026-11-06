@@ -1,10 +1,10 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - open_db schema, balance
 """SQLite store for the paper bot.
 
-ADR-0008: own schema with ``PRAGMA user_version = 1``. Columns and idempotency keys follow the
-Arena so results stay comparable; tables the bot does not need (ticks, LLM calls, logs) are left
-out. A database with another version or a different shape is refused, never migrated, because a
-silent migration could rewrite the trading history.
+ADR-0012: own schema with ``PRAGMA user_version``; version 2 adds ``llm_calls`` (Spec 005,
+ADR-0013). Columns and idempotency keys follow the Arena so results stay comparable; tables the bot
+does not need (ticks, logs) are left out. A database with another version or a different shape is
+refused, never migrated, because a silent migration could rewrite the trading history.
 """
 
 import sqlite3
@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 START_CASH = 10_000.0
 BUSY_TIMEOUT_MS = 10_000
 
@@ -39,6 +39,16 @@ CREATE TABLE equity (
   id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, agent TEXT NOT NULL,
   value REAL NOT NULL, cash REAL NOT NULL, btc REAL NOT NULL, eth REAL NOT NULL,
   UNIQUE(ts,agent));
+CREATE TABLE llm_calls (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, agent TEXT NOT NULL,
+  markets TEXT NOT NULL, ref_mid_btc REAL, ref_mid_eth REAL, status TEXT NOT NULL,
+  model TEXT NOT NULL, prompt_version TEXT NOT NULL, prompt_sha256 TEXT NOT NULL,
+  max_output_tokens INTEGER NOT NULL, effort TEXT NOT NULL, context TEXT NOT NULL,
+  trigger_signals TEXT NOT NULL DEFAULT '{}',
+  reserved_eur TEXT, cost_eur TEXT, reservation_exceeded INTEGER NOT NULL DEFAULT 0,
+  response_id TEXT, input_tokens INTEGER, output_tokens INTEGER, reasoning_tokens INTEGER,
+  cached_tokens INTEGER, latency_seconds REAL, error TEXT);
+CREATE INDEX idx_llm_calls_agent ON llm_calls(agent,id);
 """
 
 COLUMNS: Mapping[str, tuple[str, ...]] = {
@@ -72,6 +82,33 @@ COLUMNS: Mapping[str, tuple[str, ...]] = {
     ),
     "market": ("symbol", "ts", "bar_ts", "bid", "ask", "last_close", "source"),
     "equity": ("id", "ts", "agent", "value", "cash", "btc", "eth"),
+    # One row per LLM request (both markets): budget ledger and provenance in one place (ADR-0013).
+    "llm_calls": (
+        "id",
+        "ts",
+        "agent",
+        "markets",
+        "ref_mid_btc",
+        "ref_mid_eth",
+        "status",
+        "model",
+        "prompt_version",
+        "prompt_sha256",
+        "max_output_tokens",
+        "effort",
+        "context",
+        "trigger_signals",
+        "reserved_eur",
+        "cost_eur",
+        "reservation_exceeded",
+        "response_id",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "cached_tokens",
+        "latency_seconds",
+        "error",
+    ),
 }
 
 # Restart safety and upserts depend on these keys; a DB without them could duplicate trades.
@@ -121,7 +158,9 @@ def _unique_keys(con: sqlite3.Connection, table: str) -> set[tuple[str, ...]]:
 def check_schema(con: sqlite3.Connection) -> None:
     version = con.execute("PRAGMA user_version").fetchone()[0]
     if version != SCHEMA_VERSION:
-        raise SchemaError(f"schema version {version}, expected {SCHEMA_VERSION}")
+        raise SchemaError(
+            f"schema version {version}, expected {SCHEMA_VERSION}; no automatic migration"
+        )
     missing = set(COLUMNS) - _tables(con)
     if missing:
         raise SchemaError(f"missing tables: {sorted(missing)}")

@@ -3,7 +3,9 @@ name = "llm-trading-bot"
 version = "0.1.0"
 description = "Trading bot for BTC/EUR and ETH/EUR building on LLM Trading Arena (paper first)"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "openai>=3.46.0",
+]
 
 [project.scripts]
 trading-bot = "llm_trading_bot:main"

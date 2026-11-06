@@ -8,8 +8,10 @@
 **IST:** Modusprüfung (`paper` ist Standard, `live` wird abgelehnt) und Marktdaten (`market`, Spec 001):
 öffentliche Bitvavo-Quotes und abgeschlossene Kerzen, geprüft zu einem Snapshot je Markt. Darauf Indikatoren,
 die fünf klassischen Strategien und der LLM-Kontext (`strategy`, Spec 003, identisch zu Arena v0.3.1).
-Paper-Ausführung mit SQLite (`paper`, Spec 004): virtuelle Orders, Depot, Entscheidungen, Trades, Equity;
-ein aktiver Agent plus Buy & Hold (ADR-0008). Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`.
+Paper-Ausführung mit SQLite (`paper`, Spec 004): virtuelle Orders, Depot, Entscheidungen, Trades, Equity.
+GPT-Depots (`llm`, Spec 005): `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprobe) plus Buy & Hold (ADR-0012),
+eine OpenAI-Anfrage für beide Märkte nur bei Bedarf, hartes EUR-Budget, Provenienz je Versuch (ADR-0013).
+Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`.
 Diagnose per `uv run trading-bot market` und `uv run trading-bot signals`.
 **Zielbild M1** (Bausteine werden schrittweise per Spec aus der Arena übernommen, ADR-0003):
 
@@ -17,7 +19,7 @@ Diagnose per `uv run trading-bot market` und `uv run trading-bot signals`.
 Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
                     │
                     v
-               [strategy]  Signal (klassisch oder LLM) ──> OpenAI / Anthropic
+               [strategy]  Signal (klassisch oder LLM) ──> OpenAI
                     │
                     v
                  [risk]    Limits, Fail-closed bei veralteten Daten
@@ -40,9 +42,10 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | `src/llm_trading_bot/core.py` | Reine Logik ohne I/O (aktuell: Modusauflösung) |
 | `src/llm_trading_bot/market/` | Marktdaten: Modelle, HTTP-Transport, Bitvavo-Client, Snapshot-Prüfung |
 | `src/llm_trading_bot/strategy/` | Indikatoren, klassische Strategien, LLM-Kontext (reine Logik, ADR-0007) |
-| `src/llm_trading_bot/paper/` | Paper-Ausführung: Schema (`db`), Single-Writer-Sperre (`lock`), virtuelle Orders (`execution`), Zyklus (`cycle`) |
+| `src/llm_trading_bot/paper/` | Paper-Ausführung: Schema (`db`), Single-Writer-Sperre (`lock`), virtuelle Orders (`execution`), Zyklus (`cycle`), Ergebnis (`report`) |
+| `src/llm_trading_bot/llm/` | GPT-Depots: Prompt v1 und Antwortprüfung (`contract`), Takt (`due`), Budget (`budget`), Konfiguration (`agents`), OpenAI-Adapter (`openai_client`), Ablauf je Depot (`cycle`) |
 | `tools/golden/` | Generator der Golden-Fixtures aus dem Arena-Code; `mutation_check.py` prüft, dass die Tests Änderungen an Schwellen/Gewichten erkennen (nur Entwicklung) |
-| `tests/` | pytest-Tests; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests der Strategien; `golden_execution_cases.py`/`golden_execution_runner.py` + `paper/fixtures/` Golden-Tests der Ausführung; Marker `net` = echte API (standardmäßig aus) |
+| `tests/` | pytest-Tests; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests der Strategien; `golden_execution_cases.py`/`golden_execution_runner.py` + `paper/fixtures/` Golden-Tests der Ausführung; `llm_fakes.py` Fake-Modell; Marker `net` = echte API (standardmäßig aus) |
 | `deploy/` | Server-Skripte; `setup-server.sh` härtet einen frischen Server (Spec 002) |
 | `.github/workflows/` | CI (ruff, mypy, pytest, shellcheck) und Doku-Prüfung |
 
@@ -88,20 +91,47 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `lock`: `WriterLock(db_path)` (Betriebssystem-Sperre neben der DB), `WriterLockBusy`
   - `execution`: `Costs` (Gebühr/Slippage, `from_env`), `record_decision`, `trade_to_target`, `mark`,
     `initialize_buyhold`, `record_quotes`, `latest_quotes`, `value`, `current_weight`
-  - `cycle`: `paper_cycle(con, client, agent, costs=, clock=) -> CycleReport`, `active_agent(env)`,
-    `STRATEGY_TIMEFRAME`
-- **Invarianten:** Schema `user_version = 1`; andere Versionen oder Formen werden abgelehnt, nie migriert
-  (ADR-0008). Genau ein Schreiber (`WriterLock`). Eine Entscheidung je (Agent, Markt, Bar), mit Trade und Depot in
+  - `cycle`: `paper_cycle(con, client, config, costs=, model=, clock=) -> CycleReport`, `STRATEGY_TIMEFRAME`
+  - `report`: `CycleReport`, `MarketResult`, `LlmOutcome`, `Equity`
+- **Invarianten:** Schema `user_version = 2` (v2: `llm_calls`); andere Versionen oder Formen werden abgelehnt, nie
+  migriert (ADR-0012). Genau ein Schreiber (`WriterLock`). Eine Entscheidung je (Agent, Markt, Bar), mit Trade und Depot in
   einer Transaktion. Ohne frische Quotes beider Märkte (≤ 20 s) kein Trade. Buy & Hold kauft je Markt einmal.
   Ausführung identisch zu Arena@7563724, belegt durch `tests/paper/fixtures/execution_golden_v0.3.1.json`
   (Grenzfälle und Verläufe bitgenau per SHA-256) und `mutation_check.py`. Der 10-%-Drawdown-Stopp der Arena ist
   noch nicht übernommen (M1 Nr. 4); `halted` wird nur gelesen. SQL-Rechnungen nicht umformen.
 
+### llm
+- **Zweck:** GPT-Depots fragen und ihre Antworten nur nach strenger Prüfung an `paper` geben (ADR-0012/0013).
+  Das Modell ist Ratgeber; Grenzen, Kosten und frische Kurse prüft die Ausführung.
+- **Schnittstelle:**
+  - `contract`: `PROMPT_VERSION = "llm-v1"`, `SYSTEM`, `response_schema(markets)`, `user_message(payloads)`,
+    `prompt_sha256()`, `parse_answer(text, markets, strategy=) -> dict[Symbol, MarketAnswer]`, `InvalidSignal`
+  - `due`: `Cadence.from_env`, `llm_due(con, agent, mids, signals, now, cadence)`, `hourly_limit_reached`
+  - `budget`: `Pricing`, `Limits`, `Attempt`, `Usage`, `reserve` (committet vor dem Aufruf), `settle`,
+    `charged_today`, `BudgetBlocked`
+  - `agents`: `load_config(env) -> BotConfig` (`classic`, `llm: LlmSettings`), `MODEL_PRICES`
+  - `openai_client`: `SignalModel`-Protocol, `OpenAIResponses` (Responses API, strict `json_schema`, `store=False`,
+    60 s je Anfrage, SDK ohne Wiederholung, eigene Wiederholung ≤ 2 nur bei 429/5xx), `ModelReply.problem()`,
+    `ModelReply.requests`
+  - `cycle`: `run_llm_depots(con, agents, settings, model, snaps, costs, refresh_quotes=, clock=)`,
+    `market_triggers(snaps, costs)`
+- **Invarianten:** Prompt und Schema festgeschrieben (Hash-Test); Änderung = neue `PROMPT_VERSION`. Ist ein Teil der
+  Antwort ungültig, abgelehnt, unvollständig oder kein JSON: kein Trade. Je Versuch eine Zeile `llm_calls` mit
+  Reservierung vor dem Aufruf für alle möglichen Anfragen; unbekannte Kosten zählen mit; Wiederholungen werden im
+  schlimmsten Fall abgerechnet; Modell ohne Preis wird nie gefragt. Vor jeder Anfrage frische Quotes (≤ 20 s), nach
+  der Antwort neu geholte Quotes (Mittelkurs ≤ 2 % vom Snapshot, Snapshot ≤ 120 s), sonst `STALE_QUOTE`. Der
+  Signalwechsel-Auslöser vergleicht die Referenzsignale aus Marktsicht (Gewicht 0, `llm_calls.trigger_signals`). Fehler werden nur mit Typnamen
+  gespeichert/ausgegeben; der API-Key erscheint nirgends.
+
 ## Datenfluss & Nebenläufigkeit
 `build_snapshots` holt je Markt die Kerzen für 1/15/60/240 min, danach einmal die Quotes (sie veralten am
 schnellsten), dann die Prüfung je Markt. `paper_cycle`: Quotes holen und speichern → frische Quotes aus der DB
 (sonst Ende ohne Entscheidung) → Buy & Hold initialisieren → Snapshots → je Markt eine Entscheidung pro neuem
-abgeschlossenem Bar des Strategie-Zeitrahmens (trend 60 min, sonst 15 min) → Equity-Punkt je Agent.
+abgeschlossenem Bar des Strategie-Zeitrahmens (trend 60 min, sonst 15 min) → GPT-Depots (luna, sol) mit demselben
+Snapshot: je Depot frische Quotes? fällig? (stündlich, Bewegung ≥ 1,8 % oder Wechsel eines Referenzsignals, ≥ 10 min
+Abstand, ≤ 4/h) → Reservierung; dann alle Anfragen gleichzeitig (Threads, nur Netz) → Quotes einmal neu holen → je
+Depot Abrechnung → Prüfung → Entscheidung je Markt → Equity-Punkt je Depot. Ein Fehler eines Depots blockiert die
+anderen nicht.
 Worker-Schleife und Takt folgen in M1 Nr. 5. Vorgabe aus der Arena: Marktabfrage, Signal- und LLM-Worker laufen getrennt; ein
 langsamer LLM-Aufruf blockiert die Marktabfrage nicht; ein Fehler bei BTC blockiert ETH nicht.
 
@@ -109,12 +139,15 @@ langsamer LLM-Aufruf blockiert die Marktabfrage nicht; ein Fehler bei BTC blocki
 | Schnittstelle | Protokoll / Format | Spezifikation |
 |---|---|---|
 | Bitvavo Marktdaten | REST/JSON, öffentlich | https://docs.bitvavo.com/ |
-| OpenAI / Anthropic | REST/JSON, API-Key in `.env` auf dem Server | jeweilige API-Doku |
+| OpenAI Responses API | REST/JSON über Paket `openai`; `OPENAI_API_KEY` nur in der Umgebung (Server: `/etc/llm-trading-bot/env`) | https://developers.openai.com/api/docs |
 
 ## Build, Konfiguration & Deployment
-Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariablen (`TRADING_MODE`; `BOT_AGENT`
-Standard `trend`; `TAKER_FEE` 0,0025 und `SLIPPAGE` 0,0005 je Seite, erlaubt [0, 0,05]; später
-`.env` auf dem Server, Rechte 600). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.
+Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariablen: `TRADING_MODE`; `BOT_AGENTS`
+(Standard `gpt-luna,gpt-sol`, klassische wählbar); `TAKER_FEE` 0,0025 und `SLIPPAGE` 0,0005 je Seite, erlaubt
+[0, 0,05]; `OPENAI_API_KEY`; `LLM_EFFORT` (`low`); `LLM_DAILY_BUDGET_EUR` (3) und `LLM_DAILY_BUDGET_EUR_GPT_LUNA`/
+`_GPT_SOL` (0,50/2,50); `LLM_MIN_INTERVAL_SECONDS` (3600), `LLM_EVENT_COOLDOWN_SECONDS` (600),
+`LLM_EVENT_MOVE_THRESHOLD` (0,018), `LLM_MAX_CALLS_PER_HOUR` (4); optional `OPENAI_MODEL_<DEPOT>` mit
+`LLM_PRICE_IN_EUR_<DEPOT>`/`LLM_PRICE_OUT_EUR_<DEPOT>`. Auf dem Server in `/etc/llm-trading-bot/env` (root, 600). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.
 Server ist gehärtet (Spec 002, Ablauf und Prüfbefehle: `docs/betrieb/server.md`); das Deployment des Bots
 (Unit, Verzeichnisse, Backup, Update/Rollback) folgt in M1 Nr. 6.
 
