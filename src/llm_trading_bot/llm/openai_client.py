@@ -1,6 +1,6 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - llm_signal (gpt branch)
 # Origin: LLM-Trading-Arena@7563724 apps/arena/provenance.py (adapted) - capture_usage
-"""OpenAI Responses API adapter (ADR-0011). Only this module talks to OpenAI.
+"""OpenAI Responses API adapter (ADR-0013). Only this module talks to OpenAI.
 
 Errors are reported by type name only: provider messages can echo parts of the API key.
 """

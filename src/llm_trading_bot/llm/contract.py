@@ -1,7 +1,7 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - SYSTEM, SIGNAL_SCHEMA,
 #   validate_signal
 # Origin: LLM-Trading-Arena@7563724 apps/arena/provenance.py (adapted) - strict_response
-"""Prompt v1: one request for both markets, one strictly checked signal per market (ADR-0011).
+"""Prompt v1: one request for both markets, one strictly checked signal per market (ADR-0013).
 
 The wording follows the Arena prompt; the per-market checks are the Arena's. Changing the system
 prompt or the schema is a new PROMPT_VERSION (CLAUDE.md) - the hash test enforces that.

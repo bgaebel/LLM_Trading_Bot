@@ -1,16 +1,19 @@
-# Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (adapted) - quant_cycle
+# Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (adapted) - quant_cycle, update_market
 # Origin: LLM-Trading-Arena@7563724 apps/arena/strategies.py (adapted) - STRATEGY_TIMEFRAME
-"""One live paper cycle: quotes, buy & hold, one decision per new closed bar, equity points.
+"""One live paper cycle: quotes, buy & hold, classic and GPT depots, equity points.
 
-ADR-0004: virtual orders only. ADR-0008: one active agent plus the buy & hold benchmark.
+ADR-0004: virtual orders only. ADR-0012: GPT depots (luna trades, sol cross-checks) plus buy & hold;
+classic depots are optional. All depots of a cycle see the same snapshot.
 """
 
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
+from llm_trading_bot.llm.agents import BotConfig
+from llm_trading_bot.llm.cycle import llm_cycle
+from llm_trading_bot.llm.due import iso
+from llm_trading_bot.llm.openai_client import SignalModel
 from llm_trading_bot.market.models import SYMBOLS, Symbol
 from llm_trading_bot.market.snapshot import (
     DATA_ERRORS,
@@ -32,83 +35,19 @@ from llm_trading_bot.paper.execution import (
     record_quotes,
     value,
 )
+from llm_trading_bot.paper.report import (
+    CycleReport,
+    Equity,
+    LlmOutcome,
+    MarketResult,
+    decision_result,
+)
 from llm_trading_bot.strategy.indicators import indicators
 from llm_trading_bot.strategy.payload import cost_roundtrip, feature_payload
 from llm_trading_bot.strategy.signals import run_strategy
 
-# A decision is taken once per closed bar of the strategy's own timeframe (minutes).
+# A classic decision is taken once per closed bar of the strategy's own timeframe (minutes).
 STRATEGY_TIMEFRAME: Mapping[str, int] = {"trend": 60, "breakout": 15, "meanrev": 15, "ensemble": 15}
-DEFAULT_AGENT = "trend"
-
-
-def active_agent(env: Mapping[str, str]) -> str:
-    """BOT_AGENT selects the active strategy; the LLM agent (M1 3a) will join this list."""
-    agent = env.get("BOT_AGENT", DEFAULT_AGENT).strip() or DEFAULT_AGENT
-    if agent not in STRATEGY_TIMEFRAME:
-        raise ValueError(f"BOT_AGENT must be one of {sorted(STRATEGY_TIMEFRAME)}: {agent!r}")
-    return agent
-
-
-def iso(epoch: float) -> str:
-    """Same text form as the Arena's utcnow()."""
-    return datetime.fromtimestamp(int(epoch), UTC).isoformat(timespec="seconds")
-
-
-@dataclass(frozen=True)
-class MarketResult:
-    symbol: Symbol
-    bar_ts: int | None = None
-    new: bool = False
-    action: str = ""
-    target: float = 0.0
-    status: str = ""
-    traded: bool = False
-    reason: str = ""
-    error: str = ""
-
-
-@dataclass(frozen=True)
-class Equity:
-    agent: str
-    value: float
-    cash: float
-    btc: float
-    eth: float
-
-
-@dataclass
-class CycleReport:
-    at: int
-    agent: str
-    quotes_error: str = ""
-    buyhold_bought: int = 0
-    markets: list[MarketResult] = field(default_factory=list)
-    equity: list[Equity] = field(default_factory=list)
-
-    @property
-    def complete(self) -> bool:
-        return not self.quotes_error and all(not m.error for m in self.markets)
-
-
-def _result(
-    con: sqlite3.Connection, agent: str, symbol: Symbol, bar_ts: int, new: bool
-) -> MarketResult:
-    row = con.execute(
-        "SELECT d.action, d.target, d.status, d.reason,"
-        " (SELECT COUNT(*) FROM trades t WHERE t.decision_id = d.id) AS n"
-        " FROM decisions d WHERE agent=? AND symbol=? AND bar_ts=?",
-        (agent, symbol.name, bar_ts),
-    ).fetchone()
-    return MarketResult(
-        symbol,
-        bar_ts,
-        new,
-        row["action"],
-        row["target"],
-        row["status"],
-        row["n"] > 0,
-        row["reason"],
-    )
 
 
 def _decide(
@@ -121,17 +60,16 @@ def _decide(
 ) -> MarketResult:
     """At most one decision per new closed bar of the agent's own timeframe."""
     symbol = snap.symbol
-    record_bar(con, symbol, bar_ts=snap.bars[1][-1].ts, last_close=snap.bars[1][-1].close)
     bar_ts = snap.bars[STRATEGY_TIMEFRAME[agent]][-1].ts
     exists = con.execute(
         "SELECT 1 FROM decisions WHERE agent=? AND symbol=? AND bar_ts=?",
         (agent, symbol.name, bar_ts),
     ).fetchone()
     if exists:
-        return _result(con, agent, symbol, bar_ts, False)
+        return decision_result(con, agent, symbol, bar_ts, False)
     p = balance(con, agent)
     if p["halted"]:
-        return MarketResult(symbol, bar_ts, error="portfolio halted")
+        return MarketResult(agent, symbol, bar_ts, error="portfolio halted")
     weight = current_weight(p, symbol, qs)
     ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage))
     sig = run_strategy(agent, snap, ind, weight)
@@ -139,32 +77,40 @@ def _decide(
     new = record_decision(
         con, agent, symbol, bar_ts, agent.upper(), sig, context, costs=costs, now=now, qs=qs
     )
-    return _result(con, agent, symbol, bar_ts, new)
+    return decision_result(con, agent, symbol, bar_ts, new)
+
+
+def _store_quotes(
+    con: sqlite3.Connection, client: MarketClient, clock: Callable[[], float]
+) -> tuple[Quotes | None, str]:
+    error = ""
+    try:
+        record_quotes(con, client.quotes(), now=iso(clock()))
+    except DATA_ERRORS as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    return latest_quotes(con, now_epoch=clock()), error
 
 
 def paper_cycle(
     con: sqlite3.Connection,
     client: MarketClient,
-    agent: str,
+    config: BotConfig,
     *,
     costs: Costs,
+    model: SignalModel | None = None,
     clock: Callable[[], float] = time.time,
 ) -> CycleReport:
     """Run one cycle. Precondition: the caller holds the WriterLock of this database.
 
     Fails closed like the Arena's quant_cycle: without fresh quotes of both markets no decision
-    is taken at all, so the bar stays open and is decided once quotes are back. A market whose
-    candles or decision fail is reported and skipped; it never blocks the other market.
+    is taken at all, so the bar stays open. A failing market or depot is reported and skipped;
+    it never blocks another market or depot.
     """
     at = int(clock())
     now = iso(at)
-    report = CycleReport(at, agent)
+    report = CycleReport(at, config.agents)
 
-    try:
-        record_quotes(con, client.quotes(), now=now)
-    except DATA_ERRORS as exc:
-        report.quotes_error = f"{type(exc).__name__}: {exc}"
-    qs = latest_quotes(con, now_epoch=clock())
+    qs, report.quotes_error = _store_quotes(con, client, clock)
     if qs is None:
         report.quotes_error = report.quotes_error or "stored quotes missing or stale"
         return report
@@ -176,22 +122,61 @@ def paper_cycle(
         errors[symbol] = f"{type(exc).__name__}: {exc}"
 
     snaps = build_snapshots(client, clock=clock, on_error=on_error)
-    for symbol in SYMBOLS:
-        snap = snaps.get(symbol)
-        if snap is None:
-            report.markets.append(MarketResult(symbol, error=errors.get(symbol, "no snapshot")))
-            continue
-        try:
-            report.markets.append(_decide(con, snap, agent, qs, costs, now))
-        except Exception as exc:
-            # CLAUDE.md: a BTC failure never blocks ETH. record_decision rolled back its own
-            # transaction; the error stays visible in the report and the exit code.
-            report.markets.append(MarketResult(symbol, error=f"{type(exc).__name__}: {exc}"))
+    for fresh_snap in snaps.values():
+        last_minute = fresh_snap.bars[1][-1]
+        record_bar(con, fresh_snap.symbol, bar_ts=last_minute.ts, last_close=last_minute.close)
 
+    for agent in config.classic:
+        for symbol in SYMBOLS:
+            snap = snaps.get(symbol)
+            if snap is None:
+                report.markets.append(
+                    MarketResult(agent, symbol, error=errors.get(symbol, "no snapshot"))
+                )
+                continue
+            try:
+                report.markets.append(_decide(con, snap, agent, qs, costs, now))
+            except Exception as exc:
+                # CLAUDE.md: a BTC failure never blocks ETH. record_decision rolled back its own
+                # transaction; the error stays visible in the report and the exit code.
+                report.markets.append(
+                    MarketResult(agent, symbol, error=f"{type(exc).__name__}: {exc}")
+                )
+
+    if config.llm is not None:
+        if model is None:
+            raise ValueError("GPT depots configured but no model client given")
+
+        def refresh() -> Quotes | None:
+            # The answer may take a while; trade only on quotes fetched after it (Arena recheck).
+            return _store_quotes(con, client, clock)[0]
+
+        for llm_agent in config.llm.agents:
+            try:
+                outcome, results = llm_cycle(
+                    con,
+                    llm_agent,
+                    config.llm,
+                    model,
+                    snaps,
+                    qs,
+                    costs,
+                    refresh_quotes=refresh,
+                    clock=clock,
+                )
+            except Exception as exc:
+                # One depot's failure never blocks the other depots (ADR-0012).
+                outcome = LlmOutcome(llm_agent.name, llm_agent.model, "ERROR", type(exc).__name__)
+                results = []
+            report.llm.append(outcome)
+            report.markets.extend(results)
+
+    names = (*config.agents, BUYHOLD)
+    latest = latest_quotes(con, now_epoch=clock()) or qs
     with write_tx(con):
-        for name in (agent, BUYHOLD):
-            mark(con, name, qs, now)
-    for name in (agent, BUYHOLD):
+        for name in names:
+            mark(con, name, latest, now)
+    for name in names:
         p = balance(con, name)
-        report.equity.append(Equity(name, value(p, qs), p["cash"], p["btc"], p["eth"]))
+        report.equity.append(Equity(name, value(p, latest), p["cash"], p["btc"], p["eth"]))
     return report

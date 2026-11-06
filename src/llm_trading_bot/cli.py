@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import TextIO
 
 from llm_trading_bot.core import parse_mode
+from llm_trading_bot.llm.agents import load_config
+from llm_trading_bot.llm.openai_client import OpenAIResponses, SignalModel
 from llm_trading_bot.market.bitvavo import BitvavoClient, fill_tiny_gaps
 from llm_trading_bot.market.models import SYMBOLS, Candle, Quote, Symbol
 from llm_trading_bot.market.snapshot import (
@@ -21,10 +23,11 @@ from llm_trading_bot.market.snapshot import (
     MarketSnapshot,
     build_snapshots,
 )
-from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME, CycleReport, active_agent, paper_cycle
+from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME, paper_cycle
 from llm_trading_bot.paper.db import SchemaError, open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
 from llm_trading_bot.paper.lock import WriterLock, WriterLockBusy
+from llm_trading_bot.paper.report import CycleReport, LlmOutcome, MarketResult
 from llm_trading_bot.strategy.indicators import indicators
 from llm_trading_bot.strategy.payload import ARENA_SLIPPAGE, ARENA_TAKER_FEE, cost_roundtrip
 from llm_trading_bot.strategy.signals import STRATEGIES, STRATEGY_VERSION, run_strategy
@@ -136,9 +139,41 @@ def run_signals(
     return EXIT_OK if len(snaps) == len(SYMBOLS) else EXIT_INVALID
 
 
+def _llm_line(o: LlmOutcome) -> str:
+    parts = [f"{o.agent} ({o.model}): {o.status}" + (f" - {o.detail}" if o.detail else "")]
+    if o.usage is not None:
+        u = o.usage
+        parts.append(
+            f"tokens in {u.input_tokens} out {u.output_tokens} "
+            f"(reasoning {u.reasoning_tokens or 0}, cached {u.cached_tokens or 0})"
+        )
+    if o.cost_eur is not None:
+        parts.append(f"cost ~{o.cost_eur:.4f} EUR (estimate)")
+    if o.regimes:
+        parts.append("regime " + ", ".join(f"{s.market} {r}" for s, r in o.regimes.items()))
+    return " | ".join(parts)
+
+
+def _market_line(m: MarketResult) -> str:
+    if m.error:
+        return f"{m.agent} {m.symbol.market}: no decision - {m.error}"
+    assert m.bar_ts is not None
+    if m.agent in STRATEGY_TIMEFRAME:
+        when = f"{STRATEGY_TIMEFRAME[m.agent]}m bar opened {_utc(m.bar_ts)}"
+    else:
+        when = f"attempt {m.bar_ts % 10000}"  # LLM decisions are keyed by attempt (Arena)
+    state = "new" if m.new else "already decided"
+    trade = "traded" if m.traded else "no trade"
+    return (
+        f"{m.agent} {m.symbol.market}: {when} {state}: {m.action} target {m.target:.2f} "
+        f"[{m.status}] {trade} - {m.reason}"
+    )
+
+
 def print_cycle(report: CycleReport, costs: Costs, *, out: TextIO) -> None:
     print(
-        f"Paper cycle {_utc(report.at)}, agent {report.agent}, strategy {STRATEGY_VERSION}, "
+        f"Paper cycle {_utc(report.at)}, depots {', '.join(report.agents)}, "
+        f"classic strategy {STRATEGY_VERSION}, "
         f"costs: fee {costs.fee_rate:.2%} + slippage {costs.slippage:.2%} per side "
         "(virtual orders only)",
         file=out,
@@ -150,20 +185,10 @@ def print_cycle(report: CycleReport, costs: Costs, *, out: TextIO) -> None:
         return
     bought = report.buyhold_bought
     print(f"buy & hold: {f'bought {bought} market(s)' if bought else 'already invested'}", file=out)
-    tf = STRATEGY_TIMEFRAME[report.agent]
+    for o in report.llm:
+        print(_llm_line(o), file=out)
     for m in report.markets:
-        if m.error:
-            print(f"{m.symbol.market}: no decision - {m.error}", file=out)
-            continue
-        assert m.bar_ts is not None
-        state = "new" if m.new else "already decided"
-        trade = "traded" if m.traded else "no trade"
-        print(
-            f"{m.symbol.market}: {tf}m bar opened {_utc(m.bar_ts)} {state}: "
-            f"{m.action} target {m.target:.2f} "
-            f"[{m.status}] {trade} - {m.reason}",
-            file=out,
-        )
+        print(_market_line(m), file=out)
     for e in report.equity:
         print(
             f"equity {e.agent:<9} {e.value:>11.2f} EUR  cash {e.cash:.2f}  "
@@ -179,26 +204,28 @@ def run_paper_cycle(
     env: Mapping[str, str],
     out: TextIO,
     clock: Callable[[], float] = time.time,
+    model_factory: Callable[[str], SignalModel] = OpenAIResponses,
 ) -> int:
     """One live paper cycle on ``db``; refuses to run while another process owns the DB."""
     try:
-        agent = active_agent(env)
+        config = load_config(env)
         costs = Costs.from_env(env)
     except ValueError as exc:
         print(f"paper-cycle configuration error: {exc}", file=out)
         return EXIT_INVALID
+    model = model_factory(config.llm.api_key) if config.llm else None
     try:
         with WriterLock(db):
-            con = open_db(db, agents=(agent, BUYHOLD))
+            con = open_db(db, agents=(*config.agents, BUYHOLD))
             try:
-                report = paper_cycle(con, client, agent, costs=costs, clock=clock)
+                report = paper_cycle(con, client, config, costs=costs, model=model, clock=clock)
             finally:
                 con.close()
     except WriterLockBusy as exc:
         print(f"paper-cycle refused: {exc}", file=out)
         return EXIT_LOCKED
     except (SchemaError, sqlite3.DatabaseError) as exc:
-        # Never repair or migrate: the history in that file must stay as it is (ADR-0008).
+        # Never repair or migrate: the history in that file must stay as it is (ADR-0012).
         print(f"paper-cycle refused, database error: {type(exc).__name__}: {exc}", file=out)
         return EXIT_INVALID
     print_cycle(report, costs, out=out)

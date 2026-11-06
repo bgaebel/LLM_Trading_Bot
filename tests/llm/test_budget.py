@@ -1,4 +1,4 @@
-"""Spec 005 AK4 / ADR-0011: hard daily EUR limits per depot and in total, with worst-case
+"""Spec 005 AK4 / ADR-0013: hard daily EUR limits per depot and in total, with worst-case
 reservations committed before each request."""
 
 import sqlite3

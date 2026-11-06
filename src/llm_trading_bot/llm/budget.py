@@ -1,5 +1,5 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/budget.py (adapted) - reserve, settle, amount
-"""Hard daily LLM spend limits in EUR, booked in the bot database (ADR-0011).
+"""Hard daily LLM spend limits in EUR, booked in the bot database (ADR-0013).
 
 Every request is a row in ``llm_calls``. Before it leaves the process its reservation - the worst
 case the prices allow - is committed; afterwards the reservation is replaced by the cost computed

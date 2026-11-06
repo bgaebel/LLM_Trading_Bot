@@ -1,4 +1,4 @@
-"""Spec 005 AK1 / ADR-0011: prompt v1 is fixed and versioned; the message has the Arena context."""
+"""Spec 005 AK1 / ADR-0013: prompt v1 is fixed and versioned; the message has the Arena context."""
 
 import json
 from typing import Any

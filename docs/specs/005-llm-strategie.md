@@ -111,7 +111,7 @@ Claude Haiku 5.5 (gleicher Preis wie luna; ADR-0012), Raspberry Pi (ADR-0005 ble
 - [x] 3. Prompt v1, Schema und Prüfung je Markt, Takt je Depot; Arena-Vertrag je Markt entfernen; `llm_calls` und
   Budget auf Depots, Gesamtgrenze und berechnete Reservierung umstellen (AK1–AK4, AK8)
 - [x] 4. `uv add openai`, `openai_client.py` mit Fake-Tests und `net`-Test (AK2, AK5, AK7)
-- [ ] 5. `agents.py`, `llm_cycle`, mehrere Depots in `paper-cycle`, Konfiguration (AK5–AK7, AK9)
+- [x] 5. `agents.py`, `llm_cycle`, mehrere Depots in `paper-cycle`, Konfiguration (AK5–AK7, AK9)
 - [ ] 6. Mutationstest erweitern, Doku (ARCHITEKTUR, README, `docs/betrieb/`), manueller Live-Test (AK10)
 
 ## Risiken & offene Fragen

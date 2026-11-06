@@ -1,8 +1,8 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - open_db schema, balance
 """SQLite store for the paper bot.
 
-ADR-0010: own schema with ``PRAGMA user_version``; version 2 adds ``llm_calls`` (Spec 005,
-ADR-0011). Columns and idempotency keys follow the Arena so results stay comparable; tables the bot
+ADR-0012: own schema with ``PRAGMA user_version``; version 2 adds ``llm_calls`` (Spec 005,
+ADR-0013). Columns and idempotency keys follow the Arena so results stay comparable; tables the bot
 does not need (ticks, logs) are left out. A database with another version or a different shape is
 refused, never migrated, because a silent migration could rewrite the trading history.
 """
@@ -81,7 +81,7 @@ COLUMNS: Mapping[str, tuple[str, ...]] = {
     ),
     "market": ("symbol", "ts", "bar_ts", "bid", "ask", "last_close", "source"),
     "equity": ("id", "ts", "agent", "value", "cash", "btc", "eth"),
-    # One row per LLM request (both markets): budget ledger and provenance in one place (ADR-0011).
+    # One row per LLM request (both markets): budget ledger and provenance in one place (ADR-0013).
     "llm_calls": (
         "id",
         "ts",

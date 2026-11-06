@@ -92,6 +92,7 @@ def test_signals_report_exit_2_when_no_market_is_usable() -> None:
 
 def run_cycle(db: Path, client: ScenarioClient, **env: str) -> tuple[int, str]:
     out = io.StringIO()
+    env = {"BOT_AGENTS": "trend", **env}
     code = run_paper_cycle(db, client, env=env, out=out, clock=lambda: GOLDEN_NOW)
     return code, out.getvalue()
 
@@ -99,7 +100,7 @@ def run_cycle(db: Path, client: ScenarioClient, **env: str) -> tuple[int, str]:
 def test_paper_cycle_reports_decisions_and_equity(tmp_path: Path) -> None:
     code, text = run_cycle(tmp_path / "bot.db", ScenarioClient())
     assert code == EXIT_OK
-    assert "agent trend, strategy v0.3.1" in text
+    assert "depots trend, classic strategy v0.3.1" in text
     assert "fee 0.25% + slippage 0.05% per side (virtual orders only)" in text
     assert "buy & hold: bought 2 market(s)" in text
     assert text.count(": BUY target 0.45 [OK] traded - 1h/4h-Aufwärtstrend") == 2
@@ -117,14 +118,14 @@ def test_paper_cycle_twice_in_one_bar_reports_already_decided(tmp_path: Path) ->
 
 def test_paper_cycle_uses_configured_agent_and_costs(tmp_path: Path) -> None:
     code, text = run_cycle(
-        tmp_path / "bot.db", ScenarioClient(), BOT_AGENT="meanrev", TAKER_FEE="0.001"
+        tmp_path / "bot.db", ScenarioClient(), BOT_AGENTS="meanrev", TAKER_FEE="0.001"
     )
     assert code == EXIT_OK
-    assert "agent meanrev" in text and "fee 0.10%" in text
+    assert "depots meanrev" in text and "fee 0.10%" in text
 
 
 @pytest.mark.parametrize(
-    "env", [{"BOT_AGENT": "gpt"}, {"SLIPPAGE": "0.5"}], ids=["agent", "slippage"]
+    "env", [{"BOT_AGENTS": "gpt"}, {"SLIPPAGE": "0.5"}], ids=["agent", "slippage"]
 )
 def test_paper_cycle_refuses_bad_configuration(tmp_path: Path, env: dict[str, str]) -> None:
     code, text = run_cycle(tmp_path / "bot.db", ScenarioClient(), **env)
