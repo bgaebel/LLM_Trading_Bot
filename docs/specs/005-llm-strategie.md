@@ -1,6 +1,6 @@
 # Spec 005: LLM-Strategie (GPT) mit Budgetsperre und Provenienz
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s005-llm-strategie` · **Meilenstein:** M1 (Nr. 3a)
 - **Erstellt:** 2026-11-06
 
@@ -90,7 +90,7 @@ Verworfen: Claude (Nutzer), urllib (siehe ADR-0009), Budget-Datei der Arena (sie
 (Modell sieht nur abgeschlossene Kerzen; mehr Aufrufe heißen eher mehr Trades bei ~0,65 % Roundtrip-Kosten).
 
 ## Plan
-- [ ] 1. Generator + `contract.py` + `due.py` mit Golden-Tests (AK1, AK2, AK3)
+- [x] 1. Generator + `contract.py` + `due.py` mit Golden-Tests (AK1, AK2, AK3)
 - [ ] 2. Schema v2 mit `llm_calls`, v1 abgelehnt (AK8)
 - [ ] 3. `budget.py` mit Reservierung/Abrechnung (AK4)
 - [ ] 4. `uv add openai`, `openai_client.py` mit Fake-Tests und `net`-Test (AK2, AK5, AK7)
