@@ -1,20 +1,20 @@
 # Stand
 
-**Aktualisiert:** 2026-11-06 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-06 · **Branch:** `feat/s008-dienst` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-- Spec 005 GPT-Depots und Spec 006 Weboberfläche sind gemergt (PR #5, #6, Chart-Hintergrund #7); alle manuellen
-  Abnahmen erledigt: 006 AK9 (Nutzer: Login, Key) und 005 AK10 (zwei Live-Läufe: luna 0,00034 €, sol 0,0057 € je
-  Anfrage, Lauf 2 `NOT_DUE`). Es fehlt nur der formale Abschluss (`/abschluss 005`, `/abschluss 006`).
+- Spec 008 Dienst (ADR-0017, angenommen): `trading-bot run` – eine Paper-Runde pro Minute, Config-Reload,
+  Stopp mit Frist, systemd-Watchdog, Statusdatei, Logging, Units in `deploy/`. Umsetzung läuft.
+- Spec 005, 006, 007: gemergt (PR #5–#10), alle AKs erfüllt, nur `/abschluss` offen.
 - Fertig davor: Spec 004 (PR #4), 003 (PR #3), 001 (PR #2), 002 (PR #1).
 
 ## Nächster Schritt
-1. `/abschluss 005` und `/abschluss 006` (Nutzer startet; Prüfer, Ergebnis-Abschnitt, Status „fertig").
-2. Spec 007 Übersicht (ADR-0016): gemergt (PR #9), alle AKs erfüllt – `/abschluss 007` offen.
-3. Dann nächste M1-Spec laut `docs/ROADMAP.md` (Dauerbetrieb/Deploy auf Hetzner).
+1. `/umsetzen 008` – Plan-Schritte 1–6 (siehe Spec), danach AK11 manuell (lokal ≥ 5 Runden, Strg+C).
+2. `/abschluss 005`, `/abschluss 006`, `/abschluss 007` (Nutzer startet).
+3. Dann Nr. 6 Deploy auf Hetzner (nur mit Zustimmung).
 
 ## In Arbeit
-- Spec: 005, 006 (alle AKs erfüllt, Abschluss offen), 007 (alle AKs erfüllt, Abschluss offen)
+- Spec: 008 (in Arbeit); 005, 006, 007 (alle AKs erfüllt, Abschluss offen)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf

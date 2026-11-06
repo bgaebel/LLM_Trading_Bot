@@ -18,7 +18,7 @@ Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft,
 | 3 | Paper-Ausführung + SQLite-Persistenz (Gebühren, Slippage, Idempotenz, Single-Writer) | [004](specs/004-paper-ausfuehrung.md) | – |
 | 3a | LLM-Strategie (GPT): Depots gpt-6-luna (Haupt-Trader) und gpt-6.1-sol (Gegenprobe) plus Buy & Hold; strenges JSON-Schema, Budgetsperre, Provenienz (ADR-0012/0013) | [005](specs/005-llm-strategie.md) | – |
 | 4 | Risiko-Grenzen und Fail-closed (veraltete Kurse, Feed-/LLM-Ausfall, BTC/ETH entkoppelt) | – | – |
-| 5 | Dienst: Worker-Schleife, sauberer Shutdown, Health, Logging | – | – |
+| 5 | Dienst: Worker-Schleife, sauberer Shutdown, Health, Logging | [008](specs/008-dienst.md) | – |
 | 6 | Hetzner-Server: Härtung (SSH-Key, Firewall, Updates), systemd, Backup, Update/Rollback | [002](specs/002-server-grundeinrichtung.md) (Härtung) | – |
 | 7 | Status-Ansicht nur auf 127.0.0.1, Zugriff per SSH-Tunnel; zuerst Login + Zugangsdaten, dann Übersicht | [006](specs/006-weboberflaeche.md) (Login, Zugangsdaten), [007](specs/007-uebersicht.md) (Übersicht) | – |
 | 8 | Echtgeld-Schnittstelle als Entwurf (Interface + ADR-Vorschlag, keine Implementierung) | – | – |
