@@ -1,6 +1,6 @@
 # Spec 004: Paper-Ausführung und SQLite-Persistenz
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s004-paper` · **Meilenstein:** M1 (Nr. 3)
 - **Erstellt:** 2026-11-06
 
@@ -13,36 +13,36 @@ wird nicht gehandelt. Ein Befehl führt einen Live-Zyklus im Paper-Modus aus. Da
 Dienst (Nr. 5) und für die LLM-Strategie (3a, braucht DB für Budget und Provenienz).
 
 ## Akzeptanzkriterien
-- [ ] AK1: `open_db(path)` legt das Schema an (WAL, `busy_timeout`), setzt `PRAGMA user_version = 1` und lehnt
+- [x] AK1: `open_db(path)` legt das Schema an (WAL, `busy_timeout`), setzt `PRAGMA user_version = 1` und lehnt
   eine DB mit fehlender Tabelle, fehlendem UNIQUE-Index oder fremder Version ab. Es gibt keine automatische
   Migration. — Nachweis: `uv run pytest tests/paper/test_db.py`
-- [ ] AK2: Single-Writer: Eine zweite Sperre auf dieselbe DB schlägt sofort fehl. Die Sperre ist
+- [x] AK2: Single-Writer: Eine zweite Sperre auf dieselbe DB schlägt sofort fehl. Die Sperre ist
   betriebssystemeigen und wird bei Absturz frei (wie Arena `WriterLock`).
   — Nachweis: `uv run pytest tests/paper/test_lock.py` (zweiter Prozess per `subprocess`)
-- [ ] AK3: Je Agent gibt es ein Depot mit 10.000 EUR Startkapital, das genau einmal angelegt wird. Erneutes
+- [x] AK3: Je Agent gibt es ein Depot mit 10.000 EUR Startkapital, das genau einmal angelegt wird. Erneutes
   Öffnen setzt nichts zurück. — Nachweis: `uv run pytest tests/paper/test_portfolio.py`
-- [ ] AK4: `record_decision` ist idempotent über `(agent, symbol, bar_ts)`. Ein zweiter Aufruf, auch nach
+- [x] AK4: `record_decision` ist idempotent über `(agent, symbol, bar_ts)`. Ein zweiter Aufruf, auch nach
   neuem Öffnen der DB, erzeugt weder Entscheidung noch Trade. Entscheidung, Trade und Depot ändern sich in
   **einer** Transaktion (`BEGIN IMMEDIATE`); ein Fehler mittendrin rollt alles zurück.
   — Nachweis: `uv run pytest tests/paper/test_decisions.py`
-- [ ] AK5: Ausführung identisch zur Arena (`trade_to_target`, `record_decision`, `initialize_buyhold`, Stand
+- [x] AK5: Ausführung identisch zur Arena (`trade_to_target`, `record_decision`, `initialize_buyhold`, Stand
   7563724). Golden-Fixtures entstehen, indem der Generator Signal- und Kursfolgen in einer In-Memory-DB der
   Arena abspielt. Verglichen werden Depot, Trades und Entscheidungen nach jedem Schritt, mit Grenzfällen an
   45 %, 90 %, 50 EUR und 2 % Equity sowie bei begrenzter Verkaufsmenge.
   — Nachweis: `uv run pytest tests/paper/test_golden_execution.py` + `tools/golden/mutation_check.py`
   (neue Mutationen für die Ausführung werden erkannt)
-- [ ] AK6: Fail closed: Ohne frische Quotes beider Märkte (älter als 20 s oder einer fehlt) wird die
+- [x] AK6: Fail closed: Ohne frische Quotes beider Märkte (älter als 20 s oder einer fehlt) wird die
   Entscheidung als `STALE_QUOTE` gespeichert, ohne Trade. — Nachweis: `uv run pytest tests/paper/test_fail_closed.py`
-- [ ] AK7: Der Buy-&-Hold-Vergleich kauft je Markt genau einmal auf frischen Quotes, auch über Neustarts hinweg.
+- [x] AK7: Der Buy-&-Hold-Vergleich kauft je Markt genau einmal auf frischen Quotes, auch über Neustarts hinweg.
   — Nachweis: `uv run pytest tests/paper/test_buyhold.py`
-- [ ] AK8: Gebühr und Slippage kommen aus der Konfiguration, Standard 0,25 % bzw. 0,05 % je Seite (Arena-Code).
+- [x] AK8: Gebühr und Slippage kommen aus der Konfiguration, Standard 0,25 % bzw. 0,05 % je Seite (Arena-Code).
   Werte außerhalb von [0, 0,05] werden abgelehnt. Jeder Trade speichert die angewandte Slippage.
   — Nachweis: `uv run pytest tests/paper/test_costs.py`
-- [ ] AK9: `uv run trading-bot paper-cycle --db <pfad>` führt einen Live-Zyklus aus: Snapshots holen, Signal
+- [x] AK9: `uv run trading-bot paper-cycle --db <pfad>` führt einen Live-Zyklus aus: Snapshots holen, Signal
   des aktiven Agenten, Entscheidung und ggf. virtueller Trade, Buy & Hold initialisieren, Equity speichern,
   Zusammenfassung ausgeben. Ein zweiter Lauf im selben Bar erzeugt nichts Neues.
   — Nachweis: [manuell] zweimal ausführen, Ausgabe im „Verlauf"; Testfassung mit Fakes in `tests/test_cli.py`
-- [ ] AK10: Lint, Format, `mypy src tests tools`, CI grün; keine DB-Datei im Repo.
+- [x] AK10: Lint, Format, `mypy src tests tools`, CI grün; keine DB-Datei im Repo.
   — Nachweis: Befehle aus `CLAUDE.md`, CI im PR, `git ls-files '*.db*'` leer
 
 ## Abgrenzung
@@ -115,13 +115,29 @@ ORM/SQLAlchemy (neue Abhängigkeit für vier Tabellen). Migrationen (es gibt kei
   `record_decision`, wenn es ohne frische Quotes aufgerufen wird (wie in der Arena, getestet).
 - 2026-11-06: AK9 „nichts Neues" heißt: keine neue Entscheidung, kein Trade, kein Buy & Hold. Je Zyklus entsteht
   ein Equity-Punkt pro Agent (Zeitreihe, gewollt).
-- 2026-11-06: AK9 manuell geprüft: `paper-cycle` zweimal gegen Bitvavo live (DB außerhalb des Repos). Lauf 1:
-  Buy & Hold kauft beide Märkte, `trend` entscheidet beide 60m-Bars; Lauf 2: „already decided", nichts Neues.
+- 2026-11-06: AK9 manuell geprüft: `paper-cycle` dreimal gegen Bitvavo live (DB außerhalb des Repos; der dritte
+  Lauf nach Änderung der Ausgabe „60m bar opened"). Lauf 1: Buy & Hold kauft beide Märkte, `trend` entscheidet
+  beide 60m-Bars; Lauf 2 und 3: „already decided", nichts Neues. Der Prüfer hat die DB lesend bestätigt
+  (4 Entscheidungen, 2 Trades, Equity-Punkte zu drei Zeitpunkten).
 - 2026-11-06: `allow_buy` aus `trade_to_target` nicht übernommen; die Arena ruft es nie mit `False` auf.
+- 2026-11-06: Prüfung „bereit", Hinweise umgesetzt: `write_tx` rollt nur zurück, wenn noch eine Transaktion
+  offen ist; ein Fehler in Strategie/Entscheidung eines Marktes blockiert den anderen nicht mehr (CLAUDE.md, über
+  die Arena hinaus); `market.bar_ts`/`last_close` werden wie Arena-`update_market` gepflegt; CLI-Meldung bei
+  DB-Fehlern nennt den Fehlertyp.
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Alle AKs. Paket `paper/` mit Schema v1 (ADR-0008), `WriterLock`, virtueller Ausführung bitgleich
+  zu Arena@7563724, Fail-closed bei Quotes > 20 s, Buy & Hold einmalig, Befehl `trading-bot paper-cycle --db`.
+- **Abweichungen vom Plan:**
+  - Der Zyklus entscheidet ohne frische Quotes gar nicht (wie Arena-`quant_cycle`) statt `STALE_QUOTE` zu speichern;
+    `STALE_QUOTE` entsteht in `record_decision` (AK6 dort erfüllt und getestet). Vorteil: der Bar bleibt offen.
+  - `mark` ohne 10-%-Drawdown-Stopp (gehört zu Nr. 4); `allow_buy` entfällt.
+  - Fehler eines Marktes in Strategie/Entscheidung werden isoliert (strenger als die Arena).
+- **Nachweise:** `uv run pytest` 638 passed; ruff, `mypy src tests tools`, shellcheck, docs-check grün;
+  `tools/golden/mutation_check.py` 91/91 wie erwartet (Ausführung 40/40, drei begründet gleichwertig); Fixture
+  reproduzierbar (Prüfer hat den Generator neu laufen lassen, keine Änderung); `git ls-files '*.db*'` leer;
+  AK9 live (siehe Verlauf); CI im PR.
+- **Offen / Folgearbeit:** Drawdown-Stopp und weitere Risiko-Grenzen (Nr. 4). Im Dienst (Nr. 5) Quotes nur einmal
+  je Zyklus holen (heute zwei Ticker-Abrufe: Speicher und Snapshot). Lock-Test unter Linux läuft erst in der CI.
+- **Neue ADRs / Learnings:** ADR-0008 angenommen; Learning „Ersetzungen per Python-Heredoc greifen bei Nicht-ASCII
+  nicht".
