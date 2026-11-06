@@ -1,5 +1,6 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - fee_rate, slip_rate, value,
-#   current_weight, trade_to_target, mark_and_risk (without the drawdown stop)
+#   current_weight, trade_to_target, mark_and_risk (without the drawdown stop),
+#   record_live_quotes (without ticks and risk), latest_quotes
 # Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (adapted) - record_decision,
 #   initialize_buyhold
 """Virtual order execution, identical to Arena v0.3.1 (ADR-0007, golden fixtures).
@@ -12,6 +13,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from llm_trading_bot.market.models import SYMBOLS, MarketDataError, Quote, Symbol
@@ -27,6 +29,8 @@ REBALANCE_BAND = 0.02
 MAX_COST_RATE = 0.05
 REASON_MAX = 550
 BUYHOLD = "buyhold"
+# Older quotes no longer describe the price a virtual order would get (Arena quant_cycle: 20 s).
+QUOTE_MAX_AGE = 20
 
 Quotes = Mapping[Symbol, Quote]
 _COLUMN = {Symbol.BTCEUR: "btc", Symbol.ETHEUR: "eth"}
@@ -240,3 +244,42 @@ def initialize_buyhold(con: sqlite3.Connection, qs: Quotes, costs: Costs, *, whe
         ):
             count += 1
     return count
+
+
+def record_quotes(con: sqlite3.Connection, qs: Quotes, *, now: str) -> None:
+    """Store the latest valid bid/ask of BOTH markets; partial or invalid sets are refused."""
+    if set(qs) != set(SYMBOLS):
+        raise MarketDataError("quotes of both markets required")
+    for quote in qs.values():
+        quote.validate()
+    with write_tx(con):
+        for symbol in SYMBOLS:
+            q = qs[symbol]
+            con.execute(
+                "INSERT INTO market(symbol,ts,bar_ts,bid,ask,last_close,source)"
+                " VALUES (?,?,0,?,?,?,'BITVAVO-LIVE')"
+                " ON CONFLICT(symbol) DO UPDATE SET ts=excluded.ts,"
+                " bid=excluded.bid,ask=excluded.ask,source=excluded.source",
+                (symbol.name, now, q.bid, q.ask, q.mid),
+            )
+
+
+def latest_quotes(
+    con: sqlite3.Connection, *, now_epoch: float, max_age_seconds: int = QUOTE_MAX_AGE
+) -> dict[Symbol, Quote] | None:
+    """Both stored quotes if each is valid and 0..max_age old; otherwise None (fail closed)."""
+    rows = con.execute("SELECT symbol,ts,bid,ask FROM market").fetchall()
+    if len(rows) != len(SYMBOLS):
+        return None
+    qs: dict[Symbol, Quote] = {}
+    for r in rows:
+        try:
+            age = now_epoch - datetime.fromisoformat(r["ts"]).timestamp()
+            if not 0 <= age <= max_age_seconds:
+                return None
+            quote = Quote(float(r["bid"]), float(r["ask"]))
+            quote.validate()
+            qs[Symbol[r["symbol"]]] = quote
+        except (TypeError, ValueError, KeyError):
+            return None
+    return qs if set(qs) == set(SYMBOLS) else None
