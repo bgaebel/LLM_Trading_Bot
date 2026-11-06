@@ -89,7 +89,7 @@ ORM/SQLAlchemy (neue Abhängigkeit für vier Tabellen). Migrationen (es gibt kei
 - [x] 2. Generator für Ausführungs-Fixtures (Folgen + Grenzfälle) gegen die Arena
 - [x] 3. `execution.py`: `trade_to_target`, `record_decision`, Kosten + Golden-Tests (AK4, AK5, AK8)
 - [x] 4. Quotes/Fail-closed + Buy & Hold (AK6, AK7)
-- [ ] 5. `cycle.py` + CLI `paper-cycle` (AK9)
+- [x] 5. `cycle.py` + CLI `paper-cycle` (AK9)
 - [ ] 6. Mutationstest um Ausführung erweitern; Doku (ARCHITEKTUR, README)
 
 ## Risiken & offene Fragen
@@ -110,6 +110,13 @@ ORM/SQLAlchemy (neue Abhängigkeit für vier Tabellen). Migrationen (es gibt kei
   vermerkt: die Cash-Grenze beim Kauf (bei Cash ≥ 0 und Gebühr ≤ 5 % ist die 90-%-Grenze immer enger),
   `MAX(0, …)` beim Verkauf (Menge nie größer als der Bestand) und `max(0, …)` beim Spielraum (negativ endet wie 0
   unter 50 EUR). Gefunden und geschlossen: direkte Trades mit negativem Ziel fehlten (neuer Fuzz-Modus `direct`).
+- 2026-11-06: AK6 im Zyklus wie Arena-`quant_cycle`: Fehlen frische Quotes, entscheidet der Zyklus gar nicht
+  (kein Trade); der Bar bleibt offen und wird entschieden, sobald Quotes wieder da sind. `STALE_QUOTE` speichert
+  `record_decision`, wenn es ohne frische Quotes aufgerufen wird (wie in der Arena, getestet).
+- 2026-11-06: AK9 „nichts Neues" heißt: keine neue Entscheidung, kein Trade, kein Buy & Hold. Je Zyklus entsteht
+  ein Equity-Punkt pro Agent (Zeitreihe, gewollt).
+- 2026-11-06: AK9 manuell geprüft: `paper-cycle` zweimal gegen Bitvavo live (DB außerhalb des Repos). Lauf 1:
+  Buy & Hold kauft beide Märkte, `trend` entscheidet beide 60m-Bars; Lauf 2: „already decided", nichts Neues.
 - 2026-11-06: `allow_buy` aus `trade_to_target` nicht übernommen; die Arena ruft es nie mit `False` auf.
 
 ## Ergebnis
