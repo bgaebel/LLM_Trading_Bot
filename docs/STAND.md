@@ -1,25 +1,25 @@
 # Stand
 
-**Aktualisiert:** 2026-11-06 · **Branch:** `feat/s006-web` (baut auf `feat/s005-llm-strategie` auf) · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
+**Aktualisiert:** 2026-11-06 · **Branch:** `main` · **Meilenstein:** M1 – Paper-Bot 24/7 auf Hetzner
 
 ## Fokus
-- Spec 006 Weboberfläche: Login mit Einrichtungscode, Eingabe von OpenAI-Key und GPT-Einstellungen, nur 127.0.0.1
-  (ADR-0015). Schritte 1–4 umgesetzt; Prüfung und Nachprüfung durchgeführt, Befunde behoben. Auf Wunsch des
-  Nutzers im dunklen Trading-Terminal-Look neu gestaltet (Leiterbahnen, Kerzenchart, Radar, Budget-Balken).
-- Spec 005 GPT-Depots (`gpt-luna` Haupt, `gpt-sol` Gegenprobe, ADR-0012/0013): umgesetzt, Prüfbefunde behoben
-  (auf `feat/s005-llm-strategie`, hier zusammengeführt); offen nur AK10 (Live-Test mit echtem Key).
+- Spec 005 GPT-Depots (`gpt-luna` Haupt, `gpt-sol` Gegenprobe, ADR-0012/0013) und Spec 006 Weboberfläche
+  (Login, Key, Depots, Budget; ADR-0015; dunkles Terminal-Design) sind gemergt (PR #5, PR #6).
+  Beide bleiben „in Arbeit", bis ihre manuellen Abnahmen erledigt sind.
 - Fertig davor: Spec 004 (PR #4), 003 (PR #3), 001 (PR #2), 002 (PR #1).
 
 ## Nächster Schritt
-1. CI auf PR #5 (005) und #6 (006) grün → Merge nach Freigabe durch den Nutzer (erst #5, dann #6).
-2. Nutzer: Key über die Seite eintragen (Passwort ist bereits gesetzt), dann AK10 (005) und AK9 (006).
+1. Nutzer: an der Weboberfläche anmelden (`trading-bot web`, Passwort ist gesetzt), OpenAI-Key eintragen,
+   „Verbindung testen", abmelden → 006 AK9.
+2. Danach 005 AK10: `paper-cycle` zweimal mit echtem Key; Tokens/Kosten in den Verlauf; beide Specs abschließen.
+3. Dann nächste M1-Spec laut `docs/ROADMAP.md` (Dauerbetrieb/Deploy auf Hetzner).
 
 ## In Arbeit
-- Spec: 006 (in Arbeit), 005 (in Arbeit, nur AK10 offen)
+- Spec: 005 (nur AK10 offen), 006 (nur AK9 offen)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
-- OpenAI-Key vom Nutzer (über die Weboberfläche) für die Live-Tests.
+- OpenAI-Key vom Nutzer (über die Weboberfläche).
 
 ## Offen – manuell prüfen
 - Spec 006 AK9: Login, Key, Verbindungstest, Logout im Browser.
