@@ -75,6 +75,12 @@ Verworfen: Framework, öffentliche Erreichbarkeit, Keys in der DB (siehe ADR-001
 ---
 
 ## Verlauf
+- 2026-11-06: Schritte 1–4 umgesetzt. Zusätzlich zur Spec: Prüfung des Host-Headers (Schutz gegen DNS-Rebinding),
+  Größenlimit 16 KB für Formulare, keine Request-Logs (nichts von Cookies oder Formularen landet in Logs).
+  `web/secrets.py` in `credentials.py` umbenannt (Verwechslung mit dem Standardmodul `secrets`).
+  `RUF001` für `web/*.py` ausgenommen (deutsche UI-Texte mit Gedankenstrich).
+- 2026-11-06: Seite lokal gestartet (`.claude/launch.json`, nur lokal, nicht im Repo) und im Browser geprüft:
+  Ersteinrichtung wird angezeigt. Ersteinrichtung, Login und Key-Eingabe macht der Nutzer selbst (AK9).
 
 ## Ergebnis
 - **Erreicht:** …

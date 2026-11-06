@@ -37,6 +37,14 @@ in der Shell gesetzt sein (nie in eine Datei im Repo schreiben):
 uv run trading-bot paper-cycle --db <pfad>/bot.db
 ```
 
+Key und Einstellungen lassen sich auch über die lokale Weboberfläche eintragen (nur `127.0.0.1`; auf dem Server per
+SSH-Tunnel). Beim ersten Start steht ein Einrichtungscode im Terminal, damit legst du dein Passwort fest. Liegt die
+Datenbank im selben Verzeichnis, liest `paper-cycle` die gespeicherten Werte automatisch:
+
+```bash
+uv run trading-bot web --data-dir <pfad>
+```
+
 Ohne Key nur mit klassischen Strategien, z. B. `BOT_AGENTS=trend uv run trading-bot paper-cycle --db <pfad>/bot.db`.
 
 Tests gegen die echten APIs sind standardmäßig aus: `uv run pytest -m net` (der OpenAI-Test nur mit Key, < 0,01 $).

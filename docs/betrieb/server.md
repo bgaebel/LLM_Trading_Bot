@@ -63,3 +63,13 @@ danach `/etc/ssh/sshd_config.d/01-hardening.conf` prüfen bzw. `authorized_keys`
 ## Optional (manuell in der Hetzner-Oberfläche)
 - Hetzner-Cloud-Firewall mit denselben Regeln als zweite Schicht vor dem Server.
 - Hetzner-Backups oder ein Snapshot nach der Einrichtung.
+
+## Weboberfläche per SSH-Tunnel (Spec 006)
+Die Weboberfläche bindet nur an `127.0.0.1` (ADR-0014). Auf dem Server starten (Deployment als Dienst folgt in Nr. 6),
+dann vom eigenen Rechner einen Tunnel öffnen und `http://127.0.0.1:8787/` im Browser aufrufen:
+
+```bash
+ssh -N -L 8787:127.0.0.1:8787 <alias>
+```
+
+Beim ersten Start steht der einmalige Einrichtungscode im Terminal bzw. Journal des Web-Prozesses.
