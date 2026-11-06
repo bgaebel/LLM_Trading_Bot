@@ -88,4 +88,5 @@ htmlcov/
 *.db-shm
 *.sqlite-wal
 *.sqlite-shm
+*.writer.lock
 backups/

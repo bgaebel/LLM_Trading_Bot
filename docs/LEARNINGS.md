@@ -84,6 +84,15 @@
 
 ## Prozess & Werkzeuge
 
+### Ersetzungen per Python-Heredoc greifen bei Nicht-ASCII nicht #windows #encoding #werkzeug
+*2026-11-06 · Quelle: Spec 004*
+- **Symptom:** `python - <<'EOF'` mit `s.replace("…–…", …)` in Git Bash ändert nichts; ein Escape wie
+  `–` im Skript wird zu „2013" (sed) oder zum `SyntaxError: truncated \uXXXX escape` (Python).
+- **Ursache:** Python liest das Skript von stdin in der Windows-Codepage (cp1252), die Datei ist UTF-8 – Umlaute und
+  Gedankenstriche im Suchtext passen nicht. Backslash-Escapes werden von sed bzw. dem Python-Parser umgedeutet.
+- **Lösung / Regel:** Ersetzungen mit Nicht-ASCII-Zeichen oder Backslashes mit dem Edit-Werkzeug machen; in
+  Heredoc-Skripten nur ASCII verwenden. Dateien mit `write_text(..., encoding="utf-8", newline="\n")` schreiben.
+
 ### Golden-Fixtures beweisen Gleichheit nur mit Grenzfällen #test #strategie
 *2026-11-06 · Quelle: Spec 003 (Prüfer-Blocker)*
 - **Symptom:** Alle Golden-Tests grün, jeder BUY/SELL/HOLD-Zweig abgedeckt – trotzdem blieben 23 von 44 Schwellen-/Gewichtsänderungen unentdeckt.
