@@ -55,7 +55,8 @@ def test_each_round_logs_one_summary_line_and_its_trades(tmp_path: Path) -> None
     assert len(rounds) == 2
     assert rounds[0].startswith("INFO round ok in 2.0 s | gpt - | trades 2 | equity trend ")
     assert "buyhold" in rounds[0] and "| trades 0 |" in rounds[1]
-    trades = [line for line in lines if line.startswith("INFO trade ")]
+    assert lines.count("INFO trade buyhold bought 2 market(s) (benchmark)") == 1
+    trades = [line for line in lines if line.startswith("INFO trade trend ")]
     assert [t.split(" target ")[0] for t in trades] == [
         "INFO trade trend BTC-EUR BUY",
         "INFO trade trend ETH-EUR BUY",

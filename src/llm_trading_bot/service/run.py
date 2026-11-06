@@ -356,6 +356,11 @@ class Service:
                 )
             elif m.error:
                 self.log.warning("%s %s: no decision - %s", m.agent, m.symbol.market, m.error)
+        if report.buyhold_bought:
+            # The benchmark buys once per market; its trades are not part of report.markets.
+            self.log.info(
+                "trade %s bought %d market(s) (benchmark)", BUYHOLD, report.buyhold_bought
+            )
         if report.quotes_error:
             self.log.warning("quotes: %s", report.quotes_error)
         llm = ", ".join(
