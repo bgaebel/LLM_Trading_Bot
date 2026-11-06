@@ -1,6 +1,6 @@
 # Spec 005: LLM-Strategie (GPT) mit Modellvergleich, Budgetsperre und Provenienz
 
-- **Status:** Entwurf (überarbeitet 2026-11-06, wartet auf erneute Freigabe)
+- **Status:** Entwurf
 - **Issue:** – · **Branch:** `feat/s005-llm-strategie` · **Meilenstein:** M1 (Nr. 3a)
 - **Erstellt:** 2026-11-06
 
