@@ -153,6 +153,12 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
   **Bewusste Abwägung (ADR-0018):** Springt die Uhr zurück, kann eine schon gelaufene Minute erneut laufen; der
   Equity-Punkt dieses Zeitstempels wird dann ersetzt (Entscheidungen und Trades sind je Kerze eindeutig und bleiben
   unberührt). Die Alternative wäre, den Sprung abzuwarten (keine Runden). Das Log sagt es ausdrücklich.
+- 2026-11-06: PR #15 gemergt (5358d59, CI grün). Auf dem Server mit Zustimmung: `install` (9 Änderungen: Verzeichnisse,
+  uv 0.13.7, `systemd-time-wait-sync`), erstes `deploy` → nur Weboberfläche (keine `secrets.env`). Geprüft: Code
+  root/755, Daten und Backups Dienstbenutzer/700, 8787 nur auf 127.0.0.1, Backup-Timer aktiv, NTP synchron. Der
+  Nutzer hat per Tunnel Passwort, Key und sechs Depots eingerichtet (`secrets.env` 600); zweites `deploy` → Bot gesund:
+  erste Runde `ok` in 9,5 s, beide GPT-Depots `ASKED`. Nach dem Deploy ist ein neues Login nötig (Sitzungen nur im
+  Speicher, ADR-0015). Kosmetik: Die Meldung nannte beim erneuten Deploy desselben Commits ihn selbst als „previous“.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->
