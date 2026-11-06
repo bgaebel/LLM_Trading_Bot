@@ -1,14 +1,20 @@
 """Spec 005 AK3 / ADR-0013: hourly, after a >= 1.8 % move or a changed reference signal once
 10 min have passed, and never more than 4 attempts per rolling hour - per depot."""
 
-import json
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
-from llm_trading_bot.llm.due import Cadence, attempts_last_hour, hourly_limit_reached, iso, llm_due
+from llm_trading_bot.llm.due import (
+    Cadence,
+    attempts_last_hour,
+    hourly_limit_reached,
+    iso,
+    llm_due,
+    trigger_state,
+)
 from llm_trading_bot.market.models import Symbol
 from llm_trading_bot.paper.db import open_db, write_tx
 
@@ -24,13 +30,14 @@ def con(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     connection.close()
 
 
-def context(btc: dict[str, str] | None = CALM, eth: dict[str, str] | None = CALM) -> str:
-    markets = {}
+def stored(btc: dict[str, str] | None = CALM, eth: dict[str, str] | None = CALM) -> str:
+    """Trigger signals as llm_calls.trigger_signals holds them (see due.trigger_state)."""
+    signals = {}
     if btc is not None:
-        markets["BTC-EUR"] = {"reference_signals": btc, "market": "BTCEUR"}
+        signals[Symbol.BTCEUR] = btc
     if eth is not None:
-        markets["ETH-EUR"] = {"reference_signals": eth, "market": "ETHEUR"}
-    return json.dumps({"markets": markets})
+        signals[Symbol.ETHEUR] = eth
+    return trigger_state(signals)
 
 
 def attempt(
@@ -46,9 +53,9 @@ def attempt(
     with write_tx(con):
         con.execute(
             "INSERT INTO llm_calls(ts,agent,markets,ref_mid_btc,ref_mid_eth,status,model,"
-            "prompt_version,prompt_sha256,max_output_tokens,effort,context)"
-            " VALUES (?,?,?,?,?,?,'m','llm-v1','h',8000,'low',?)",
-            (iso(at), agent, "BTC-EUR,ETH-EUR", btc, eth, status, ctx or context()),
+            "prompt_version,prompt_sha256,max_output_tokens,effort,context,trigger_signals)"
+            " VALUES (?,?,?,?,?,?,'m','llm-v1','h',8000,'low','{}',?)",
+            (iso(at), agent, "BTC-EUR,ETH-EUR", btc, eth, status, ctx or stored()),
         )
 
 
@@ -121,12 +128,12 @@ def test_changed_reference_signal_triggers_after_cooldown(
 
 
 def test_market_missing_last_time_counts_as_new(con: sqlite3.Connection) -> None:
-    attempt(con, T, ctx=context(eth=None))
+    attempt(con, T, ctx=stored(eth=None))
     assert due(con, T + 600)
     assert not due(con, T + 600, signals={Symbol.BTCEUR: CALM})
 
 
-def test_unreadable_previous_context_counts_as_changed(con: sqlite3.Connection) -> None:
+def test_unreadable_stored_signals_count_as_changed(con: sqlite3.Connection) -> None:
     attempt(con, T, ctx="not json")
     assert due(con, T + 600)
 

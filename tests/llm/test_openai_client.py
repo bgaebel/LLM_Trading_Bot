@@ -78,8 +78,12 @@ def fail(status: int) -> Callable[[httpx2.Request], httpx2.Response]:
     )
 
 
-def model_for(recorder: Recorder) -> OpenAIResponses:
-    return OpenAIResponses(KEY, http_client=httpx2.Client(transport=httpx2.MockTransport(recorder)))
+def model_for(recorder: Recorder, pauses: list[float] | None = None) -> OpenAIResponses:
+    return OpenAIResponses(
+        KEY,
+        sleep=(pauses.append if pauses is not None else lambda _s: None),
+        http_client=httpx2.Client(transport=httpx2.MockTransport(recorder)),
+    )
 
 
 def ask(model: OpenAIResponses) -> Any:
@@ -118,10 +122,10 @@ def test_request_shape() -> None:
     }
 
 
-def test_client_is_bounded_to_60_seconds_and_2_retries() -> None:
-    model = model_for(Recorder(ok()))
-    client = model._client
-    assert client.max_retries == 2
+def test_client_has_a_60_second_timeout_and_no_hidden_sdk_retries() -> None:
+    """The SDK would also retry timeouts, which may be billed; retries are done by ask() only."""
+    client = model_for(Recorder(ok()))._client
+    assert client.max_retries == 0
     assert client.timeout == 60.0
 
 
@@ -153,15 +157,27 @@ def test_replies_that_must_not_be_traded(kw: dict[str, Any], problem: str) -> No
     assert ask(model_for(Recorder(ok(**kw)))).problem() == problem
 
 
-def test_server_errors_are_retried_twice_then_succeed() -> None:
+def test_server_errors_are_retried_twice_with_short_pauses() -> None:
     recorder = Recorder(fail(500), fail(503), ok())
-    assert ask(model_for(recorder)).problem() == ""
-    assert len(recorder.requests) == 3
+    pauses: list[float] = []
+    reply = ask(model_for(recorder, pauses))
+    assert reply.problem() == "" and reply.requests == 3
+    assert len(recorder.requests) == 3 and pauses == [1.0, 2.0]
 
 
-def test_persistent_server_error_raises_after_three_tries() -> None:
+def test_rate_limit_is_retried() -> None:
+    recorder = Recorder(fail(429), ok())
+    reply = ask(model_for(recorder))
+    assert reply.requests == 2 and len(recorder.requests) == 2
+
+
+def test_single_request_reports_one() -> None:
+    assert ask(model_for(Recorder(ok()))).requests == 1
+
+
+def test_persistent_server_error_raises_after_three_requests() -> None:
     recorder = Recorder(fail(500))
-    with pytest.raises(openai.APIStatusError):
+    with pytest.raises(openai.InternalServerError):
         ask(model_for(recorder))
     assert len(recorder.requests) == 3
 
@@ -173,11 +189,13 @@ def test_authentication_error_is_not_retried() -> None:
     assert len(recorder.requests) == 1
 
 
-def test_timeouts_are_retried_then_raised() -> None:
+def test_timeouts_are_not_retried() -> None:
+    """A timed-out request may still be generated and billed: never send it again."""
+
     def timeout(request: httpx2.Request) -> httpx2.Response:
         raise httpx2.ReadTimeout("slow", request=request)
 
     recorder = Recorder(timeout)
     with pytest.raises(openai.APITimeoutError):
         ask(model_for(recorder))
-    assert len(recorder.requests) == 3
+    assert len(recorder.requests) == 1
