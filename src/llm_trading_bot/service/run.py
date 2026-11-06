@@ -74,7 +74,8 @@ class RealTimer:
         # LEARNING(#python): Signal-Handler setzt Event, auf das der Hauptthread wartet
         # Not stop.wait(): Event.wait holds the Event's non-reentrant lock for a moment, and the
         # signal handler (stop.set) runs in this same thread - it could deadlock on that lock.
-        # A signal interrupts the sleep anyway; is_set() takes no lock.
+        # is_set() takes no lock; the sleep resumes after the handler (PEP 475), so a stop is
+        # seen within one wait slice (SLICE_SECONDS).
         time.sleep(seconds)
         return stop.is_set()
 
@@ -317,8 +318,10 @@ class Service:
         if key == self.key:
             return False
         changed = self.key is not None and key is not None
-        self.key = key
+        # Client first: if the factory fails, the old key stays recorded and the next round
+        # tries again instead of keeping the old client under the new key.
         self.model = self.model_factory(key) if key else None
+        self.key = key
         return changed
 
     def _finish(self, job: _Round, started_at: float, seconds: float) -> None:

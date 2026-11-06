@@ -96,6 +96,39 @@ def test_a_new_key_gets_a_new_client(tmp_path: Path) -> None:
     assert "new OpenAI key: new client" in h.log()
 
 
+def test_a_failing_client_for_a_new_key_is_tried_again_next_round(tmp_path: Path) -> None:
+    second = f"BOT_AGENTS=gpt-luna\nOPENAI_API_KEY={OTHER_KEY}\n"
+
+    def cycle(con: sqlite3.Connection, client: Any, config: Any, **kwargs: Any) -> CycleReport:
+        report = paper_cycle(con, client, config, **kwargs)
+        (tmp_path / "secrets.env").write_text(second, encoding="utf-8")
+        return report
+
+    h = harness(
+        tmp_path,
+        limit=2,
+        action=cycle,
+        secrets_text=f"BOT_AGENTS=gpt-luna\nOPENAI_API_KEY={KEY}\n",
+    )
+    made = h.service.model_factory
+    tries: list[str] = []
+
+    def flaky(key: str) -> Any:
+        tries.append(key)
+        if tries.count(OTHER_KEY) == 1:
+            raise RuntimeError("client setup failed")
+        return made(key)
+
+    h.service.model_factory = flaky
+    assert h.service.run() == EXIT_OK
+    # Round 2 failed while switching; round 3 tried again and got a client for the new key.
+    assert tries == [KEY, OTHER_KEY, OTHER_KEY]
+    assert h.keys == [KEY, OTHER_KEY]
+    assert h.rounds.models[0] is not h.rounds.models[1]
+    assert h.rounds.configs[1].llm.api_key == OTHER_KEY
+    assert "round failed" in h.log() and "client setup failed" in h.log()
+
+
 def test_the_environment_still_wins_over_saved_values(tmp_path: Path) -> None:
     h = _run(
         tmp_path,
