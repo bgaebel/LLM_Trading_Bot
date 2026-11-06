@@ -58,6 +58,14 @@
 
 ## Laufzeit & Code
 
+### Signal-Handler setzt Event, auf das der Hauptthread wartet #python #signal #dienst
+*2026-11-06 · Quelle: Spec 008 (Review, reproduziert)*
+- **Symptom:** Selten hängt der Prozess bei SIGTERM/Strg+C für immer; kein Watchdog-Ping, Statusdatei bleibt `running`.
+- **Ursache:** Python-Handler laufen im Hauptthread zwischen zwei Bytecodes. Wartet der Hauptthread gerade in
+  `event.wait()`, hält er kurz den nicht reentranten Lock des Events; `event.set()` im Handler blockiert darauf.
+- **Lösung / Regel:** Im Hauptthread nie auf ein Objekt warten, das der Handler sperrt: `time.sleep(slice)` und
+  danach `event.is_set()` (ohne Lock). Regressionstest in einem Unterprozess mit Zeitlimit (`_thread.interrupt_main`).
+
 ### Eingeengte Fehlerliste muss alle Transportfehler abdecken #python #http #isolation
 *2026-11-06 · Quelle: Spec 001 (Prüfer-Blocker)*
 - **Symptom:** Ein kaputter BTC-Abruf ließ `build_snapshots` abbrechen; ETH verlor seinen Snapshot, obwohl die Isolation getestet war.
