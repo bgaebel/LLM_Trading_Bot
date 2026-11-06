@@ -1,0 +1,13 @@
+# ADR-0018: daily backup of the bot database, before the 04:00 UTC reboot window of
+# unattended-upgrades (Spec 002). Persistent: a run missed while the server was off happens at boot.
+[Unit]
+Description=LLM Trading Bot - daily database backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+RandomizedDelaySec=300
+Persistent=true
+Unit=llm-trading-bot-backup.service
+
+[Install]
+WantedBy=timers.target

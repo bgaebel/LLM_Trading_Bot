@@ -1,0 +1,41 @@
+# Origin: LLM-Trading-Arena@7563724 deploy backup service (adapted)
+# ADR-0018: a checked copy of the bot database on this server, started daily by the timer.
+# Reads the database read-only (ADR-0016), never the WriterLock; the service keeps running.
+# Installed by deploy/release.sh: replaces __SERVICE_USER__, __APP_DIR__, __DATA_DIR__ and
+# __BACKUP_DIR__. Real user names never go into this file: the repo is public.
+[Unit]
+Description=LLM Trading Bot - checked copy of the database
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=__SERVICE_USER__
+WorkingDirectory=__DATA_DIR__
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__APP_DIR__/.venv/bin/trading-bot backup --db __DATA_DIR__/bot.db --dir __BACKUP_DIR__/daily --keep 14
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+LogNamespace=llm-trading-bot
+
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# Read-only WAL readers still create the -shm file next to the database (ADR-0016).
+ReadWritePaths=__DATA_DIR__ __BACKUP_DIR__
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native

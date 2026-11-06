@@ -107,7 +107,7 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
 ## Plan
 - [x] 1. ADR-0018 annehmen; `ops/backup.py` + CLI `backup`, `verify-db`, `restore` mit Tests (AK1, AK2)
 - [x] 2. Uhrsprung im Dienst + Test (AK3)
-- [ ] 3. Units: `RestartPreventExitStatus=3`, Backup-Service und -Timer; `check-units.sh` und Datei-Tests (AK4)
+- [x] 3. Units: `RestartPreventExitStatus=3`, Backup-Service und -Timer; `check-units.sh` und Datei-Tests (AK4)
 - [ ] 4. `deploy/release.sh` + Sandbox-Tests in der CI (AK5)
 - [ ] 5. `scripts/deploy.sh` + Tests (AK6); Doku `docs/betrieb/server.md`, `CLAUDE.md`, ARCHITEKTUR (AK11)
 - [ ] 6. Mit Zustimmung auf dem Server: `install`, `deploy`, Einrichtung durch den Nutzer, `deploy` (AK7)
