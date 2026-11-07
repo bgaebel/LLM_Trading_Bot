@@ -74,8 +74,9 @@ aus demselben Commit aus. `<dienst>` ist der Systembenutzer aus Spec 002.
 |---|---|---|
 | `/opt/llm-trading-bot/releases/<sha>/` | ein Release je Commit mit eigener `.venv` | root, 755 |
 | `/opt/llm-trading-bot/current`, `…/previous` | Symlinks auf das aktive und das vorige Release | root |
-| `/var/lib/llm-trading-bot/` | `bot.db`, `secrets.env`, `web-auth.json`, `service-status.json` | `<dienst>`, 700 / 600 |
-| `/var/backups/llm-trading-bot/{daily,pre-update}/` | geprüfte DB-Kopien (14 bzw. 5) | `<dienst>`, 700 / 600 |
+| `/var/lib/llm-trading-bot/` | `bot.db`, `observations.db` (ab Spec 015), `secrets.env`, `web-auth.json`, `service-status.json` | `<dienst>`, 700 / 600 |
+| `/var/backups/llm-trading-bot/{daily,pre-update}/` | geprüfte Kopien von `bot.db` (14 bzw. 5) | `<dienst>`, 700 / 600 |
+| `/var/backups/llm-trading-bot/observations/{daily,pre-update}/` | geprüfte Kopien von `observations.db` (14 bzw. 3) | `<dienst>`, 700 / 600 |
 | `/usr/local/bin/uv` | uv in fester Version (SHA-256 geprüft) | root |
 
 Units: `llm-trading-bot` (Runde je Minute), `llm-trading-bot-web` (127.0.0.1:8787),
@@ -106,12 +107,23 @@ DB lesend prüfen, während der alte Dienst läuft → stoppen → Backup nach `
 umschalten → starten → bis zu 3 min auf eine Runde mit Ergebnis `ok` (oder `incomplete` nur wegen Marktdaten:
 Bitvavo lässt Minuten ohne Handel aus, ETH-EUR ist nachts dann bis zu einer Stunde ohne Entscheidung). Sonst schaltet das Skript automatisch auf das
 vorige Release zurück (Code und Units, **nie** die Datenbank) und endet mit Fehler.
+Die Beobachtungs-DB (`observations.db`, Spec 015) wird direkt nach `bot.db` nach `observations/pre-update/`
+gesichert (3 bleiben). Scheitert das, steht `WARNING: the backup of observations.db before the update failed` im
+Ablauf – der Deploy geht trotzdem weiter. Fehlt die Datei noch (vor der ersten Runde eines Releases ab 015), steht
+dort nur `no observations.db yet`.
 ```bash
 bash scripts/deploy.sh <alias> <dienst> rollback
 ```
+Ein Rollback auf ein Release vor Spec 015 lässt `observations.db` und ihre Sicherungen unverändert liegen
+(`release <sha> is from before Spec 015 …`); das alte Release liest und sichert sie nicht, die Aufzeichnung ruht
+bis zum nächsten Deploy ab 015.
 ```bash
 bash scripts/deploy.sh <alias> <dienst> status
 ```
+`status` zeigt für die Aufzeichnung drei Zeilen: `observations: written <n>, failed <n>, last error: …` aus
+`service-status.json` (bei einem Release vor 015 `no counters in the status file`), `observations.db: <Bytes> B`
+(oder `missing`) und `latest observations backup: observations/<daily|pre-update>/observations-<UTC>.db`.
+Gesund ist: `written` steigt von Runde zu Runde, `failed` bleibt 0.
 
 ### Risikostopp, Freigabe und Handelspause (Spec 011, ADR-0021)
 Alles über die Weboberfläche, Seite **Einstellungen**, Bereich „Handel & Risikostopp“ – kein Befehl auf dem Server.
@@ -161,6 +173,18 @@ Pfad, den es noch nicht gibt:
    verschieben (als `<dienst>`).
 3. `trading-bot restore --backup <datei> --db /var/lib/llm-trading-bot/bot.db` als `<dienst>` (wie oben).
 4. `sudo systemctl start llm-trading-bot`, dann `deploy.sh … status`.
+
+**Beobachtungs-DB (Spec 015, ADR-0027):** eigenes Profil mit eigenem Schema und eigenen Namen
+(`observations-<UTC>.db`), im selben Timer als zweiter, eigener Aufruf nach `bot.db`. Scheitert er (z. B.
+beschädigte Datei), ist die Sicherung von `bot.db` schon fertig und die Unit trotzdem erfolgreich; der Fehler steht im
+Journal (`backup failed: …`). Fehlt die Datei, steht dort `backup skipped: no database at …`. Prüfen und
+wiederherstellen wie oben, immer mit `--profile observations` und nur in einen neuen Pfad, z. B.:
+```bash
+ssh <alias> 'sudo runuser -u <dienst> -- /opt/llm-trading-bot/current/.venv/bin/trading-bot restore --profile observations --backup /var/backups/llm-trading-bot/observations/daily/<datei> --db /var/lib/llm-trading-bot/restore-test/observations.db'
+```
+Echte Wiederherstellung wie bei `bot.db` (Dienst stoppen, `observations.db` mit `-wal`/`-shm` beiseitelegen,
+`restore --profile observations … --db /var/lib/llm-trading-bot/observations.db`, Dienst starten). Ohne diesen Schritt
+legt der Dienst eine fehlende Datei neu und leer an; eine beschädigte ersetzt er nie.
 
 ### Logs und Prüfbefehle
 ```bash
