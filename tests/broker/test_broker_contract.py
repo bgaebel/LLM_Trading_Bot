@@ -162,6 +162,21 @@ def outcome(state: OrderState, fills: tuple[ExecutedFill, ...] = (), **kw: Any) 
     return OrderOutcome(new_client_order_id(), state, fills, **kw)
 
 
+def test_outcome_keeps_the_exchange_status_and_reason_unchanged() -> None:
+    o = outcome(
+        OrderState.PARTIAL,
+        (fill(),),
+        exchange_order_id="95e9-a",
+        exchange_status="canceled",
+        restatement_reason="cancelOnExecutionPriceProtection",
+    )
+    assert (o.exchange_status, o.restatement_reason, o.exchange_order_id) == (
+        "canceled",
+        "cancelOnExecutionPriceProtection",
+        "95e9-a",
+    )
+
+
 def test_outcomes_match_their_fills() -> None:
     o = outcome(
         OrderState.PARTIAL, (fill("a", "0.001"), fill("b", "0.002")), exchange_status="expired"

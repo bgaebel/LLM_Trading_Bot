@@ -67,6 +67,10 @@ def python_files() -> Files:
     return out
 
 
+def files_in_tests_and_tools() -> Files:
+    return {p: t for p, t in python_files().items() if p.startswith(("tests/", "tools/"))}
+
+
 def shell_files() -> Files:
     out: Files = {}
     for part in ("scripts", "deploy"):
@@ -85,10 +89,16 @@ def _docstrings(tree: ast.AST) -> set[int]:
 
 
 def _strings(tree: ast.AST) -> Iterator[tuple[int, str]]:
+    """Every str and bytes literal except docstrings (bytes: a request line or signing payload
+    is written as bytes just as often)."""
     skip = _docstrings(tree)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in skip:
+        if not isinstance(node, ast.Constant) or id(node) in skip:
+            continue
+        if isinstance(node.value, str):
             yield node.lineno, node.value
+        elif isinstance(node.value, bytes):
+            yield node.lineno, node.value.decode("latin-1")
 
 
 def _name(func: ast.expr) -> str:
@@ -118,14 +128,20 @@ def rule_literals(files: Files) -> list[str]:
     return out
 
 
+# --data but not --data-dir (the web unit's option).
+SENDING = re.compile(r"-X\s*POST|--request\s+POST|--data\b(?!-)")
+
+
 def rule_scripts(files: Files) -> list[str]:
+    """The forbidden literals anywhere; a sending curl in any file that talks to Bitvavo - the
+    host usually sits in a variable on another line."""
     out = []
     for path, text in files.items():
+        mentions_bitvavo = "bitvavo.com" in text
         for n, line in enumerate(text.splitlines(), 1):
-            risky = any(b in line for b in FORBIDDEN_LITERALS) or re.search(
-                r"-X\s*POST|--data|--request\s+POST", line
-            )
-            if "bitvavo.com" in line and risky:
+            if any(b in line for b in FORBIDDEN_LITERALS) or (
+                mentions_bitvavo and SENDING.search(line)
+            ):
                 out.append(f"{path}:{n}: {line.strip()}")
     return out
 
@@ -269,6 +285,7 @@ REAL: list[tuple[str, Rule, Callable[[], Files]]] = [
     ("imports", rule_imports, src_files),
     ("secrets", rule_secrets, src_files),
     ("exchange_shape", rule_exchange_shape, src_files),
+    ("exchange_shape_tests_tools", rule_exchange_shape, files_in_tests_and_tools),
     ("packages", rule_packages, package_files),
 ]
 
@@ -305,6 +322,15 @@ BAD: list[tuple[str, Rule, str, str]] = [
     ("literal f-string", rule_literals, "x.py", 'u = f"{base}/balance"'),
     ("script post", rule_scripts, "s.sh", "curl -X POST https://api.bitvavo.com/v2/x"),
     ("script path", rule_scripts, "s.sh", "curl https://api.bitvavo.com/v2/trades"),
+    (
+        "script host in variable",
+        rule_scripts,
+        "scripts/x.sh",
+        'API=https://api.bitvavo.com/v2\ncurl -sf -X POST "$API/x" --data "$BODY"',
+    ),
+    ("script header", rule_scripts, "deploy/x.sh", 'curl -H "Bitvavo-Access-Key: $K" "$U"'),
+    ("bytes literal", rule_literals, "x.py", 'B = b"POST /v2/order HTTP/1.1"'),
+    ("bytes key", rule_secrets, "x.py", 'k = os.environb[b"BITVAVO_API_KEY"]'),
     ("other host file", rule_public_paths, "web/x.py", 'H = "https://api.bitvavo.com"'),
     ("private _get", rule_public_paths, BITVAVO_MODULE, 'self._get("/markets")'),
     ("odd f-string", rule_public_paths, BITVAVO_MODULE, 'self._get(f"/{m}/book")'),
@@ -352,6 +378,8 @@ def test_each_rule_catches_its_pattern(case: str, rule: Rule, path: str, source:
         (rule_public_paths, BITVAVO_MODULE, 'self._get(f"/{m}/candles?{q}")'),
         (rule_imports, "web/auth.py", "import hmac"),
         (rule_imports, HTTP_MODULE, "import http.client"),
+        (rule_scripts, "deploy/web.service", "ExecStart=x web --data-dir /var/lib/x"),
+        (rule_scripts, "scripts/x.sh", "curl -X POST https://example.org/hook --data x"),
         (rule_packages, "pyproject.toml", 'markers = ["net: talks to Bitvavo"]'),
         (
             rule_exchange_shape,

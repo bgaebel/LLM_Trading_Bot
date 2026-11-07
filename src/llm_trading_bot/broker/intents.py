@@ -1,4 +1,4 @@
-"""The life of an order intent (Spec 012 AK8, ADR-0023) - a pure state machine, no I/O.
+"""The life of an order intent (Spec 012 AK8, ADR-0022; M2: ADR-0023) - a pure state machine.
 
 It fixes now what M2 must never do: send an intent a second time. Bitvavo's clientOrderId is no
 idempotency key, so a resend after a timeout may become a second real order. Once an intent may

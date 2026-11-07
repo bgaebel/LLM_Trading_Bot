@@ -168,6 +168,7 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
   liegen unterhalb der Naht; Absicht nicht auf einen Ordertyp festlegen; Zustände nach ausgeführter Menge;
   PLANNED nach Neustart = UNKNOWN; Prüfregeln, die am heutigen Code scheitern würden; Mutationstest braucht
   `uv.lock`/`deploy/` in der Kopie) – eingearbeitet.
+- 2026-11-07: Prüf-Workflow (4 Blickwinkel, je Befund 3 Gegenprüfer): 23 Befunde, 17 widerlegt, 6 bestätigt und behoben – Skriptregel erkennt nun sendendes `curl` auch mit Host in einer Variablen und die verbotenen Literale in jeder Zeile; Bytes-Literale werden geprüft; börsenartige Klassen auch in `tests/`/`tools/`; Test, dass Bitvavo-Status und `restatementReason` unverändert bleiben; ARCHITEKTUR nennt den Umfang je Regel genau; Code-Anker verweisen auf das angenommene ADR-0022 statt auf den Vorschlag ADR-0023.
 
 ## Ergebnis
 - **Erreicht:** …

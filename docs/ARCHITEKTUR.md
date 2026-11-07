@@ -143,12 +143,13 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `paper`: `PaperBroker` (reine Delegation); `live`: `LiveTradingLocked`, `refuse_live`;
     `make_broker(mode)` (LIVE → `LiveTradingLocked`)
   - `intents`: `ALLOWED`, `move`, `on_restart` (PLANNED → UNKNOWN), `may_plan`
-- **Invarianten:** Kein Order-Code (ADR-0004). `tests/broker/test_no_order_path.py` prüft statisch über `src`,
-  `tests`, `tools`, `scripts`, `deploy` und die Paketliste: keine privaten Bitvavo-Pfade, kein Auth-Header, nur
-  die öffentlichen GET-Pfade, HTTP nur über `urllib` in `market/http.py`, keine weitere HTTP-/Prozess-Bibliothek,
-  `hmac` nur in `web/auth.py`, keine `BITVAVO_*`/`LIVE_*`-Namen, keine börsenartige Klasse, kein Börsen-SDK – jede
-  Regel mit Negativtest. Die Arena-Regeln (Größe, Limits, Risikostopp) liegen in `paper.execution` *unterhalb*
-  der Naht; M2 löst sie golden-geprüft heraus, bevor ein Live-Broker sie nutzt. Beide Golden-Fixtures laufen
+- **Invarianten:** Kein Order-Code (ADR-0004). `tests/broker/test_no_order_path.py` prüft statisch: in
+  `src`, `tests` und `tools` keine privaten Bitvavo-Pfade, kein Auth-Header, keine WebSocket-Order-Aktionen
+  (auch als Bytes) und keine börsenartige Klasse; in `src` zusätzlich nur die öffentlichen GET-Pfade, HTTP nur
+  über `urllib` in `market/http.py`, keine weitere HTTP-/Prozess-Bibliothek, `hmac` nur in `web/auth.py`, keine
+  `BITVAVO_*`/`LIVE_*`-Namen; in `scripts` und `deploy` keine dieser Pfade und kein sendendes `curl` in einer
+  Datei, die Bitvavo anspricht; in der Paketliste kein Börsen-SDK – jede Regel mit Negativtest.
+  Die Arena-Regeln (Größe, Limits, Risikostopp) liegen in `paper.execution` *unterhalb* der Naht; M2 löst sie golden-geprüft heraus, bevor ein Live-Broker sie nutzt. Beide Golden-Fixtures laufen
   zusätzlich über den `PaperBroker`. Ein Vorgang wird nie erneut gesendet (`intents`).
 
 ### llm

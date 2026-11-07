@@ -5,8 +5,9 @@ so ``PaperBroker`` is pure delegation. Note (ADR-0022): sizing, weight limits, t
 the hold/buy rules and the drawdown stop live *inside* those paper functions today; a live broker
 needs them, so M2 first extracts them, proven by the golden fixtures, and only then plugs in.
 
-The exchange side (``OrderIntent`` ... ``OrderExchange``) is the M2 draft from ADR-0023, built on
-the Bitvavo trading API as documented on 2026-11-07 (docs/recherche/bitvavo-trading-api-2026-11.md).
+The exchange side (``OrderIntent`` ... ``OrderExchange``) is decided in ADR-0022 (M2 proposal:
+ADR-0023), built on the Bitvavo trading API as documented on 2026-11-07
+(docs/recherche/bitvavo-trading-api-2026-11.md).
 Money is ``Decimal`` only. Nothing here can place an order: ``OrderExchange`` has no
 implementation, and tests/broker/test_no_order_path.py fails if one appears (ADR-0004).
 """
@@ -31,7 +32,7 @@ class Broker(Protocol):
     Caller rules are today's: ``record_decision`` opens its own write transaction, ``mark`` runs
     inside the caller's. A live broker therefore only *plans* inside a transaction - it stores
     PLANNED intents (``intents.py``) - and sends exclusively in ``dispatch``, outside of every
-    transaction, exactly once per intent (ADR-0023). ``unresolved`` lists intents whose outcome
+    transaction, exactly once per intent (ADR-0022). ``unresolved`` lists intents whose outcome
     is not booked yet; while there is one, no new order may be planned for that market.
     """
 
@@ -102,7 +103,7 @@ def _money(name: str, value: object, *, positive: bool = True) -> Decimal:
 
 def new_client_order_id() -> uuid.UUID:
     """A fresh random UUID4 per intent. Bitvavo's clientOrderId is unique among open orders only
-    and reusable after completion - it identifies, it does not make a resend safe (ADR-0023)."""
+    and reusable after completion - it identifies, it does not make a resend safe (ADR-0022)."""
     return uuid.uuid4()
 
 
