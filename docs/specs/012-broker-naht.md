@@ -143,7 +143,7 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
 ## Plan
 - [x] 1. `broker/contract.py` (Protocol `Broker`), `paper.py`, `live.py`, `make_broker`; Tests Vertrag, Spy,
   Goldens über den Broker (AK1, AK2, AK4 teilweise)
-- [ ] 2. Live-Typen mit Invarianten; öffentliche `/markets`-Antwort (ohne Key) einmal abrufen und unverändert als
+- [x] 2. Live-Typen mit Invarianten; öffentliche `/markets`-Antwort (ohne Key) einmal abrufen und unverändert als
   Fixture speichern; `MarketRules`; `intents.py` (AK7, AK8)
 - [ ] 3. Sperr-Tests: Order-Pfad-Prüfung mit Negativtests, Konfiguration, fremde DB, `parse_mode`-Varianten,
   CLI-Abbruch (AK4, AK5, AK6, AK9)
