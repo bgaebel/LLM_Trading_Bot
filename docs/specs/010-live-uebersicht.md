@@ -29,7 +29,7 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
   AK6 (Tunnel trennen und wieder verbinden; abgelaufene Sitzung durch Neustart der Weboberfläche)
 - [x] AK5: Ohne Skript: `<noscript><meta http-equiv="refresh" content="15"></noscript>` auf der Übersicht; die
   Einstellungsseite lädt weder Skript noch Refresh. — Nachweis: `tests/web/test_pages.py::test_*refresh*`
-- [ ] AK6: [manuell] Im Browser (lokal mit Test-DB und auf dem Server per Tunnel): Alter zählt sekündlich, nach einer
+- [x] AK6: [manuell] Im Browser (lokal mit Test-DB und auf dem Server per Tunnel): Alter zählt sekündlich, nach einer
   Runde ändern sich Werte ohne Neuladen, Konsole ohne CSP-Verstöße, Verhalten bei Verbindungsabbruch wie AK4.
 - [x] AK7: Lint, Format, `mypy src tests tools`, CI grün; Deploy auf den Server gesund (mit Zustimmung).
 
@@ -90,6 +90,7 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
 - 2026-11-07: PR #16 gemergt (c69ea86, CI grün inkl. Node-Tests, 1179 passed), auf dem Server gesund deployt;
   `/app.js` kommt über den Tunnel mit `text/javascript` und CSP `script-src 'self'`. Offen: AK6 auf dem Server –
   Durchsicht durch den Nutzer nach dem Login.
+- 2026-11-07: AK6 vom Nutzer auf dem Server abgenommen („Ja, passt“).
 
 ## Ergebnis
 - **Erreicht:** …
