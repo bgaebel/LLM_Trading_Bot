@@ -349,3 +349,14 @@ def test_web_db_defaults_to_bot_db_in_the_data_dir(
     assert main(["web", "--data-dir", str(tmp_path)]) == EXIT_OK
     assert main(["web", "--data-dir", str(tmp_path), "--db", str(tmp_path / "x.db")]) == EXIT_OK
     assert seen == [(tmp_path, None), (tmp_path, tmp_path / "x.db")]
+
+
+def test_paper_cycle_reads_the_pause_from_secrets(tmp_path: Path) -> None:
+    """Spec 011 AK6: the one-off cycle honours the pause, and names the file as its source."""
+    from llm_trading_bot.paper.risk import read_controls
+
+    (tmp_path / "secrets.env").write_text("BOT_AGENTS=trend\nBOT_PAUSED=1\n", encoding="utf-8")
+    assert read_controls({}, tmp_path / "secrets.env").source == "file"
+    code, text = run_cycle(tmp_path / "bot.db", ScenarioClient())
+    assert code == EXIT_OK and text.count("[PAUSED]") == 2
+    assert "buy & hold: already invested" in text  # nothing bought while paused

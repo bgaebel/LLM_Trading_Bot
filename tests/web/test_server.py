@@ -695,7 +695,8 @@ def test_resume_button_only_for_stopped_depots(running: Running) -> None:
     assert status == 400
     con = open_db(running.data / "bot.db", agents=())
     with write_tx(con):
-        con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
+        # After a stop the depot holds no coins (forced sale).
+        con.execute("UPDATE portfolios SET halted=1, btc=0, eth=0 WHERE agent='trend'")
     con.close()
     page = running.browser.request("GET", "/settings")[2]
     assert "Wieder freigeben" in page and "<b>trend</b>" in page
@@ -705,3 +706,20 @@ def test_resume_button_only_for_stopped_depots(running: Running) -> None:
     assert re.fullmatch(r"trend@\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00", stored)
     assert "Freigabe angefordert – greift in der nächsten Runde" in page
     assert "Wieder freigeben" not in page
+
+
+def test_an_expired_or_used_request_shows_the_button_again(running: Running) -> None:
+    """Review of Spec 011: the page shows a request as pending only if the service will act on
+    it - an expired one must not hide the button and lock the depot for good."""
+    from llm_trading_bot.paper.db import open_db, write_tx
+
+    _bot_db(running.data / "bot.db")
+    setup(running)
+    con = open_db(running.data / "bot.db", agents=())
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET halted=1, btc=0, eth=0 WHERE agent='trend'")
+    con.close()
+    old = iso(time.time() - 25 * 3600)
+    (running.data / "secrets.env").write_text(f"BOT_RESUME=trend@{old}\n", encoding="utf-8")
+    page = running.browser.request("GET", "/settings")[2]
+    assert "Wieder freigeben" in page and "Freigabe angefordert" not in page

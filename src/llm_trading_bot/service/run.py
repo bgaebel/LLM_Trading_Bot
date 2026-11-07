@@ -412,6 +412,9 @@ class Service:
                 self.log.warning("%s %s: no decision - %s", m.agent, m.symbol.market, m.error)
         for m in report.unvalued:
             self.log.warning("%s %s: no equity point - %s", m.agent, m.symbol.market, m.error)
+        for agent in (*report.released, *(s.agent for s in report.risk_stops)):
+            # A new stop or release starts afresh: its refusals are worth saying again.
+            self.refusals = {r for r in self.refusals if r[0] != agent}
         for agent in report.released:
             self.log.info("risk stop %s released on request: trading again from its cash", agent)
         for agent, why in report.refused:

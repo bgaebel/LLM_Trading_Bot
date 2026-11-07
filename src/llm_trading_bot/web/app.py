@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 from llm_trading_bot.llm.agents import LLM_DEFAULTS
 from llm_trading_bot.llm.due import iso
 from llm_trading_bot.llm.openai_client import check_key
-from llm_trading_bot.paper.risk import PAUSE_FIELD, RESUME_FIELD, epoch, parse_resumes
+from llm_trading_bot.paper.risk import PAUSE_FIELD, RESUME_FIELD, parse_resumes, release_problem
 from llm_trading_bot.service.status import ServiceStatus, read_status, status_path
 from llm_trading_bot.web import overview, pages
 from llm_trading_bot.web.auth import (
@@ -181,23 +181,24 @@ class WebApp:
         if not depots:
             return pages.Trading(requested, applied, source)
         resumes, _bad = parse_resumes(values.get(RESUME_FIELD, ""))
+        now = self.wall_clock()
         try:
             with reading(self.db) as con:
                 rows = [d for d in overview.depots(con) if d.halted]
+                # Pending = the service will act on it: same check, read only. An expired or
+                # used-up request shows the button again instead of locking the depot.
+                pending = {
+                    d.agent
+                    for d in rows
+                    if d.agent in resumes
+                    and not release_problem(con, d.agent, resumes[d.agent], now)
+                }
         except DbUnavailable as exc:
             return pages.Trading(requested, applied, source, problem=str(exc))
         except (sqlite3.Error, ValueError, ArithmeticError) as exc:
             problem = f"Datenbank nicht lesbar ({type(exc).__name__})."
             return pages.Trading(requested, applied, source, problem=problem)
-        stopped = tuple(
-            pages.Stopped(
-                d.agent,
-                d.stopped_at,
-                d.agent in resumes
-                and (d.stopped_at is None or resumes[d.agent] > epoch(d.stopped_at)),
-            )
-            for d in rows
-        )
+        stopped = tuple(pages.Stopped(d.agent, d.stopped_at, d.agent in pending) for d in rows)
         return pages.Trading(requested, applied, source, stopped)
 
     def _overview(self, session: Session) -> Response:

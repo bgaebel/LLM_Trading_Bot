@@ -229,6 +229,7 @@ def run_paper_cycle(
     environment does not set; the environment always wins.
     """
     secrets_path = secrets or db.parent / "secrets.env"
+    process_env = env  # read_controls tells a pause set in the environment from one in the file
     try:
         env = {**load_env_file(secrets_path), **env}
         config = load_config(env)
@@ -248,7 +249,7 @@ def run_paper_cycle(
                     costs=costs,
                     model=model,
                     clock=clock,
-                    controls=read_controls(env, secrets_path),
+                    controls=read_controls(process_env, secrets_path),
                 )
             finally:
                 con.close()

@@ -518,3 +518,23 @@ def test_service_pulse_comes_first_in_the_overview(con: sqlite3.Connection) -> N
         "Kurs BTC-EUR",
         "Kurs ETH-EUR",
     ]
+
+
+def test_risk_stop_time_ignores_sales_from_before_the_latest_release(tmp_path: Path) -> None:
+    from llm_trading_bot.paper.risk import epoch, release
+
+    path = tmp_path / "bot.db"
+    con = open_db(path, agents=AGENTS)
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET peak=20000 WHERE agent='gpt-luna'")
+    con.close()
+    write(path, NOW)
+    con = open_db(path, agents=AGENTS)
+    sold = con.execute("SELECT MAX(ts) FROM trades WHERE side='RISK_SELL'").fetchone()[0]
+    assert release(con, "gpt-luna", epoch(sold) + 1, epoch(sold) + 2) == ""
+    with write_tx(con):  # stopped again without a forced sale
+        con.execute("UPDATE portfolios SET halted=1 WHERE agent='gpt-luna'")
+    con.close()
+    with reading(path) as ro:
+        luna = {d.agent: d for d in overview.depots(ro)}["gpt-luna"]
+    assert luna.halted and luna.stopped_at is None

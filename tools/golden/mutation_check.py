@@ -534,6 +534,7 @@ M += [
     (PR, "requested_at > RESUME_MAX_AGE", "requested_at >= RESUME_MAX_AGE", "resume age > -> >="),
     (PR, "requested_at <= epoch(stopped)", "requested_at < epoch(stopped)", "resume after stop"),
     (PR, "stopped is not None and requested_at", "False and requested_at", "resume older stop"),
+    (PR, "released is not None and requested_at", "False and requested_at", "resume used up"),
     (PR, 'if p["btc"] != 0 or p["eth"] != 0:', "if False:", "resume needs no coins"),
     (PR, "halted=0, peak=cash WHERE", "halted=0 WHERE", "resume peak from cash"),
     (PR, "> now_epoch + MAX_FUTURE_SKEW", "> now_epoch + 10 * MAX_FUTURE_SKEW", "resume future"),

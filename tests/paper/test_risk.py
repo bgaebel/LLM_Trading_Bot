@@ -198,3 +198,31 @@ def test_resume_an_old_request_does_not_release_a_later_stop(tmp_path: Path) -> 
         assert mark(con, "trend", cheap, later, Costs()) is not None
     assert release(con, "trend", t + 60, epoch(later) + 60) == "the request is older than the stop"
     assert balance(con, "trend")["halted"] == 1
+
+
+def test_resume_is_used_up_so_a_stop_without_forced_sale_stays(tmp_path: Path) -> None:
+    """Review of Spec 011: a stop right after a sale to zero writes no RISK_SELL. The request
+    that released the previous stop must not lift it."""
+    con = _stopped(tmp_path)
+    t = epoch(STOP_AT)
+    assert release(con, "trend", t + 60, t + 120) == ""
+    marker = con.execute(
+        "SELECT symbol, status, model, reason FROM decisions WHERE agent='trend'"
+    ).fetchall()
+    assert [tuple(r) for r in marker] == [
+        ("DEPOT", "RELEASED", "RISK", "Risikostopp auf Anforderung freigegeben")
+    ]
+    with write_tx(con):  # stopped again, with nothing left to sell
+        con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
+    assert release(con, "trend", t + 60, t + 600) == "the request was already used"
+    assert release(con, "trend", t + 300, t + 600) == ""  # a new request after the release
+
+
+def test_release_problem_only_reads(tmp_path: Path) -> None:
+    from llm_trading_bot.paper.risk import release_problem
+
+    con = _stopped(tmp_path)
+    t = epoch(STOP_AT)
+    before = con.total_changes
+    assert release_problem(con, "trend", t + 60, t + 120) == ""
+    assert con.total_changes == before and balance(con, "trend")["halted"] == 1
