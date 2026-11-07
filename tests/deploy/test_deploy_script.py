@@ -1,8 +1,10 @@
-"""Spec 009 AK6: scripts/deploy.sh sends only a checked commit - real git, stand-ins for gh and ssh.
+"""Spec 009 AK6, Spec 014 AK9: scripts/deploy.sh sends only a checked commit (and the imprint
+only on stdin) - real git, stand-ins for gh and ssh.
 
 Linux only (the CI), like the server script it drives.
 """
 
+import hashlib
 import io
 import os
 import shutil
@@ -235,6 +237,107 @@ def test_public_status_runs_the_release_script_status(local: Local) -> None:
     assert done.returncode == 0, done.stderr
     ((ssh_args, _),) = local.ssh_calls()
     assert ssh_args == ["srv", "sudo bash -s -- status"]
+
+
+# ------------------------------------------------------------------ Spec 014: imprint upload (AK9)
+
+# Stands for the operator's name and address: never in a command line or the output.
+SECRET = "Erika Mustermann, Musterweg 7"
+INCOMING = "/opt/llm-trading-bot/incoming"
+
+
+def imprint(local: Local, data: bytes) -> Path:
+    # Outside the working tree, as the real file is (never in the repository).
+    path = local.work.parent / "impressum.md"
+    path.write_bytes(data)
+    return path
+
+
+def test_impressum_uploads_the_normalised_file_then_installs_it(local: Local) -> None:
+    raw = f"\ufeff# Impressum\r\n\r\n{SECRET}\r\nCafé € kontakt@example.test".encode()
+    expected = f"# Impressum\n\n{SECRET}\nCafé € kontakt@example.test".encode()
+    done = local.run("srv", "botsvc", "impressum", str(imprint(local, raw)))
+    assert done.returncode == 0, done.stderr
+    digest = hashlib.sha256(expected).hexdigest()
+    # Two connections like a release: upload outside the deploy lock, then install under it.
+    (upload_args, uploaded), (run_args, script) = local.ssh_calls()
+    upload = f"sudo install -d -m 700 {INCOMING} && sudo tee {INCOMING}/impressum-{digest}.md"
+    assert upload_args == ["srv", f"{upload} >/dev/null"]
+    assert uploaded == expected  # BOM gone, CRLF -> LF, no newline added
+    assert run_args == ["srv", f"sudo bash -s -- impressum {digest}"]
+    assert script == (REPO / "deploy" / "release.sh").read_bytes()
+    for args in (upload_args, run_args):
+        assert not any(SECRET in a for a in args)
+    assert SECRET not in done.stdout + done.stderr
+    assert f"({len(expected)} B, sha256 {digest[:12]})" in done.stdout
+
+
+def test_impressum_uses_the_release_script_of_the_newest_green_commit(local: Local) -> None:
+    script = local.work / "deploy" / "release.sh"
+    tip = local.commit("deploy/release.sh", script.read_text(encoding="utf-8") + "# tip\n")
+    local.git("push", "-q", "origin", "main")
+    (local.state / f"ci-{tip}").write_text("0\n", encoding="utf-8")
+    done = local.run("srv", "botsvc", "impressum", str(imprint(local, b"# Impressum\n\nx\n")))
+    assert done.returncode == 0, done.stderr
+    (_, (_, sent)) = local.ssh_calls()
+    assert sent == (REPO / "deploy" / "release.sh").read_bytes() and b"# tip" not in sent
+
+
+def test_impressum_accepts_the_limit_after_normalising(local: Local) -> None:
+    data = b"abc\r\n" * 4096  # 20480 B as written, 16384 B once CRLF is LF
+    done = local.run("srv", "botsvc", "impressum", str(imprint(local, data)))
+    assert done.returncode == 0, done.stderr
+    assert local.ssh_calls()[0][1] == b"abc\n" * 4096
+
+
+@pytest.mark.parametrize(
+    ("data", "reason"),
+    [
+        (b"x" * 16385, "too big"),
+        (b"caf\xe9\n", "not UTF-8"),
+        (b"a \xc0\xaf\n", "not UTF-8"),  # overlong form of "/"
+        (b"a \xed\xa0\x80\n", "not UTF-8"),  # a surrogate
+        (b"# Impressum\n\x00\n", "NUL"),
+        (b"", "empty"),
+        (b"\xef\xbb\xbf \r\n\t\n", "empty"),
+        (b"# Impressum\n\n__OPERATOR_NAME__\n", "placeholders"),
+        (b"- E-Mail: kontakt@<domain>\n", "placeholders"),
+    ],
+    ids=[
+        "too-big",
+        "latin-1",
+        "overlong",
+        "surrogate",
+        "nul",
+        "empty",
+        "blank",
+        "placeholder",
+        "domain",
+    ],
+)
+def test_impressum_refuses_an_invalid_file_before_any_connection(
+    local: Local, data: bytes, reason: str
+) -> None:
+    done = local.run("srv", "botsvc", "impressum", str(imprint(local, data)))
+    assert done.returncode != 0 and reason in done.stderr, done.stderr
+    assert local.ssh_calls() == []
+    assert not (local.state / "gh").exists()  # not even GitHub was asked
+
+
+def test_impressum_example_is_refused_unfilled(local: Local) -> None:
+    done = local.run("srv", "botsvc", "impressum", str(REPO / "deploy" / "impressum.example.md"))
+    assert done.returncode != 0 and "placeholders" in done.stderr
+    assert local.ssh_calls() == []
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["impressum"], ["impressum", "a.md", "b.md"], ["impressum", "missing.md"], ["impressum", "."]],
+    ids=["no-file", "two-files", "missing", "directory"],
+)
+def test_impressum_argument_checks(local: Local, args: list[str]) -> None:
+    assert local.run("srv", "botsvc", *args).returncode != 0
+    assert local.ssh_calls() == []
 
 
 def test_deploy_refuses_when_origin_cannot_be_fetched(local: Local) -> None:
