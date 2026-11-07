@@ -8,7 +8,8 @@
 ## M1 – Paper-Bot 24/7 auf Hetzner 🔄
 **Ziel:** Eine aus der Arena übernommene Strategie handelt BTC/EUR und ETH/EUR im Paper-Modus auf dem
 Hetzner-Server; Status ist per SSH-Tunnel sichtbar.
-**Fertig, wenn:** Der Bot läuft ≥ 7 Tage ununterbrochen auf dem CX23, übersteht einen Reboot ohne doppelte
+**Fertig, wenn:** Der Bot läuft ≥ 7 Tage ununterbrochen auf dem CX23 (gezählt ab dem letzten Deploy, Nutzer
+2026-11-08), übersteht einen Reboot ohne doppelte
 Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft, CI ist grün.
 
 | # | Feature / Aufgabe | Spec | Issue |
@@ -29,6 +30,13 @@ Tagesverlust), Not-Aus und Abgleich mit dem Kontostand. Start erst nach angenomm
 
 ## M3 – Auswertung und Ausbau ⬜
 **Ziel:** Performance-Bericht gegen Buy & Hold, Benachrichtigung bei Ausfall, weitere Strategien aus der Arena.
+
+| # | Feature / Aufgabe | Spec | Issue |
+|---|---|---|---|
+| L1 | Strategie-Labor I: Live-Aufzeichnung in der Beobachtungs-DB (zuerst: geht täglich verloren) | [015](specs/015-live-aufzeichnung.md) | – |
+| L2 | Strategie-Labor II: Kerzenarchiv, Backtest mit dem Live-Code, Basisbericht v0.3.1 | [016](specs/016-backtest-baseline.md) | – |
+| L3 | Strategie-Labor III: Auswertung der Live-Signale (ab ≥ 4 Wochen Aufzeichnung) | [017](specs/017-signal-auswertung.md) | – |
+| L4 | Strategie-Labor IV: Kandidaten, Prüfhürden, Schatten-Depots | [018](specs/018-strategie-kandidaten.md) | – |
 
 ## Ideen / später
 - Externe Backups auf eine Hetzner Storage Box.
