@@ -111,11 +111,42 @@ def test_sell_signal_without_position_does_not_trade(con: sqlite3.Connection) ->
     assert [(m.action, m.traded) for m in report.markets] == [("SELL", False), ("SELL", False)]
 
 
-def test_halted_portfolio_takes_no_new_decision(con: sqlite3.Connection) -> None:
+def test_halted_portfolio_takes_no_decision_and_is_no_error(con: sqlite3.Connection) -> None:
     con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
     report = paper_cycle(con, ScenarioClient(), TREND, costs=Costs(), clock=lambda: NOW)
-    assert all(m.error == "portfolio halted" for m in report.markets)
+    assert [(m.status, m.error) for m in report.markets] == [("HALTED", ""), ("HALTED", "")]
+    # ADR-0021: a stopped depot must not keep the service degraded (deploy would roll back).
+    assert report.complete and not report.risk_stops
     assert con.execute("SELECT COUNT(*) FROM decisions WHERE agent='trend'").fetchone()[0] == 0
+    assert [e.agent for e in report.equity] == ["trend", BUYHOLD]
+
+
+def test_halted_by_a_trade_in_the_cycle_is_reported_once(con: sqlite3.Connection) -> None:
+    # A peak far above the equity: the first trade's mark triggers the stop.
+    con.execute("UPDATE portfolios SET peak=20000 WHERE agent='trend'")
+    client = ScenarioClient()
+    report = paper_cycle(con, client, TREND, costs=Costs(), clock=lambda: NOW)
+    btc, eth = report.markets
+    assert (btc.status, btc.traded) == ("OK", True)
+    assert (eth.status, eth.error) == ("HALTED", "")
+    assert [(s.agent, s.peak) for s in report.risk_stops] == [("trend", 20000.0)]
+    assert report.complete
+    sides = [r[0] for r in con.execute("SELECT side FROM trades WHERE agent='trend' ORDER BY id")]
+    assert sides == ["BUY", "RISK_SELL"]
+    again = paper_cycle(con, client, TREND, costs=Costs(), clock=lambda: NOW + 60)
+    assert not again.risk_stops and again.complete
+    assert {m.status for m in again.markets} <= {"HALTED", "OK"}
+
+
+def test_halted_by_the_final_valuation_is_reported(con: sqlite3.Connection) -> None:
+    client = ScenarioClient()
+    paper_cycle(con, client, TREND, costs=Costs(), clock=lambda: NOW)
+    # Same bar again: nothing to decide, so only the final valuation can stop the depot.
+    con.execute("UPDATE portfolios SET peak=20000 WHERE agent='trend'")
+    report = paper_cycle(con, client, TREND, costs=Costs(), clock=lambda: NOW + 5)
+    assert all(not m.new for m in report.markets)
+    assert [s.agent for s in report.risk_stops] == ["trend"]
+    assert report.complete
 
 
 def test_strategy_failure_in_btc_does_not_block_eth(

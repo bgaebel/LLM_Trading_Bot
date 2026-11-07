@@ -57,6 +57,10 @@ class DepotRow:
     pnl_pct: float
     vs_buyhold_pp: float | None
     """Percentage points ahead of (positive) or behind Buy & Hold; None for Buy & Hold itself."""
+    from_peak_pct: float = 0.0
+    """Equity against the depot's all-time peak in percent (<= 0); ADR-0021 stops at -10 %."""
+    stopped_at: str | None = None
+    """Time of the depot's latest RISK_SELL (the stop); None if it never had one."""
 
     @property
     def reference(self) -> bool:
@@ -65,7 +69,8 @@ class DepotRow:
 
 def depots(con: sqlite3.Connection) -> list[DepotRow]:
     rows = con.execute(
-        "SELECT p.agent, p.halted, p.cash AS p_cash, p.btc AS p_btc, p.eth AS p_eth,"
+        "SELECT p.agent, p.halted, p.peak, p.cash AS p_cash, p.btc AS p_btc, p.eth AS p_eth,"
+        " (SELECT MAX(ts) FROM trades WHERE agent=p.agent AND side='RISK_SELL') AS stopped_at,"
         " e.ts, e.value, e.cash, e.btc, e.eth FROM portfolios p"
         " LEFT JOIN equity e ON e.id = (SELECT id FROM equity WHERE agent=p.agent"
         " ORDER BY ts DESC, id DESC LIMIT 1)"
@@ -82,9 +87,22 @@ def depots(con: sqlite3.Connection) -> list[DepotRow]:
     for agent, value, cash, btc, eth, at, r in raw:
         pct = (value / START_CASH - 1) * 100
         vs = None if agent == BUYHOLD or bench_pct is None else pct - bench_pct
+        peak = r["peak"]
         out.append(
             DepotRow(
-                agent, value, cash, btc, eth, at, bool(r["halted"]), value - START_CASH, pct, vs
+                agent,
+                value,
+                cash,
+                btc,
+                eth,
+                at,
+                bool(r["halted"]),
+                value - START_CASH,
+                pct,
+                vs,
+                # The peak includes the latest point (mark updates both), so this is <= 0.
+                (value / peak - 1) * 100 if peak > 0 else 0.0,
+                r["stopped_at"],
             )
         )
     # Trading depots first (alphabetical), the benchmark last as the reference line.

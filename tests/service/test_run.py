@@ -192,6 +192,30 @@ def test_failing_round_is_logged_reported_and_the_next_round_runs(tmp_path: Path
     assert (final.state, final.failures, final.last_result) == ("stopped", 0, "ok")
 
 
+def test_risk_stop_is_logged_once(tmp_path: Path) -> None:
+    """Spec 011 AK3: a stopped depot is no failure - the service keeps running, rounds stay ok."""
+    states: list[tuple[str, int, str | None]] = []
+
+    def stopping(con: sqlite3.Connection, client: Any, config: Any, **kw: Any) -> CycleReport:
+        if not states and not con.execute("SELECT 1 FROM equity").fetchone():
+            con.execute("UPDATE portfolios SET peak=20000 WHERE agent='trend'")
+        status = read_status(status_path(h.db))
+        assert status is not None
+        states.append((status.state, status.failures, status.last_result))
+        return paper_cycle(con, client, config, **kw)
+
+    h = harness(tmp_path, limit=3, action=stopping)
+    assert h.service.run() == EXIT_OK
+    stops = [line for line in h.log().splitlines() if "risk stop" in line]
+    assert len(stops) == 1
+    assert stops[0].startswith("WARNING risk stop trend: equity ")
+    assert "below 90 % of its peak 20000.00 EUR - sold out and halted" in stops[0]
+    assert states[1:] == [("running", 0, "ok"), ("running", 0, "ok")]
+    assert "no decision" not in h.log()
+    with reading(h.db) as ro:
+        assert ro.execute("SELECT halted FROM portfolios WHERE agent='trend'").fetchone()[0] == 1
+
+
 def test_failing_round_without_quotes_counts_as_degraded(tmp_path: Path) -> None:
     client = MovingClient()
     client.fail_quotes = True

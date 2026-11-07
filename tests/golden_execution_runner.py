@@ -103,7 +103,7 @@ class BotRunner:
         if kind == "mark":
             assert qs is not None
             with write_tx(con):
-                mark(con, op["agent"], qs, op["now"])
+                mark(con, op["agent"], qs, op["now"], costs)
             return None
         raise ValueError(kind)
 

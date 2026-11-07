@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from llm_trading_bot.llm.budget import Usage
 from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.paper.execution import RiskStop
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,8 @@ class MarketResult:
     action: str = ""
     target: float = 0.0
     status: str = ""
+    """Decision status (OK, STALE_QUOTE, ...) or HALTED: the depot is stopped, which is no error
+    (ADR-0021) - otherwise the service would stay degraded until the depot is released."""
     traded: bool = False
     reason: str = ""
     error: str = ""
@@ -58,6 +61,8 @@ class CycleReport:
     markets: list[MarketResult] = field(default_factory=list)
     llm: list[LlmOutcome] = field(default_factory=list)
     equity: list[Equity] = field(default_factory=list)
+    risk_stops: list[RiskStop] = field(default_factory=list)
+    """Drawdown stops triggered in this cycle (each depot stops once until it is released)."""
 
     @property
     def complete(self) -> bool:

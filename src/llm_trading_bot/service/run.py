@@ -25,7 +25,7 @@ from llm_trading_bot.llm.openai_client import SignalModel
 from llm_trading_bot.market.snapshot import MarketClient
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import SchemaError, ensure_portfolios, open_db
-from llm_trading_bot.paper.execution import BUYHOLD, Costs
+from llm_trading_bot.paper.execution import BUYHOLD, DRAWDOWN_KILL, Costs
 from llm_trading_bot.paper.lock import WriterLock, WriterLockBusy
 from llm_trading_bot.paper.report import CycleReport
 from llm_trading_bot.service.logs import redact
@@ -384,6 +384,17 @@ class Service:
                 )
             elif m.error:
                 self.log.warning("%s %s: no decision - %s", m.agent, m.symbol.market, m.error)
+        for stop in report.risk_stops:
+            # ADR-0021: the Arena writes an ALERT log row; here the journal is the log. A stopped
+            # depot stays halted, so this appears once per stop.
+            self.log.warning(
+                "risk stop %s: equity %.2f EUR below %.0f %% of its peak %.2f EUR - sold out"
+                " and halted until released in the web UI",
+                stop.agent,
+                stop.equity,
+                (1 - DRAWDOWN_KILL) * 100,
+                stop.peak,
+            )
         if report.buyhold_bought:
             # The benchmark buys once per market; its trades are not part of report.markets.
             self.log.info(

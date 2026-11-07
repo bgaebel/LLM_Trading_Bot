@@ -466,6 +466,37 @@ def test_halted_depot_is_not_asked(con: sqlite3.Connection) -> None:
     assert [c["model"] for c in model.calls] == ["gpt-6.1-sol"]
 
 
+def test_halted_depot_costs_nothing_and_is_no_error(con: sqlite3.Connection) -> None:
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET halted=1 WHERE agent='gpt-luna'")
+    report = cycle(con, FakeModel())
+    luna = by_agent(report)["gpt-luna"]
+    assert (luna.status, luna.cost_eur, luna.attempt_id) == ("HALTED", None, None)
+    assert [c["agent"] for c in calls(con)] == ["gpt-sol"]
+    assert report.complete
+
+
+def test_halted_in_the_middle_of_an_answer_stores_but_does_not_trade_eth(
+    con: sqlite3.Connection,
+) -> None:
+    # The BTC trade's mark triggers the stop (peak far above); the ETH decision of the same
+    # answer is stored, but not traded - like the Arena (record_decision reads halted again).
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET peak=20000 WHERE agent='gpt-luna'")
+    report = cycle(con, FakeModel())
+    luna = decisions(report, "gpt-luna")
+    assert (luna[Symbol.BTCEUR].status, luna[Symbol.BTCEUR].traded) == ("OK", True)
+    assert (luna[Symbol.ETHEUR].status, luna[Symbol.ETHEUR].traded) == ("OK", False)
+    assert luna[Symbol.ETHEUR].new and luna[Symbol.ETHEUR].action != "HOLD"
+    assert [s.agent for s in report.risk_stops] == ["gpt-luna"]
+    sides = [
+        (r[0], r[1])
+        for r in con.execute("SELECT symbol, side FROM trades WHERE agent='gpt-luna' ORDER BY id")
+    ]
+    assert sides == [("BTCEUR", "BUY"), ("BTCEUR", "RISK_SELL")]
+    assert report.complete
+
+
 # ------------------------------------------------------------------ review follow-ups
 
 

@@ -26,6 +26,7 @@ from llm_trading_bot.paper.execution import (
     BUYHOLD,
     Costs,
     Quotes,
+    RiskStop,
     current_weight,
     initialize_buyhold,
     latest_quotes,
@@ -57,6 +58,7 @@ def _decide(
     qs: Quotes,
     costs: Costs,
     now: str,
+    stops: list[RiskStop],
 ) -> MarketResult:
     """At most one decision per new closed bar of the agent's own timeframe."""
     symbol = snap.symbol
@@ -69,13 +71,24 @@ def _decide(
         return decision_result(con, agent, symbol, bar_ts, False)
     p = balance(con, agent)
     if p["halted"]:
-        return MarketResult(agent, symbol, bar_ts, error="portfolio halted")
+        # Arena quant_cycle: a stopped depot takes no decision. ADR-0021: not an error.
+        return MarketResult(agent, symbol, bar_ts, status="HALTED", reason="drawdown stop")
     weight = current_weight(p, symbol, qs)
     ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage))
     sig = run_strategy(agent, snap, ind, weight)
     context = feature_payload(snap, ind, weight, costs.fee_rate, costs.slippage)
     new = record_decision(
-        con, agent, symbol, bar_ts, agent.upper(), sig, context, costs=costs, now=now, qs=qs
+        con,
+        agent,
+        symbol,
+        bar_ts,
+        agent.upper(),
+        sig,
+        context,
+        costs=costs,
+        now=now,
+        qs=qs,
+        stops=stops,
     )
     return decision_result(con, agent, symbol, bar_ts, new)
 
@@ -139,7 +152,7 @@ def paper_cycle(
                 )
                 continue
             try:
-                report.markets.append(_decide(con, snap, agent, qs, costs, now))
+                report.markets.append(_decide(con, snap, agent, qs, costs, now, report.risk_stops))
             except Exception as exc:
                 # CLAUDE.md: a BTC failure never blocks ETH. record_decision rolled back its own
                 # transaction; the error stays visible in the report and the exit code.
@@ -172,6 +185,7 @@ def paper_cycle(
             costs,
             refresh_quotes=refresh,
             clock=clock,
+            stops=report.risk_stops,
         ):
             report.llm.append(outcome)
             report.markets.extend(results)
@@ -180,7 +194,8 @@ def paper_cycle(
     latest = latest_quotes(con, now_epoch=clock()) or qs
     with write_tx(con):
         for name in names:
-            mark(con, name, latest, now)
+            if (stop := mark(con, name, latest, now, costs)) is not None:
+                report.risk_stops.append(stop)
     for name in names:
         p = balance(con, name)
         report.equity.append(Equity(name, value(p, latest), p["cash"], p["btc"], p["eth"]))

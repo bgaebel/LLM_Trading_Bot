@@ -1,6 +1,6 @@
 # Spec 011: Risiko-Grenzen und Fail-closed
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s011-risiko` · **Meilenstein:** M1 (Nr. 4)
 - **Erstellt:** 2026-11-07
 
@@ -115,8 +115,8 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
 - Verworfen: siehe ADR-0021.
 
 ## Plan
-- [ ] 1. ADR-0021 annehmen; `mark` mit Stopp, Drawdown-Goldens aus Arena-Code, Grenzfälle, Mutationen (AK1, AK2)
-- [ ] 2. Gestoppt ohne Fehler, Meldung und Log, Übersicht mit Abstand zum Hoch und Risikostopp (AK3, AK4)
+- [x] 1. ADR-0021 annehmen; `mark` mit Stopp, Drawdown-Goldens aus Arena-Code, Grenzfälle, Mutationen (AK1, AK2)
+- [x] 2. Gestoppt ohne Fehler, Meldung und Log, Übersicht mit Abstand zum Hoch und Risikostopp (AK3, AK4)
 - [ ] 3. Kurse je Markt und Kursalter (AK7, AK8); Goldens und Mutationstest erneut
 - [ ] 4. Handelspause und Wiederfreigabe: Konfiguration, Dienst, Statusdatei, Weboberfläche (AK5, AK6)
 - [ ] 5. Doku, Prüfung (Workflow), PR (AK10)
@@ -138,6 +138,11 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
   vollständig (`not halted`, `peak > 0`), gestoppt darf kein Rundenfehler sein (sonst dauerhaft `degraded` und
   Deploy-Rollback), Handelspause fail-closed, Kurse je Markt ohne Änderung der Arena-Pfade, Drawdown-Goldens in
   eigener Datei, Wiederfreigabe über die Weboberfläche statt per Befehl, Abstand zum Hoch in der Übersicht.
+- 2026-11-07: Schritte 1 und 2 in einem Commit (`paper/cycle.py` gehört zu beiden). Drawdown-Goldens:
+  16 benannte Fälle, 36 Fuzz-Blöcke (Stopp/kein Stopp je Modus), 24 Läufe (22 mit Stopp); `--check`: alte
+  Fixture bytegleich. Mutation `peak > 0` ist äquivalent (Peak ≥ Equity ≥ 0, Cash nie negativ) und als solche
+  vermerkt; alle übrigen 12 Stopp-Mutationen werden erkannt. Der Zwangsverkauf setzt den Bestand wie die Arena
+  auf 0 – Restmengen entstehen nur bei normalen Verkäufen.
 
 ## Ergebnis
 - **Erreicht:** …

@@ -36,6 +36,9 @@ EQUIVALENT = {
     "exec total room floor",
     # - llm confidence finite: NaN and +-inf already fail 0 <= x <= 1 (Spec 005).
     "llm confidence finite",
+    # - risk peak > 0: peak = max(eq, peak) >= eq >= 0 (cash never goes negative), so with
+    #   peak == 0 the stop test is 0 < 0 either way (Spec 011).
+    "risk peak > 0",
 }
 
 M = [
@@ -272,7 +275,40 @@ M += [
         "exec duplicate bar replaces",
     ),
     (E, 'peak = max(eq, p["peak"])', "peak = eq", "exec peak keeps max"),
-    (E, "            mark(con, agent, qs, now)\n", "", "exec mark after trade"),
+    (
+        E,
+        "            stop = mark(con, agent, qs, now, costs)\n",
+        "            stop = None\n",
+        "exec mark after trade",
+    ),
+    # Spec 011 (ADR-0021): the drawdown stop.
+    (E, "DRAWDOWN_KILL = 0.10", "DRAWDOWN_KILL = 0.11", "risk kill .10->.11"),
+    (E, "eq < peak * (1 - DRAWDOWN_KILL)", "eq <= peak * (1 - DRAWDOWN_KILL)", "risk < -> <="),
+    (E, 'and not p["halted"] and peak > 0', "and peak > 0", "risk halted once"),
+    (E, 'if agent != BUYHOLD and not p["halted"]', 'if not p["halted"]', "risk buyhold exempt"),
+    (E, "and peak > 0 and eq <", "and eq <", "risk peak > 0"),
+    (E, "SET halted=1 WHERE", "SET halted=0 WHERE", "risk sets halted"),
+    (
+        E,
+        "fill = qs[symbol].bid * (1 - costs.slippage)",
+        "fill = qs[symbol].mid * (1 - costs.slippage)",
+        "risk sell at bid",
+    ),
+    (
+        E,
+        "fill = qs[symbol].bid * (1 - costs.slippage)",
+        "fill = qs[symbol].bid * (1 - costs.fee_rate)",
+        "risk sell slippage",
+    ),
+    (E, "fee = gross * costs.fee_rate", "fee = 0.0", "risk sell fee"),
+    (E, "            if qty <= 0:\n", "            if qty < 0:\n", "risk skips empty market"),
+    (E, "cash=cash+?,{col}=0 WHERE", "cash=cash+?,{col}={col}*1e-9 WHERE", "risk sells all"),
+    (
+        E,
+        "        p = balance(con, agent)\n        eq = value(p, qs)\n    con.execute(",
+        "    con.execute(",
+        "risk equity after sale",
+    ),
     (
         E,
         '(BUYHOLD, symbol.name, "BUY")',

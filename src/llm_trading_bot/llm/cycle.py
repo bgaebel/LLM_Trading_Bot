@@ -46,6 +46,7 @@ from llm_trading_bot.paper.db import balance
 from llm_trading_bot.paper.execution import (
     Costs,
     Quotes,
+    RiskStop,
     current_weight,
     latest_quotes,
     record_decision,
@@ -204,6 +205,7 @@ def _finish(
     fresh: Quotes | None,
     costs: Costs,
     clock: Callable[[], float],
+    stops: list[RiskStop] | None = None,
 ) -> tuple[LlmOutcome, list[MarketResult]]:
     agent, attempt_id, pricing = prepared.agent, prepared.attempt_id, prepared.pricing
     if prepared.error is not None or prepared.reply is None:
@@ -285,6 +287,9 @@ def _finish(
             now=iso(decided_at),
             qs=None if stale else fresh,
             status="STALE_QUOTE" if stale else "OK",
+            # A BTC trade may trigger the stop: the ETH decision is then stored but not traded,
+            # because record_decision reads the halted flag in its own transaction (Arena).
+            stops=stops,
         )
         results.append(decision_result(con, agent.name, s, bar_ts, new, attempt=attempt_id))
     regimes = {s: a.regime for s, a in answers.items()}
@@ -311,6 +316,7 @@ def run_llm_depots(
     *,
     refresh_quotes: Callable[[], Quotes | None],
     clock: Callable[[], float] = time.time,
+    stops: list[RiskStop] | None = None,
 ) -> list[tuple[LlmOutcome, list[MarketResult]]]:
     """All GPT depots of one cycle; one depot's failure never blocks another (ADR-0012)."""
     now_epoch = clock()
@@ -338,7 +344,7 @@ def run_llm_depots(
             fresh = None
         for p in prepared:
             try:
-                done[p.agent.name] = _finish(con, p, fresh, costs, clock)
+                done[p.agent.name] = _finish(con, p, fresh, costs, clock, stops)
             except Exception as exc:
                 done[p.agent.name] = (_outcome(p.agent, "ERROR", type(exc).__name__), [])
     return [done[a.name] for a in agents]

@@ -1,5 +1,5 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/arena.py (adapted) - fee_rate, slip_rate, value,
-#   current_weight, trade_to_target, mark_and_risk (without the drawdown stop),
+#   current_weight, trade_to_target, mark_and_risk (drawdown log row -> RiskStop),
 #   record_live_quotes (without ticks and risk), latest_quotes
 # Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (adapted) - update_market (live branch)
 # Origin: LLM-Trading-Arena@7563724 apps/arena/engine03.py (adapted) - record_decision,
@@ -32,6 +32,8 @@ REASON_MAX = 550
 BUYHOLD = "buyhold"
 # Older quotes no longer describe the price a virtual order would get (Arena quant_cycle: 20 s).
 QUOTE_MAX_AGE = 20
+# ADR-0021: the Arena's stop - a depot 10 % below its equity peak is sold out and halted.
+DRAWDOWN_KILL = 0.10
 
 Quotes = Mapping[Symbol, Quote]
 _COLUMN = {Symbol.BTCEUR: "btc", Symbol.ETHEUR: "eth"}
@@ -56,6 +58,16 @@ class Costs:
             float(env.get("TAKER_FEE", repr(ARENA_TAKER_FEE))),
             float(env.get("SLIPPAGE", repr(ARENA_SLIPPAGE))),
         )
+
+
+@dataclass(frozen=True)
+class RiskStop:
+    """A drawdown stop that ``mark`` just triggered (the Arena writes an ALERT log row instead)."""
+
+    agent: str
+    equity: float  # before the forced sale
+    peak: float
+    at: str
 
 
 def value(p: Mapping[str, Any], qs: Quotes) -> float:
@@ -126,20 +138,48 @@ def trade_to_target(
     )
 
 
-def mark(con: sqlite3.Connection, agent: str, qs: Quotes, now: str) -> None:
-    """Update the equity peak and store one equity point per agent and timestamp.
+def mark(
+    con: sqlite3.Connection, agent: str, qs: Quotes, now: str, costs: Costs
+) -> RiskStop | None:
+    """Update the peak, enforce the drawdown stop and store one equity point per timestamp.
 
-    The Arena's mark_and_risk also enforces the 10 % drawdown stop; that is M1 Nr. 4 and not
-    ported yet (Spec 004). ``halted`` is only read here. Caller holds write_tx.
+    ADR-0021: the Arena's mark_and_risk. Below ``peak * (1 - DRAWDOWN_KILL)`` (mid valuation)
+    every depot except buy & hold is halted and sold out at ``bid * (1 - slippage)``, even
+    below MIN_TRADE_EUR; the depot is never released here. Caller holds write_tx.
     """
     p = balance(con, agent)
     eq = value(p, qs)
     peak = max(eq, p["peak"])
     con.execute("UPDATE portfolios SET peak=? WHERE agent=?", (peak, agent))
+    stop = None
+    if agent != BUYHOLD and not p["halted"] and peak > 0 and eq < peak * (1 - DRAWDOWN_KILL):
+        con.execute("UPDATE portfolios SET halted=1 WHERE agent=?", (agent,))
+        stop = RiskStop(agent, eq, peak, now)
+        for symbol in SYMBOLS:
+            p = balance(con, agent)
+            col = _COLUMN[symbol]
+            qty = p[col]
+            if qty <= 0:
+                continue
+            fill = qs[symbol].bid * (1 - costs.slippage)
+            gross = qty * fill
+            fee = gross * costs.fee_rate
+            con.execute(
+                f"UPDATE portfolios SET cash=cash+?,{col}=0 WHERE agent=?", (gross - fee, agent)
+            )
+            con.execute(
+                "INSERT INTO trades(ts,agent,symbol,side,qty,fill,notional,fee,slip_rate,"
+                "decision_id)"
+                " VALUES (?,?,?,?,?,?,?,?,?,NULL)",
+                (now, agent, symbol.name, "RISK_SELL", qty, fill, gross, fee, costs.slippage),
+            )
+        p = balance(con, agent)
+        eq = value(p, qs)
     con.execute(
         "INSERT OR REPLACE INTO equity(ts,agent,value,cash,btc,eth) VALUES (?,?,?,?,?,?)",
         (now, agent, eq, p["cash"], p["btc"], p["eth"]),
     )
+    return stop
 
 
 def record_decision(
@@ -155,11 +195,12 @@ def record_decision(
     now: str,
     qs: Quotes | None,
     status: str = "OK",
+    stops: list[RiskStop] | None = None,
 ) -> bool:
     """Persist one decision and its virtual trade atomically; False if the bar was decided.
 
     Fails closed: without fresh quotes of both markets the decision is stored as STALE_QUOTE
-    and nothing is traded.
+    and nothing is traded. A drawdown stop the trade triggers is appended to ``stops``.
     """
     with write_tx(con):
         p = balance(con, agent)
@@ -206,7 +247,9 @@ def record_decision(
             trade_to_target(
                 con, agent, symbol, target, qs, cursor.lastrowid, costs, executed_at=now
             )
-            mark(con, agent, qs, now)
+            stop = mark(con, agent, qs, now, costs)
+            if stop is not None and stops is not None:
+                stops.append(stop)
         return inserted
 
 
