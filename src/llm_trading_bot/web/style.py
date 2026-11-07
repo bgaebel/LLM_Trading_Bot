@@ -218,6 +218,10 @@ input[type=checkbox]:focus-visible { outline: 2px solid var(--cyan); outline-off
   font: 13px/1.4 var(--mono); }
 .keystate .led { color: var(--lime); }
 .keystate.off .led { color: var(--amber); }
+form.inline { display: inline-block; margin: 10px 0 0; }
+.stopped { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.stopped li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.stopped form.inline { margin: 0; }
 
 /* depot tiles */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }

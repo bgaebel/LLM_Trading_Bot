@@ -12,7 +12,14 @@ from urllib.parse import quote as url_quote
 from urllib.parse import urlencode
 
 from llm_trading_bot.market.http import HTTPFailure, Transport, UrllibTransport
-from llm_trading_bot.market.models import SYMBOLS, Candle, MarketDataError, Quote, Symbol
+from llm_trading_bot.market.models import (
+    SYMBOLS,
+    Candle,
+    MarketDataError,
+    Quote,
+    QuoteBook,
+    Symbol,
+)
 
 API = "https://api.bitvavo.com/v2"
 # Interval in minutes -> Bitvavo interval name.
@@ -57,34 +64,41 @@ class BitvavoClient:
                     self._not_before = max(self._not_before, self._monotonic() + delay)
             raise
 
-    def quotes(self) -> dict[Symbol, Quote]:
+    def quotes(self) -> QuoteBook:
         """Best bid/ask for all markets from a single request.
 
-        Both markets come from one response, so a broken quote fails both (as in the Arena).
+        Spec 011 AK7 (ADR-0021): unlike the Arena, a broken, conflicting or missing quote costs
+        only its own market - the book holds the valid ones and names the others in ``errors``.
+        Only an unreadable response as a whole fails both.
         """
         data = self._get("/ticker/book")
         if not isinstance(data, list):
             raise MarketDataError("ticker/book: unexpected response format")
         by_market = {symbol.market: symbol for symbol in SYMBOLS}
         result: dict[Symbol, Quote] = {}
+        errors: dict[Symbol, str] = {}
         for item in data:
             if not isinstance(item, dict):
                 continue
             symbol = by_market.get(item.get("market"))  # type: ignore[arg-type]
-            if symbol is None:
+            if symbol is None or symbol in errors:
                 continue
             try:
                 quote = Quote(float(item["bid"]), float(item["ask"]))
-            except (KeyError, TypeError, ValueError) as exc:
-                raise MarketDataError(f"ticker/book: unreadable quote for {symbol.market}") from exc
-            quote.validate()
+                quote.validate()
+            except (KeyError, TypeError, ValueError) as exc:  # MarketDataError is a ValueError
+                errors[symbol] = f"ticker/book: unusable quote ({exc})"
+                result.pop(symbol, None)
+                continue
             if symbol in result and result[symbol] != quote:
-                raise MarketDataError(f"ticker/book: conflicting duplicate for {symbol.market}")
+                errors[symbol] = "ticker/book: conflicting duplicate"
+                del result[symbol]
+                continue
             result[symbol] = quote
-        missing = [s.market for s in SYMBOLS if s not in result]
-        if missing:
-            raise MarketDataError(f"ticker/book: missing markets {', '.join(missing)}")
-        return result
+        for s in SYMBOLS:
+            if s not in result and s not in errors:
+                errors[s] = "ticker/book: missing"
+        return QuoteBook(result, errors)
 
     def closed_candles(
         self, symbol: Symbol, interval: int, *, now_epoch: int

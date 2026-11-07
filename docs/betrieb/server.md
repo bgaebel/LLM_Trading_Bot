@@ -112,8 +112,28 @@ bash scripts/deploy.sh <alias> <dienst> rollback
 bash scripts/deploy.sh <alias> <dienst> status
 ```
 
+### Risikostopp, Freigabe und Handelspause (Spec 011, ADR-0021)
+Alles über die Weboberfläche, Seite **Einstellungen**, Bereich „Handel & Risikostopp“ – kein Befehl auf dem Server.
+
+- **Risikostopp:** Fällt ein Depot 10 % unter seinen Höchststand, verkauft der Bot dessen Coins (`RISK_SELL`) und
+  stoppt es. Die Übersicht zeigt je Depot den Abstand zum Hoch und „Risikostopp seit …“. Im Journal steht genau
+  eine Zeile `WARNING risk stop <depot>: equity … below 90 % of its peak …`. Ein gestopptes Depot ist kein Fehler,
+  der Dienst bleibt `running`.
+- **Wieder freigeben:** Knopf neben dem gestoppten Depot. Der Dienst gibt es in der nächsten Runde frei (Journal:
+  `risk stop <depot> released on request`); sein Bargeld wird der neue Höchststand. Die Anforderung gilt 24 h und
+  nur für den Stopp, nach dem sie gestellt wurde.
+- **Handel pausieren:** Schalter als Not-Aus. Ab der nächsten Runde (≤ 1 min) kauft und verkauft kein Depot mehr,
+  GPT wird nicht gefragt; nur der Risikostopp verkauft weiter, bewertet wird weiter. Die Übersicht zeigt „Handel
+  pausiert“. Im Zweifel gilt Pause: Ist `secrets.env` unlesbar oder `BOT_PAUSED` weder `1` noch `0`, pausiert der
+  Dienst mit Warnung. Ein `Environment=BOT_PAUSED=…` im Drop-in gewinnt über den Schalter (die Seite sagt das).
+- Vor dem ersten Deploy mit Spec 011 prüfen, ob ein Depot schon > 10 % unter seinem Hoch liegt – es würde in der
+  ersten Runde verkauft und gestoppt:
+```bash
+ssh <alias> 'sudo runuser -u <dienst> -- python3 -c "import sqlite3; c=sqlite3.connect(\"file:/var/lib/llm-trading-bot/bot.db?mode=ro\", uri=True); [print(a, round((v/p-1)*100, 2)) for a, p, v in c.execute(\"SELECT p.agent, p.peak, (SELECT value FROM equity e WHERE e.agent=p.agent ORDER BY ts DESC LIMIT 1) FROM portfolios p\") if v]"'
+```
+
 ### Variablen außerhalb von `secrets.env`
-In `secrets.env` stehen nur Key, Depots, Effort und Budgets (Weboberfläche). Gebühren, Takt-Parameter oder
+In `secrets.env` stehen nur Key, Depots, Effort, Budgets sowie Handelspause und Freigaben (Weboberfläche). Gebühren, Takt-Parameter oder
 `LOG_LEVEL` setzt man per Drop-in; ein Update ändert Drop-ins nie (es prüft das sogar):
 ```bash
 ssh -t <alias> 'sudo systemctl edit llm-trading-bot'

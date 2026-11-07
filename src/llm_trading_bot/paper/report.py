@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from llm_trading_bot.llm.budget import Usage
 from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.paper.execution import RiskStop
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,8 @@ class MarketResult:
     action: str = ""
     target: float = 0.0
     status: str = ""
+    """Decision status (OK, STALE_QUOTE, ...) or HALTED: the depot is stopped, which is no error
+    (ADR-0021) - otherwise the service would stay degraded until the depot is released."""
     traded: bool = False
     reason: str = ""
     error: str = ""
@@ -31,7 +34,7 @@ class LlmOutcome:
     agent: str
     model: str
     status: str
-    """ASKED, NOT_DUE, HOURLY_LIMIT, BUDGET_BLOCKED, NO_QUOTES, NO_MARKETS, HALTED,
+    """ASKED, NOT_DUE, HOURLY_LIMIT, BUDGET_BLOCKED, NO_QUOTES, NO_MARKETS, HALTED, PAUSED,
     STOPPING (not asked because the service is stopping) or ERROR."""
     detail: str = ""
     attempt_id: int | None = None
@@ -58,6 +61,16 @@ class CycleReport:
     markets: list[MarketResult] = field(default_factory=list)
     llm: list[LlmOutcome] = field(default_factory=list)
     equity: list[Equity] = field(default_factory=list)
+    risk_stops: list[RiskStop] = field(default_factory=list)
+    """Drawdown stops triggered in this cycle (each depot stops once until it is released)."""
+    unvalued: list[MarketResult] = field(default_factory=list)
+    """Depots without an equity point: a market they hold had no fresh quote (Spec 011 AK8)."""
+    paused: bool = False
+    """Trading was paused in this cycle (Spec 011 AK6): no trades except forced sales."""
+    released: list[str] = field(default_factory=list)
+    """Depots released from their drawdown stop at the start of this cycle."""
+    refused: list[tuple[str, str]] = field(default_factory=list)
+    """Release requests for stopped depots that were not acted on, with the reason."""
 
     @property
     def complete(self) -> bool:
@@ -65,6 +78,7 @@ class CycleReport:
             not self.quotes_error
             and all(not m.error for m in self.markets)
             and all(o.status != "ERROR" for o in self.llm)
+            and not self.unvalued
         )
 
 

@@ -58,6 +58,23 @@
 
 ## Laufzeit & Code
 
+### Ein Risikostopp ohne Zwangsverkauf hinterlässt keine Spur #risiko #paper
+*2026-11-07 · Quelle: Spec 011 (Review)*
+- **Symptom:** Eine alte Freigabe-Anforderung hob einen späteren Stopp sofort wieder auf.
+- **Ursache:** `mark` schreibt `RISK_SELL` nur für Bestände > 0. Stoppt ein Verkauf auf 0 das Depot (Gebühr, Spread),
+  gibt es keine Zeile – „jünger als der letzte RISK_SELL“ vergleicht dann mit dem vorigen Stopp.
+- **Lösung / Regel:** Freigabe nur, wenn die Anforderung jünger als der letzte Trade des Depots ist (ein freigegebenes
+  Depot kann erst nach einem Trade wieder fallen). Zeitpunkte von Ereignissen nie aus „letzte Zeile mit Merkmal X“
+  ableiten, ohne zu prüfen, ob jedes Ereignis so eine Zeile erzeugt.
+
+### Gespeicherte Zeitstempel sind ganze Sekunden, die Uhr nicht #zeit #marktdaten
+*2026-11-07 · Quelle: Spec 011 (Review)*
+- **Symptom:** Eine Runde verwarf alle Kurse als älter als 20 s, ohne neu abzurufen – obwohl laut Uhr erst 19,6 s vergangen waren.
+- **Ursache:** `iso()` schneidet auf ganze Sekunden ab; das in der DB gemessene Alter ist bis zu 1 s größer als
+  `clock() - abrufzeit`.
+- **Lösung / Regel:** Altersgrenzen gegen denselben Maßstab prüfen, mit dem später gelesen wird (`int(clock())` beim
+  Abruf merken) und für Prüfung und Lesen dieselbe `now` verwenden.
+
 ### Nachts fehlen ETH-EUR-Minutenkerzen – eine Stunde ohne ETH-Entscheidung #bitvavo #marktdaten #betrieb
 *2026-11-07 · Quelle: Spec 009 (Neustart-Test auf dem Server)*
 - **Symptom:** Nach einem Server-Neustart sind alle Runden `incomplete`, Status `degraded`:
@@ -130,6 +147,14 @@
 - **Lösung / Regel:** `pathlib.Path`, Dateinamen exakt schreiben, Testdaten über `tmp_path`.
 
 ## Prozess & Werkzeuge
+
+### random.gauss rechnet je Plattform anders #test #golden #ci
+*2026-11-07 · Quelle: Spec 011 (CI)*
+- **Symptom:** Golden-Digests lokal (Windows) grün, in der Linux-CI rot – nur bei Fällen mit vielen Zufallsschritten.
+- **Ursache:** `random.Random(seed)` ist plattformgleich, `gauss` nutzt aber `log`/`cos`/`sqrt` der C-Bibliothek; deren
+  letztes Bit unterscheidet sich zwischen MSVC und glibc. Kleine Kursabweichungen kippen Grenzfälle (Stopp ja/nein).
+- **Lösung / Regel:** Golden-Fälle nur aus `random()`, `uniform`, `choice` und Grundrechenarten bauen. Die älteren
+  Spec-004-Läufe nutzen `gauss` (bisher stabil, Fixture bleibt unverändert) – bei neuen Fällen nicht wiederholen.
 
 ### Ersetzungen per Python-Heredoc greifen bei Nicht-ASCII nicht #windows #encoding #werkzeug
 *2026-11-06 · Quelle: Spec 004*

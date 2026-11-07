@@ -1,6 +1,6 @@
 # Spec 011: Risiko-Grenzen und Fail-closed
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s011-risiko` · **Meilenstein:** M1 (Nr. 4)
 - **Erstellt:** 2026-11-07
 
@@ -115,10 +115,10 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
 - Verworfen: siehe ADR-0021.
 
 ## Plan
-- [ ] 1. ADR-0021 annehmen; `mark` mit Stopp, Drawdown-Goldens aus Arena-Code, Grenzfälle, Mutationen (AK1, AK2)
-- [ ] 2. Gestoppt ohne Fehler, Meldung und Log, Übersicht mit Abstand zum Hoch und Risikostopp (AK3, AK4)
-- [ ] 3. Kurse je Markt und Kursalter (AK7, AK8); Goldens und Mutationstest erneut
-- [ ] 4. Handelspause und Wiederfreigabe: Konfiguration, Dienst, Statusdatei, Weboberfläche (AK5, AK6)
+- [x] 1. ADR-0021 annehmen; `mark` mit Stopp, Drawdown-Goldens aus Arena-Code, Grenzfälle, Mutationen (AK1, AK2)
+- [x] 2. Gestoppt ohne Fehler, Meldung und Log, Übersicht mit Abstand zum Hoch und Risikostopp (AK3, AK4)
+- [x] 3. Kurse je Markt und Kursalter (AK7, AK8); Goldens und Mutationstest erneut
+- [x] 4. Handelspause und Wiederfreigabe: Konfiguration, Dienst, Statusdatei, Weboberfläche (AK5, AK6)
 - [ ] 5. Doku, Prüfung (Workflow), PR (AK10)
 - [ ] 6. Mit Zustimmung: Abstände lesend prüfen, Deploy, Schalter auf dem Server prüfen (AK9)
 
@@ -138,6 +138,25 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
   vollständig (`not halted`, `peak > 0`), gestoppt darf kein Rundenfehler sein (sonst dauerhaft `degraded` und
   Deploy-Rollback), Handelspause fail-closed, Kurse je Markt ohne Änderung der Arena-Pfade, Drawdown-Goldens in
   eigener Datei, Wiederfreigabe über die Weboberfläche statt per Befehl, Abstand zum Hoch in der Übersicht.
+- 2026-11-07: Schritte 1 und 2 in einem Commit (`paper/cycle.py` gehört zu beiden). Drawdown-Goldens:
+  16 benannte Fälle, 36 Fuzz-Blöcke (Stopp/kein Stopp je Modus), 24 Läufe (22 mit Stopp); `--check`: alte
+  Fixture bytegleich. Mutation `peak > 0` ist äquivalent (Peak ≥ Equity ≥ 0, Cash nie negativ) und als solche
+  vermerkt; alle übrigen 12 Stopp-Mutationen werden erkannt. Der Zwangsverkauf setzt den Bestand wie die Arena
+  auf 0 – Restmengen entstehen nur bei normalen Verkäufen.
+- 2026-11-07: Schritte 3 und 4 in einem Commit (Zyklus, Bericht und Dienst gehören zu beiden). Umsetzung von AK7:
+  `record_decision` bekommt `partial=True` nur aus den Zyklen; Arena-Aufrufe mit Teil-Kursen bleiben
+  `STALE_QUOTE`. Mit `partial` genügen Kurse des entschiedenen und aller gehaltenen Märkte – bitgleich zu beiden
+  Kursen, weil ein Markt ohne Bestand genau 0,0 beiträgt (Property-Test über 5000 Fälle, 40 Entscheidungen
+  DB-Zustand gleich). `bitvavo.quotes()` liefert ein `QuoteBook` (dict + `errors`). Ein kaputter Kurs lässt
+  meist schon den Snapshot seines Marktes scheitern (der Snapshot trägt den Kurs) – die Fehlermeldung kommt dann
+  von dort. Rundenergebnis `incomplete` auch dann, wenn kein Depot bewertet werden konnte, aber welche wegen
+  fehlender Kurse ausgelassen wurden (`unvalued`). Hinweistext der Übersicht für Kursfehler angepasst (es
+  werden keine gespeicherten Kurse mehr genutzt). Tests von `paper/risk.py` liegen unter `tests/paper/`
+  (`test_controls.py` statt `tests/service/test_config_reload.py::test_pause_*` für das Lesen; der Dienst-Teil
+  steht in `test_config_reload.py`), damit die Paper-Mutationen sie sehen. `paper-cycle` (CLI) beachtet Pause und
+  Freigaben ebenfalls.
+
+- 2026-11-07: Prüfung: zwei unabhängige Prüfer und ein Workflow (5 Blickwinkel, je Befund 3 Gegenprüfer; 12 Befunde, alle bestätigt, alle behoben). Wichtigste Korrektur: Eine Freigabe muss jünger als der letzte Trade des Depots sein (nicht nur als der letzte RISK_SELL) - ein Stopp direkt nach einem Verkauf auf 0 hinterlässt keinen RISK_SELL, eine alte Anforderung hätte ihn sofort aufgehoben. Keine Markierungszeilen in der Historie; Anforderungen aus der Zukunft werden abgelehnt (gleiche Uhr). Kursalter wird ab der gespeicherten ganzen Sekunde gemessen. Freigaben gelten auch für inzwischen abgewählte Depots. Die Weboberfläche zeigt eine Anforderung nur als wartend, wenn der Dienst sie anwenden wird (gleiche Prüfung, nur lesend). Learnings: „Ein Risikostopp ohne Zwangsverkauf hinterlässt keine Spur“, „Gespeicherte Zeitstempel sind ganze Sekunden, die Uhr nicht“.
 
 ## Ergebnis
 - **Erreicht:** …

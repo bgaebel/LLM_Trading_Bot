@@ -40,13 +40,17 @@ uv run trading-bot paper-cycle --db <pfad>/bot.db
 Key und Einstellungen lassen sich auch über die lokale Weboberfläche eintragen (nur `127.0.0.1`; auf dem Server per
 SSH-Tunnel). Beim ersten Start steht ein Einrichtungscode im Terminal, damit legst du dein Passwort fest. Liegt die
 Datenbank im selben Verzeichnis, liest `paper-cycle` die gespeicherten Werte automatisch. Die Startseite zeigt eine
-Übersicht aus der Bot-DB (`<pfad>/bot.db`, anderer Ort per `--db`), nur lesend, aktualisiert alle 60 s:
+Übersicht aus der Bot-DB (`<pfad>/bot.db`, anderer Ort per `--db`), nur lesend, live aktualisiert:
 
 ```bash
 uv run trading-bot web --data-dir <pfad>
 ```
 
 Ohne Key nur mit klassischen Strategien, z. B. `BOT_AGENTS=trend uv run trading-bot paper-cycle --db <pfad>/bot.db`.
+
+Risiko (wie die Arena): Fällt ein Depot 10 % unter seinen Höchststand, verkauft der Bot dessen Coins und stoppt es;
+die Weboberfläche zeigt den Abstand zum Hoch, gibt gestoppte Depots wieder frei und hat einen Schalter „Handel
+pausieren“ (im Zweifel Pause). Ein ungültiger Kurs eines Marktes blockiert den anderen nicht.
 
 Dauerbetrieb: `run` führt jede Minute (5 s nach dem Minutenwechsel) einen Paper-Zyklus aus, bis Strg+C bzw. SIGTERM.
 Einstellungen aus der Weboberfläche greifen ab der nächsten Runde; je Runde eine Logzeile, Stufe per `LOG_LEVEL`.

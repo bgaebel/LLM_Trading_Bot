@@ -2,6 +2,7 @@
 
 Usage:
     uv run python -I tools/golden/generate_execution_golden.py <arena>/apps/arena [--commit SHA]
+        [--check]
 
 Plays the scenarios of tests/golden_execution_cases.py against the Arena's record_decision,
 trade_to_target, initialize_buyhold and mark_and_risk in an in-memory Arena database and records
@@ -11,6 +12,11 @@ the state after every op. Output: tests/paper/fixtures/execution_golden_v0.3.1.j
 - fuzz:  single decisions around every threshold, one SHA-256 digest per chunk of cases
 - walks: multi-step histories, one digest per walk (seeds that would hit the Arena's 10 %
          drawdown stop are skipped: that stop belongs to Spec Nr. 4, not to this port)
+
+Spec 011 (ADR-0021) ports the stop. Its cases (tests/golden_drawdown_cases.py) go to a file of
+their own, tests/paper/fixtures/execution_drawdown_golden_v0.3.1.json, so the older fixture stays
+byte for byte as it was (ADR-0007: fixtures are never edited). ``--check`` writes nothing and
+fails unless both files are exactly what the Arena produces now.
 """
 
 import argparse
@@ -25,26 +31,33 @@ from types import ModuleType
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
-OUT = REPO / "tests" / "paper" / "fixtures" / "execution_golden_v0.3.1.json"
+FIXTURES = REPO / "tests" / "paper" / "fixtures"
+OUT = FIXTURES / "execution_golden_v0.3.1.json"
+OUT_DRAWDOWN = FIXTURES / "execution_drawdown_golden_v0.3.1.json"
 
 
 class DrawdownStop(Exception):
-    """The Arena halted a portfolio: the scenario left the range this port covers."""
+    """The Arena halted a portfolio: the scenario left the range the Spec 004 fixture covers."""
 
 
-def load(arena_dir: Path) -> tuple[ModuleType, ModuleType, ModuleType, ModuleType]:
+def load(arena_dir: Path) -> tuple[ModuleType, ...]:
     sys.path.insert(0, str(arena_dir))
     arena = importlib.import_module("arena")
     engine = importlib.import_module("engine03")
     sys.path.insert(0, str(REPO / "tests"))
     cases = importlib.import_module("golden_execution_cases")
     scenarios = importlib.import_module("golden_scenarios")
-    return arena, engine, cases, scenarios
+    drawdown = importlib.import_module("golden_drawdown_cases")
+    return arena, engine, cases, scenarios, drawdown
 
 
 class Runner:
-    def __init__(self, arena: ModuleType, engine: ModuleType, cases: ModuleType) -> None:
+    def __init__(
+        self, arena: ModuleType, engine: ModuleType, cases: ModuleType, *, allow_stop: bool = False
+    ) -> None:
         self.arena, self.engine, self.cases = arena, engine, cases
+        self.allow_stop = allow_stop
+        self.stopped = False
 
     def fresh(self) -> sqlite3.Connection:
         con: sqlite3.Connection = self.arena.open_db(":memory:")
@@ -116,7 +129,9 @@ class Runner:
                 continue
             after = self.halted(con)
             if any(after[a] and not before[a] for a in after):
-                raise DrawdownStop(op)
+                if not self.allow_stop:
+                    raise DrawdownStop(op)
+                self.stopped = True
             results.append({"ret": ret, **self.cases.capture(con, marks)})
         return results
 
@@ -132,22 +147,18 @@ def outcome_counts(results: list[Any]) -> dict[str, int]:
     return counts
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("arena_dir", type=Path)
-    parser.add_argument("--commit", default=None)
-    args = parser.parse_args()
-    arena_dir: Path = args.arena_dir.resolve()
-    commit = (
-        args.commit
-        or subprocess.run(
-            ["git", "-C", str(arena_dir), "rev-parse", "--short", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    )
-    arena, engine, cases, scenarios = load(arena_dir)
+def commit_of(arena_dir: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(arena_dir), "rev-parse", "--short", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def build(modules: tuple[ModuleType, ...], commit: str) -> dict[str, Any]:
+    """The Spec 004 fixture, unchanged since then (``--check`` proves it)."""
+    arena, engine, cases, scenarios, _ = modules
     runner = Runner(arena, engine, cases)
     digest = scenarios.boundary_digest
 
@@ -176,7 +187,7 @@ def main() -> int:
             skipped.append(seed)
         seed += 1
 
-    data = {
+    return {
         "meta": {
             "arena_commit": commit,
             "generator": "tools/golden/generate_execution_golden.py",
@@ -191,10 +202,90 @@ def main() -> int:
         "fuzz": fuzz,
         "walks": walks,
     }
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-    print(f"wrote {OUT.relative_to(REPO)}: {len(named)} named, {len(fuzz)} fuzz chunks, ", end="")
-    print(f"{len(walks)} walks (skipped {skipped}), coverage {coverage}")
+
+
+def build_drawdown(modules: tuple[ModuleType, ...], commit: str) -> dict[str, Any]:
+    """Spec 011 AK1: the drawdown stop; every case may stop, and each mode must contain stops."""
+    arena, engine, cases, scenarios, drawdown = modules
+    runner = Runner(arena, engine, cases, allow_stop=True)
+    digest = scenarios.boundary_digest
+
+    named = []
+    for s in drawdown.named_scenarios():
+        runner.stopped = False
+        results = runner.play(s["ops"])
+        if runner.stopped != s["stops"]:
+            raise SystemExit(f"{s['name']}: Arena stopped={runner.stopped}, case says {s['stops']}")
+        named.append(dict(s, results=results))
+
+    fuzz = []
+    coverage: dict[str, dict[str, int]] = {}
+    for mode, index, chunk in drawdown.fuzz_chunks():
+        con, marks = runner.fresh(), dict[str, int]()
+        results = []
+        for ops in chunk:
+            runner.stopped = False
+            results.append(runner.play(ops, con, marks))
+            counts = coverage.setdefault(mode, {"stop": 0, "no_stop": 0})
+            counts["stop" if runner.stopped else "no_stop"] += 1
+        fuzz.append({"mode": mode, "chunk": index, "digest": digest(results)})
+    for mode, counts in coverage.items():
+        if not (counts["stop"] and counts["no_stop"]):
+            raise SystemExit(f"drawdown fuzz mode {mode} lacks stop or no-stop cases: {counts}")
+
+    walks = []
+    stopped_walks = 0
+    for seed in range(drawdown.WALKS):
+        runner.stopped = False
+        walks.append({"seed": seed, "digest": digest(runner.play(drawdown.walk(seed)))})
+        stopped_walks += runner.stopped
+    if not 0 < stopped_walks < drawdown.WALKS:
+        raise SystemExit(f"drawdown walks: {stopped_walks}/{drawdown.WALKS} stopped")
+
+    return {
+        "meta": {
+            "arena_commit": commit,
+            "generator": "tools/golden/generate_execution_golden.py",
+            "kill": drawdown.KILL,
+            "fuzz_modes": list(drawdown.FUZZ_MODES),
+            "fuzz_per_mode": drawdown.FUZZ_PER_MODE,
+            "fuzz_chunk": drawdown.FUZZ_CHUNK,
+            "walk_steps": drawdown.WALK_STEPS,
+            "walks_stopped": stopped_walks,
+            "coverage": coverage,
+        },
+        "named": named,
+        "fuzz": fuzz,
+        "walks": walks,
+    }
+
+
+def encoded(data: dict[str, Any]) -> bytes:
+    # Bytes, not write_text: on Windows text mode would turn every newline into CRLF.
+    return (json.dumps(data, ensure_ascii=False, indent=1) + "\n").encode("utf-8")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("arena_dir", type=Path)
+    parser.add_argument("--commit", default=None)
+    parser.add_argument("--check", action="store_true", help="compare with the files, write none")
+    args = parser.parse_args()
+    arena_dir: Path = args.arena_dir.resolve()
+    commit = args.commit or commit_of(arena_dir)
+    modules = load(arena_dir)
+    outputs = {OUT: build(modules, commit), OUT_DRAWDOWN: build_drawdown(modules, commit)}
+    if args.check:
+        differ = [p for p, d in outputs.items() if not p.exists() or p.read_bytes() != encoded(d)]
+        for path in outputs:
+            print(f"{'DIFFERS' if path in differ else 'same':8} {path.relative_to(REPO)}")
+        return 1 if differ else 0
+    FIXTURES.mkdir(parents=True, exist_ok=True)
+    for path, data in outputs.items():
+        path.write_bytes(encoded(data))
+        print(f"wrote {path.relative_to(REPO)}: {len(data['named'])} named, ", end="")
+        print(f"{len(data['fuzz'])} fuzz chunks, {len(data['walks'])} walks, ", end="")
+        print(f"coverage {data['meta']['coverage']}")
     return 0
 
 

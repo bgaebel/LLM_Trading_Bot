@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from html import escape
 
 from llm_trading_bot.paper.db import START_CASH
-from llm_trading_bot.paper.execution import BUYHOLD
+from llm_trading_bot.paper.execution import BUYHOLD, DRAWDOWN_KILL
 from llm_trading_bot.web import pages
 from llm_trading_bot.web.overview import (
     CYCLE_LABEL,
@@ -96,8 +96,17 @@ def _pulses(pulses: Sequence[Pulse]) -> str:
 def _depots(rows: Sequence[DepotRow]) -> str:
     def name(d: DepotRow) -> str:
         badges = ' <span class="badge">Referenz</span>' if d.reference else ""
-        badges += ' <span class="badge stop">gestoppt</span>' if d.halted else ""
+        if d.halted:
+            since = f" seit {when(d.stopped_at)}" if d.stopped_at else ""
+            badges += f' <span class="badge stop">Risikostopp{escape(since)}</span>'
         return f"<b>{escape(d.agent)}</b>{badges}"
+
+    def peak(d: DepotRow) -> str:
+        # Buy & Hold is never stopped (ADR-0021), so a distance to a stop means nothing there.
+        if d.reference:
+            return "–"
+        text = signed(d.from_peak_pct, " %", 1)
+        return f'<span class="{"down" if d.from_peak_pct < 0 else "up"}">{escape(text)}</span>'
 
     def gain(value: float, text: str) -> str:
         return f'<span class="{"up" if value >= 0 else "down"}">{escape(text)}</span>'
@@ -110,6 +119,7 @@ def _depots(rows: Sequence[DepotRow]) -> str:
             "–"
             if d.vs_buyhold_pp is None
             else gain(d.vs_buyhold_pp, signed(d.vs_buyhold_pp, " pp")),
+            peak(d),
             escape(money(d.cash)),
             escape(f"{d.btc:.6f}"),
             escape(f"{d.eth:.6f}"),
@@ -117,7 +127,17 @@ def _depots(rows: Sequence[DepotRow]) -> str:
         )
         for d in rows
     ]
-    head = ("Depot", "Equity", "seit Start", "vs. Buy &amp; Hold", "Cash", "BTC", "ETH", "Stand")
+    head = (
+        "Depot",
+        "Equity",
+        "seit Start",
+        "vs. Buy &amp; Hold",
+        f"vom Hoch <small>(Stopp bei {signed(-DRAWDOWN_KILL * 100, ' %', 0)})</small>",
+        "Cash",
+        "BTC",
+        "ETH",
+        "Stand",
+    )
     return _table(head, body, "depots")
 
 
@@ -314,13 +334,21 @@ def _readouts(view: Overview) -> str:
 
 
 def overview_page(
-    view: Overview | None, *, csrf: str, problem: str = "", now: float | None = None
+    view: Overview | None,
+    *,
+    csrf: str,
+    problem: str = "",
+    now: float | None = None,
+    trading: str = "",
 ) -> str:
     """``view`` is None when the database cannot be shown; ``problem`` then says why. ``now``
-    keeps the ticker running across reloads."""
+    keeps the ticker running across reloads. ``trading`` is the pause note (Spec 011 AK6)."""
+    # The pause comes from the status file and secrets.env, not from the DB: show it always.
+    banner = f'<div class="msg bad" role="status">{escape(trading)}</div>' if trading else ""
     if view is None:
         body = (
-            '<section class="panel">'
+            banner
+            + '<section class="panel">'
             + pages._head("00", "Übersicht", "amber")
             + f'<div class="msg bad" role="status">{escape(problem)}</div>'
             '<p class="hint">Die Übersicht liest die Datenbank des Bots nur lesend (ADR-0016). '
@@ -329,7 +357,8 @@ def overview_page(
         )
     else:
         body = (
-            _readouts(view)
+            banner
+            + _readouts(view)
             + '<div class="grid">'
             + '<section class="panel span-5">'
             + pages._head("01", "Lebenszeichen")

@@ -179,6 +179,37 @@ def _view(**changes: object) -> Overview:
     return replace(base, **changes)  # type: ignore[arg-type]
 
 
+def test_drawdown_column_shows_the_distance_to_the_peak_except_for_buyhold() -> None:
+    from llm_trading_bot.web.overview import DepotRow
+    from llm_trading_bot.web.overview_page import overview_page
+
+    luna = DepotRow(
+        "gpt-luna", 9_580.0, 9_580.0, 0, 0, "2026-11-06T12:00:00+00:00", False, -420.0, -4.2, 0.3
+    )
+    luna = replace(luna, from_peak_pct=-4.2)
+    view = _view()
+    page = overview_page(replace(view, depots=[luna, view.depots[1]]), csrf="t")
+    assert "vom Hoch <small>(Stopp bei -10 %)</small>" in page
+    assert '<span class="down">-4.2 %</span>' in page
+    assert "Risikostopp" not in page
+    row = page.split("<b>buyhold</b>")[1].split("</tr>")[0]
+    assert "<td>–</td>" in row.replace(" ", "")
+
+
+def test_risk_stop_badge_shows_since_when() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+
+    view = _view()
+    stopped = replace(
+        view.depots[0], halted=True, from_peak_pct=-11.4, stopped_at="2026-11-06T09:14:05+00:00"
+    )
+    page = overview_page(replace(view, depots=[stopped, view.depots[1]]), csrf="t")
+    assert '<span class="badge stop">Risikostopp seit 2026-11-06 09:14 UTC</span>' in page
+    never = replace(stopped, stopped_at=None)
+    page = overview_page(replace(view, depots=[never, view.depots[1]]), csrf="t")
+    assert '<span class="badge stop">Risikostopp</span>' in page
+
+
 def test_reason_html_is_escaped() -> None:
     from llm_trading_bot.web.overview_page import overview_page
 

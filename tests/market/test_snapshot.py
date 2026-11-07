@@ -4,7 +4,7 @@ from collections.abc import Callable
 import pytest
 
 from llm_trading_bot.market.http import HTTPFailure
-from llm_trading_bot.market.models import Candle, MarketDataError, Quote, Symbol
+from llm_trading_bot.market.models import Candle, MarketDataError, Quote, QuoteBook, Symbol
 from llm_trading_bot.market.snapshot import (
     DEFAULT_MIN_BARS,
     INTERVALS,
@@ -42,11 +42,11 @@ class FakeClient:
         self.quote_error = quote_error
         self.quote_calls = 0
 
-    def quotes(self) -> dict[Symbol, Quote]:
+    def quotes(self) -> QuoteBook:
         self.quote_calls += 1
         if self.quote_error:
             raise self.quote_error
-        return self.quote_values
+        return QuoteBook(self.quote_values)
 
     def closed_candles(
         self, symbol: Symbol, interval: int, *, now_epoch: int
@@ -203,7 +203,7 @@ def test_missing_quote_for_market_rejected() -> None:
     client = FakeClient(quotes={Symbol.BTCEUR: QUOTES[Symbol.BTCEUR]})
     snaps = build_snapshots(client, clock=ticking(NOW), on_error=on_error)
     assert set(snaps) == {Symbol.BTCEUR}
-    assert problems == [(Symbol.ETHEUR, "ETH-EUR: no quote")]
+    assert problems == [(Symbol.ETHEUR, "ETH-EUR: no quote - missing")]
 
 
 def test_non_ascending_bars_rejected() -> None:

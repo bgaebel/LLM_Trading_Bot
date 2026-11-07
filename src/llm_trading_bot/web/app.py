@@ -17,8 +17,10 @@ from typing import TextIO
 from urllib.parse import parse_qs, urlsplit
 
 from llm_trading_bot.llm.agents import LLM_DEFAULTS
+from llm_trading_bot.llm.due import iso
 from llm_trading_bot.llm.openai_client import check_key
-from llm_trading_bot.service.status import read_status, status_path
+from llm_trading_bot.paper.risk import PAUSE_FIELD, RESUME_FIELD, parse_resumes, release_problem
+from llm_trading_bot.service.status import ServiceStatus, read_status, status_path
 from llm_trading_bot.web import overview, pages
 from llm_trading_bot.web.auth import (
     LoginGuard,
@@ -164,6 +166,41 @@ class WebApp:
         expected = cookies.get(PRE_COOKIE, "")
         return bool(expected) and same(_one(form, "csrf"), expected)
 
+    def _status(self) -> ServiceStatus | None:
+        try:
+            return read_status(status_path(self.db))
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def _trading(self, values: Mapping[str, str], *, depots: bool = True) -> pages.Trading:
+        """Requested (secrets.env) and applied (status file) pause, and the stopped depots."""
+        status = self._status()
+        requested = values.get(PAUSE_FIELD, "") == "1"
+        applied = None if status is None else status.trading_paused
+        source = "" if status is None else status.pause_source
+        if not depots:
+            return pages.Trading(requested, applied, source)
+        resumes, _bad = parse_resumes(values.get(RESUME_FIELD, ""))
+        now = self.wall_clock()
+        try:
+            with reading(self.db) as con:
+                rows = [d for d in overview.depots(con) if d.halted]
+                # Pending = the service will act on it: same check, read only. An expired or
+                # used-up request shows the button again instead of locking the depot.
+                pending = {
+                    d.agent
+                    for d in rows
+                    if d.agent in resumes
+                    and not release_problem(con, d.agent, resumes[d.agent], now)
+                }
+        except DbUnavailable as exc:
+            return pages.Trading(requested, applied, source, problem=str(exc))
+        except (sqlite3.Error, ValueError, ArithmeticError) as exc:
+            problem = f"Datenbank nicht lesbar ({type(exc).__name__})."
+            return pages.Trading(requested, applied, source, problem=problem)
+        stopped = tuple(pages.Stopped(d.agent, d.stopped_at, d.agent in pending) for d in rows)
+        return pages.Trading(requested, applied, source, stopped)
+
     def _overview(self, session: Session) -> Response:
         values = self.credentials.read()
         shares = {
@@ -173,6 +210,7 @@ class WebApp:
             for agent, (_model, default) in LLM_DEFAULTS.items()
         }
         now = self.wall_clock()
+        note = pages.trading_note(self._trading(values, depots=False))
         try:
             service = overview.service_pulse(read_status(status_path(self.db)), now)
         except (OSError, ValueError, TypeError) as exc:  # TypeError: a field of the wrong type
@@ -189,14 +227,16 @@ class WebApp:
             # Busy past the timeout or an odd stored value: a message, not an empty response.
             problem = f"Datenbank nicht lesbar ({type(exc).__name__})."
         else:
-            return Response(200, overview_page(view, csrf=session.csrf, now=now))
-        return Response(200, overview_page(None, csrf=session.csrf, problem=problem, now=now))
+            return Response(200, overview_page(view, csrf=session.csrf, now=now, trading=note))
+        page = overview_page(None, csrf=session.csrf, problem=problem, now=now, trading=note)
+        return Response(200, page)
 
     def _settings(
         self, session: Session, message: str = "", ok: bool = True, status: int = 200
     ) -> Response:
+        values = self.credentials.read()
         page = pages.settings_page(
-            self.credentials.read(), csrf=session.csrf, message=message, ok=ok
+            values, csrf=session.csrf, message=message, ok=ok, trading=self._trading(values)
         )
         return Response(status, page)
 
@@ -235,6 +275,10 @@ class WebApp:
             return self._save(session, form)
         if path == "/settings/test" and method == "POST":
             return self._test(session)
+        if path == "/settings/pause" and method == "POST":
+            return self._pause(session, form)
+        if path == "/settings/resume" and method == "POST":
+            return self._resume(session, form)
         return self._settings(session, "Seite nicht gefunden.", ok=False, status=404)
 
     def _setup(self, method: str, path: str, form: Form, cookies: Mapping[str, str]) -> Response:
@@ -296,6 +340,39 @@ class WebApp:
             # Messages come from our own checks and never contain the key value.
             return self._settings(session, f"Nicht gespeichert: {exc}", ok=False, status=400)
         return self._settings(session, "Gespeichert.")
+
+    def _pause(self, session: Session, form: Form) -> Response:
+        """ADR-0021: the emergency stop; the service applies it from its next round on."""
+        wanted = _one(form, "paused")
+        if wanted not in ("0", "1"):
+            return self._settings(session, "Ungültige Anfrage.", ok=False, status=400)
+        try:
+            self.credentials.set_paused(wanted == "1")
+        except OSError as exc:
+            return self._settings(
+                session, f"Nicht gespeichert: {type(exc).__name__}", ok=False, status=500
+            )
+        if wanted == "1":
+            return self._settings(session, "Pause gespeichert – greift in der nächsten Runde.")
+        return self._settings(session, "Fortsetzen gespeichert – greift in der nächsten Runde.")
+
+    def _resume(self, session: Session, form: Form) -> Response:
+        """ADR-0021: ask the service (the only writer) to release a stopped depot."""
+        agent = _one(form, "agent")
+        trading = self._trading(self.credentials.read())
+        if agent not in {s.agent for s in trading.stopped}:
+            return self._settings(
+                session, "Dieses Depot ist nicht im Risikostopp.", ok=False, status=400
+            )
+        try:
+            self.credentials.request_resume(agent, iso(self.wall_clock()))
+        except (OSError, ValueError) as exc:
+            return self._settings(
+                session, f"Nicht gespeichert: {type(exc).__name__}", ok=False, status=500
+            )
+        return self._settings(
+            session, f"Freigabe für {agent} gespeichert – greift in der nächsten Runde."
+        )
 
     def _test(self, session: Session) -> Response | KeyCheck:
         key = self.credentials.read().get("OPENAI_API_KEY")

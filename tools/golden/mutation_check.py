@@ -36,6 +36,9 @@ EQUIVALENT = {
     "exec total room floor",
     # - llm confidence finite: NaN and +-inf already fail 0 <= x <= 1 (Spec 005).
     "llm confidence finite",
+    # - risk peak > 0: peak = max(eq, peak) >= eq >= 0 (cash never goes negative), so with
+    #   peak == 0 the stop test is 0 < 0 either way (Spec 011).
+    "risk peak > 0",
 }
 
 M = [
@@ -261,7 +264,21 @@ M += [
         "if agent == BUYHOLD and p[_COLUMN[symbol]] > 1:",
         "exec buyhold holds once",
     ),
-    (E, "if qs is None or set(qs) != set(SYMBOLS):", "if qs is None:", "exec stale on partial"),
+    (
+        E,
+        "if qs is None or (set(qs) != set(SYMBOLS) and not (",
+        "if qs is None or (False and not (",
+        "exec stale on partial",
+    ),
+    (E, "and not (partial and covers(", "and not (covers(", "exec partial only when asked"),
+    (
+        E,
+        "return (symbol is None or symbol in qs) and not",
+        "return not",
+        "exec partial needs market",
+    ),
+    (E, "and not unquoted_holdings(p, qs)", "", "exec partial needs held markets"),
+    (E, "    if p[_COLUMN[symbol]] == 0:\n        return 0.0\n", "", "exec worth needs quote"),
     (E, "sig.reason.strip()[:REASON_MAX]", "sig.reason[:REASON_MAX]", "exec reason strip"),
     (E, "REASON_MAX = 550", "REASON_MAX = 549", "exec reason length"),
     (E, "json.dumps(data, ensure_ascii=False)", "json.dumps(data)", "exec inputs ascii"),
@@ -272,7 +289,40 @@ M += [
         "exec duplicate bar replaces",
     ),
     (E, 'peak = max(eq, p["peak"])', "peak = eq", "exec peak keeps max"),
-    (E, "            mark(con, agent, qs, now)\n", "", "exec mark after trade"),
+    (
+        E,
+        "            stop = mark(con, agent, qs, now, costs)\n",
+        "            stop = None\n",
+        "exec mark after trade",
+    ),
+    # Spec 011 (ADR-0021): the drawdown stop.
+    (E, "DRAWDOWN_KILL = 0.10", "DRAWDOWN_KILL = 0.11", "risk kill .10->.11"),
+    (E, "eq < peak * (1 - DRAWDOWN_KILL)", "eq <= peak * (1 - DRAWDOWN_KILL)", "risk < -> <="),
+    (E, 'and not p["halted"] and peak > 0', "and peak > 0", "risk halted once"),
+    (E, 'if agent != BUYHOLD and not p["halted"]', 'if not p["halted"]', "risk buyhold exempt"),
+    (E, "and peak > 0 and eq <", "and eq <", "risk peak > 0"),
+    (E, "SET halted=1 WHERE", "SET halted=0 WHERE", "risk sets halted"),
+    (
+        E,
+        "fill = qs[symbol].bid * (1 - costs.slippage)",
+        "fill = qs[symbol].mid * (1 - costs.slippage)",
+        "risk sell at bid",
+    ),
+    (
+        E,
+        "fill = qs[symbol].bid * (1 - costs.slippage)",
+        "fill = qs[symbol].bid * (1 - costs.fee_rate)",
+        "risk sell slippage",
+    ),
+    (E, "fee = gross * costs.fee_rate", "fee = 0.0", "risk sell fee"),
+    (E, "            if qty <= 0:\n", "            if qty < 0:\n", "risk skips empty market"),
+    (E, "cash=cash+?,{col}=0 WHERE", "cash=cash+?,{col}={col}*1e-9 WHERE", "risk sells all"),
+    (
+        E,
+        "        p = balance(con, agent)\n        eq = value(p, qs)\n    con.execute(",
+        "    con.execute(",
+        "risk equity after sale",
+    ),
     (
         E,
         '(BUYHOLD, symbol.name, "BUY")',
@@ -465,6 +515,86 @@ M += [
     ),
     (A, 'env.get("LLM_EFFORT", "low")', 'env.get("LLM_EFFORT", "medium")', "llm effort default"),
     (A, "MAX_OUTPUT_TOKENS = 8000", "MAX_OUTPUT_TOKENS = 7999", "llm output tokens"),
+]
+
+
+# Spec 011 (ADR-0021): trading pause and release of stopped depots.
+PC, PR, SR = "paper/cycle.py", "paper/risk.py", "service/run.py"
+M += [
+    (
+        PC,
+        "mark(con, name, latest, now, costs)",
+        "mark(con, name, latest, now, Costs())",
+        "cycle stop costs",
+    ),
+    (
+        PC,
+        "    latest = feed.current()\n",
+        "    latest = fresh_quotes(con, now_epoch=clock())\n",
+        "cycle final refetch",
+    ),
+    (
+        PC,
+        "self.fetched_at = float(int(self.clock()))",
+        "self.fetched_at = self.clock()",
+        "cycle quote age floor",
+    ),
+    (
+        SR,
+        "ran = report.equity or report.unvalued",
+        "ran = report.equity",
+        "service unvalued incomplete",
+    ),
+    (SR, "if (agent, why) not in self.refusals:", "if True:", "service refusal once"),
+    (
+        SR,
+        "self.refusals = {r for r in self.refusals if r[0] != agent}",
+        "pass",
+        "service refusal reset",
+    ),
+    (PC, 'status="PAUSED" if paused else "OK"', 'status="OK"', "pause classic trades"),
+    (PC, "== set(SYMBOLS) and not controls.paused:", "== set(SYMBOLS):", "pause buyhold buys"),
+    (PC, "paused=controls.paused,\n        ):", "paused=False,\n        ):", "pause gpt asked"),
+    (
+        Y,
+        "    if paused:\n        # ADR-0021",
+        "    if False:\n        # ADR-0021",
+        "llm pause skips",
+    ),
+    (PR, "RESUME_MAX_AGE = 24 * 3600", "RESUME_MAX_AGE = 25 * 3600", "resume max age"),
+    (PR, "requested_at > RESUME_MAX_AGE", "requested_at >= RESUME_MAX_AGE", "resume age > -> >="),
+    (PR, "requested_at <= epoch(traded)", "requested_at < epoch(traded)", "resume after trade"),
+    (PR, "traded is not None and requested_at", "False and requested_at", "resume older trade"),
+    (
+        PR,
+        "SELECT MAX(ts) FROM trades WHERE agent=?",
+        "SELECT MAX(ts) FROM trades WHERE side='RISK_SELL' AND agent=?",
+        "resume any trade",
+    ),
+    (PR, 'if p["btc"] != 0 or p["eth"] != 0:', "if False:", "resume needs no coins"),
+    (PR, "halted=0, peak=cash WHERE", "halted=0 WHERE", "resume peak from cash"),
+    (PR, "if requested_at > now_epoch:", "if requested_at > now_epoch + 60:", "resume future"),
+    (
+        PR,
+        '{"1": True, "0": False, "": False}',
+        '{"1": True, "0": False, "": False, "yes": True}',
+        "pause values",
+    ),
+    (
+        PR,
+        "        stored = None\n        warnings.append(",
+        "        stored = {}\n        warnings.append(",
+        "pause unreadable file",
+    ),
+    (PR, "if PAUSE_FIELD in env:", "if False:", "pause environment wins"),
+    (
+        PR,
+        'warnings.append(f"{PAUSE_FIELD}={raw[:20]!r} is not 1 or 0: trading paused")\n'
+        "        return Controls(True,",
+        'warnings.append(f"{PAUSE_FIELD}={raw[:20]!r} is not 1 or 0: trading paused")\n'
+        "        return Controls(False,",
+        "pause invalid fails closed",
+    ),
 ]
 
 

@@ -109,6 +109,49 @@ def test_halted_depot_is_flagged(db: Path) -> None:
         assert {d.agent: d.halted for d in overview.depots(ro)}["gpt-sol"] is True
 
 
+def test_drawdown_is_measured_against_the_depot_peak(db: Path) -> None:
+    con = open_db(db, agents=())
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET peak=peak*1.05 WHERE agent='gpt-luna'")
+    con.close()
+    with reading(db) as ro:
+        rows = {d.agent: d for d in overview.depots(ro)}
+        peaks = {r["agent"]: r["peak"] for r in ro.execute("SELECT agent, peak FROM portfolios")}
+    luna = rows["gpt-luna"]
+    assert luna.from_peak_pct == pytest.approx((luna.value / peaks["gpt-luna"] - 1) * 100)
+    assert luna.from_peak_pct < -100 * 0.05 / 1.05  # fees had already cost a little
+    # After a cycle the peak includes the latest point: never above it.
+    assert rows["gpt-sol"].from_peak_pct <= 0
+    assert (rows["gpt-luna"].stopped_at, rows["gpt-sol"].stopped_at) == (None, None)
+
+
+def test_drawdown_before_the_first_cycle_is_zero(tmp_path: Path) -> None:
+    path = tmp_path / "bot.db"
+    open_db(path, agents=("trend",)).close()
+    with reading(path) as con:
+        (row,) = overview.depots(con)
+    assert (row.from_peak_pct, row.stopped_at) == (0.0, None)
+
+
+def test_risk_stop_shows_the_time_of_the_latest_forced_sale(tmp_path: Path) -> None:
+    path = tmp_path / "bot.db"
+    con = open_db(path, agents=AGENTS)
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET peak=20000 WHERE agent='gpt-luna'")
+    con.close()
+    write(path, NOW)  # the first GPT trade of luna triggers the stop
+    with reading(path) as ro:
+        rows = {d.agent: d for d in overview.depots(ro)}
+        sold = ro.execute(
+            "SELECT MAX(ts) FROM trades WHERE agent='gpt-luna' AND side='RISK_SELL'"
+        ).fetchone()[0]
+    luna = rows["gpt-luna"]
+    assert luna.halted and luna.stopped_at == sold is not None
+    assert luna.btc == 0 and luna.eth == 0
+    assert luna.from_peak_pct < -10
+    assert not rows["gpt-sol"].halted and rows["gpt-sol"].stopped_at is None
+
+
 # ------------------------------------------------------------------ equity series (AK4)
 
 
@@ -440,7 +483,7 @@ def test_service_pulse_names_failures_and_configuration_problems() -> None:
             "incomplete",
             60,
             overview.RUNNING,
-            "Kursabruf bei Bitvavo gescheitert, gespeicherte Kurse genutzt",
+            "Kurs von Bitvavo unbrauchbar, der Markt bleibt ohne Entscheidung",
         ),
     ],
     ids=[
@@ -475,3 +518,28 @@ def test_service_pulse_comes_first_in_the_overview(con: sqlite3.Connection) -> N
         "Kurs BTC-EUR",
         "Kurs ETH-EUR",
     ]
+
+
+def test_risk_stop_time_ignores_sales_from_before_the_latest_release(tmp_path: Path) -> None:
+    from llm_trading_bot.paper.risk import epoch, release
+
+    path = tmp_path / "bot.db"
+    con = open_db(path, agents=AGENTS)
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET peak=20000 WHERE agent='gpt-luna'")
+    con.close()
+    write(path, NOW)
+    con = open_db(path, agents=AGENTS)
+    sold = con.execute("SELECT MAX(ts) FROM trades WHERE side='RISK_SELL'").fetchone()[0]
+    assert release(con, "gpt-luna", epoch(sold) + 1, epoch(sold) + 2) == ""
+    with write_tx(con):  # trades again, then stopped right after a sale (no forced sale)
+        con.execute(
+            "INSERT INTO trades(ts,agent,symbol,side,qty,fill,notional,fee,slip_rate,decision_id)"
+            " VALUES (?, 'gpt-luna', 'BTCEUR', 'SELL', 0.01, 60000, 600, 1.5, 0.0005, NULL)",
+            (iso(epoch(sold) + 3600),),
+        )
+        con.execute("UPDATE portfolios SET halted=1 WHERE agent='gpt-luna'")
+    con.close()
+    with reading(path) as ro:
+        luna = {d.agent: d for d in overview.depots(ro)}["gpt-luna"]
+    assert luna.halted and luna.stopped_at is None

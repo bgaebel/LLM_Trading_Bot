@@ -53,6 +53,15 @@ def test_market_report_exit_2_when_quotes_fail() -> None:
     assert "quotes FAILED: HTTPFailure: HTTP 503" in text
 
 
+def test_market_report_shows_a_bad_quote_and_still_the_other_market() -> None:
+    """Spec 011 AK7: one broken quote is reported per market instead of a crash."""
+    code, text = run(eth_quote_bad=True)
+    assert code == EXIT_INVALID
+    assert "bid 66000.00  ask 66005.00" in text
+    assert "quote  INVALID - ticker/book: unusable quote" in text
+    assert text.count("snapshot: OK") == 1
+
+
 def test_default_command_prints_mode(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == EXIT_OK
     assert capsys.readouterr().out.strip() == "llm-trading-bot: mode=paper"
@@ -148,7 +157,7 @@ def test_paper_cycle_exit_2_without_quotes(tmp_path: Path) -> None:
     client.fail_quotes = True
     code, text = run_cycle(tmp_path / "bot.db", client)
     assert code == EXIT_FETCH_FAILED
-    assert "no fresh quotes of both markets - no decisions, nothing traded" in text
+    assert "no fresh quotes - no decisions, nothing traded" in text
 
 
 def test_paper_cycle_exit_1_when_one_market_fails(tmp_path: Path) -> None:
@@ -340,3 +349,31 @@ def test_web_db_defaults_to_bot_db_in_the_data_dir(
     assert main(["web", "--data-dir", str(tmp_path)]) == EXIT_OK
     assert main(["web", "--data-dir", str(tmp_path), "--db", str(tmp_path / "x.db")]) == EXIT_OK
     assert seen == [(tmp_path, None), (tmp_path, tmp_path / "x.db")]
+
+
+def test_paper_cycle_reads_the_pause_from_secrets(tmp_path: Path) -> None:
+    """Spec 011 AK6: the one-off cycle honours the pause, and names the file as its source."""
+    from llm_trading_bot.paper.risk import read_controls
+
+    (tmp_path / "secrets.env").write_text("BOT_AGENTS=trend\nBOT_PAUSED=1\n", encoding="utf-8")
+    assert read_controls({}, tmp_path / "secrets.env").source == "file"
+    code, text = run_cycle(tmp_path / "bot.db", ScenarioClient())
+    assert code == EXIT_OK and text.count("[PAUSED]") == 2
+    assert "buy & hold: already invested" in text  # nothing bought while paused
+
+
+def test_paper_cycle_reports_controls_releases_and_stops(tmp_path: Path) -> None:
+    from llm_trading_bot.paper.db import open_db
+
+    db = tmp_path / "bot.db"
+    con = open_db(db, agents=("trend", "buyhold"))
+    con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
+    con.commit()
+    con.close()
+    (tmp_path / "secrets.env").write_text(
+        "BOT_PAUSED=yes\nBOT_RESUME=trend@2027-01-15T07:59:00+00:00\n", encoding="utf-8"
+    )
+    _code, text = run_cycle(db, ScenarioClient())
+    assert "trading controls: BOT_PAUSED='yes' is not 1 or 0: trading paused" in text
+    assert "trading paused: no trades except forced sales" in text
+    assert "risk stop trend released on request" in text

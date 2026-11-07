@@ -3,6 +3,8 @@
 attributes and classes from ``/app.css``."""
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from html import escape
 
@@ -366,8 +368,116 @@ def _reasoning_costs(effort: str, shares: Mapping[str, Decimal]) -> str:
     )
 
 
+@dataclass(frozen=True)
+class Stopped:
+    agent: str
+    since: str | None
+    """Time of the depot's latest forced sale; None if it was halted without one."""
+    requested: bool
+    """A release request newer than the stop is waiting for the next round."""
+
+
+@dataclass(frozen=True)
+class Trading:
+    """Trading pause and stopped depots (Spec 011 AK5/AK6, ADR-0021)."""
+
+    requested_pause: bool
+    """What secrets.env asks for."""
+    applied_pause: bool | None
+    """What the service applied in its last round; None without a readable status file."""
+    source: str = ""
+    """Where the applied state came from (status file): environment, file, invalid or ""."""
+    stopped: tuple[Stopped, ...] = ()
+    problem: str = ""
+    """Why the depots could not be read."""
+
+    @property
+    def locked(self) -> bool:
+        """The service's environment sets BOT_PAUSED: the switch has no effect."""
+        return self.source == "environment"
+
+
+def trading_note(t: Trading) -> str:
+    """One line on the pause for the overview and the settings page; "" while trading runs."""
+    if t.applied_pause:
+        if t.locked:
+            return "Handel pausiert – durch die Umgebung des Dienstes festgelegt (BOT_PAUSED)"
+        if t.source == "invalid":
+            return "Handel pausiert – Einstellung unlesbar oder ungültig, im Zweifel Pause"
+        if not t.requested_pause:
+            return "Handel pausiert – Fortsetzen angefordert, greift in der nächsten Runde"
+        return "Handel pausiert – nur der Risikostopp verkauft noch"
+    if t.requested_pause:
+        if t.locked:
+            return "Pause angefordert, aber die Umgebung des Dienstes legt BOT_PAUSED fest"
+        return "Pause angefordert, greift in der nächsten Runde"
+    return ""
+
+
+def _when(ts: str | None) -> str:
+    return "–" if ts is None else datetime.fromisoformat(ts).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _trading_panel(t: Trading, hidden: str) -> str:
+    note = trading_note(t)
+    paused = t.applied_pause if t.applied_pause is not None else t.requested_pause
+    state = note or "Handel läuft"
+    want = "0" if t.requested_pause else "1"
+    label = "Handel fortsetzen" if t.requested_pause else "Handel pausieren"
+    switch = (
+        '<p class="hint">Der Schalter wirkt nicht, solange die Umgebung des Dienstes '
+        "<code>BOT_PAUSED</code> setzt.</p>"
+        if t.locked
+        else '<form method="post" action="/settings/pause" class="inline">'
+        + hidden
+        + f'<input type="hidden" name="paused" value="{want}">'
+        + f'<button type="submit"{"" if t.requested_pause else ' class="alt"'}>{label}</button>'
+        "</form>"
+    )
+    if t.problem:
+        depots = f'<p class="hint">{escape(t.problem)}</p>'
+    elif not t.stopped:
+        depots = '<p class="hint">Kein Depot im Risikostopp.</p>'
+    else:
+        rows = []
+        for s in t.stopped:
+            since = f" seit {_when(s.since)}" if s.since else ""
+            action = (
+                "<small>Freigabe angefordert – greift in der nächsten Runde</small>"
+                if s.requested
+                else '<form method="post" action="/settings/resume" class="inline">'
+                + hidden
+                + f'<input type="hidden" name="agent" value="{escape(s.agent)}">'
+                + '<button type="submit" class="alt">Wieder freigeben</button></form>'
+            )
+            rows.append(
+                f'<li><b>{escape(s.agent)}</b> <span class="badge stop">Risikostopp'
+                f"{escape(since)}</span> {action}</li>"
+            )
+        depots = f'<ul class="stopped">{"".join(rows)}</ul>'
+    return (
+        '<section class="panel">'
+        + _head("R", "Handel & Risikostopp", "amber")
+        + f'<div class="keystate{" off" if paused else ""}"><i class="led"></i>'
+        f"<strong>{escape(state)}</strong></div>"
+        + switch
+        + '<p class="hint">Pause: kein Depot kauft oder verkauft mehr, auch GPT wird nicht '
+        "gefragt; nur der Risikostopp verkauft weiter. Greift ab der nächsten Runde "
+        "(höchstens 1 min).</p>"
+        + depots
+        + '<p class="hint">Risikostopp: Fällt ein Depot 10 % unter seinen Höchststand, verkauft '
+        "der Bot dessen Coins und stoppt es. Nach der Freigabe handelt es wieder, sein Bargeld "
+        "ist der neue Höchststand. Eine Freigabe gilt 24 h.</p></section>"
+    )
+
+
 def settings_page(
-    values: Mapping[str, str], *, csrf: str, message: str = "", ok: bool = True
+    values: Mapping[str, str],
+    *,
+    csrf: str,
+    message: str = "",
+    ok: bool = True,
+    trading: Trading | None = None,
 ) -> str:
     key = values.get("OPENAI_API_KEY")
     key_state = f"gespeichert ({escape(mask(key))})" if key else "nicht gesetzt"
@@ -421,6 +531,7 @@ def settings_page(
     body = (
         _message(message, ok)
         + readouts
+        + (_trading_panel(trading, hidden) if trading is not None else "")
         + '<form method="post" action="/settings" class="grid">'
         + hidden
         + '<section class="panel span-5">'

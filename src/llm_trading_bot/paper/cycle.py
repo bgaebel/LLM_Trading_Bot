@@ -9,12 +9,14 @@ classic depots are optional. All depots of a cycle see the same snapshot.
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from typing import Any
 
 from llm_trading_bot.llm.agents import BotConfig
 from llm_trading_bot.llm.cycle import run_llm_depots
 from llm_trading_bot.llm.due import iso
 from llm_trading_bot.llm.openai_client import SignalModel
-from llm_trading_bot.market.models import SYMBOLS, Symbol
+from llm_trading_bot.market.models import SYMBOLS, Quote, Symbol
 from llm_trading_bot.market.snapshot import (
     DATA_ERRORS,
     MarketClient,
@@ -24,15 +26,18 @@ from llm_trading_bot.market.snapshot import (
 from llm_trading_bot.paper.db import balance, write_tx
 from llm_trading_bot.paper.execution import (
     BUYHOLD,
+    QUOTE_MAX_AGE,
     Costs,
     Quotes,
+    RiskStop,
     current_weight,
+    fresh_quotes,
     initialize_buyhold,
-    latest_quotes,
     mark,
     record_bar,
     record_decision,
     record_quotes,
+    unquoted_holdings,
     value,
 )
 from llm_trading_bot.paper.report import (
@@ -42,12 +47,28 @@ from llm_trading_bot.paper.report import (
     MarketResult,
     decision_result,
 )
+from llm_trading_bot.paper.risk import NOT_STOPPED, Controls, release
 from llm_trading_bot.strategy.indicators import indicators
 from llm_trading_bot.strategy.payload import cost_roundtrip, feature_payload
 from llm_trading_bot.strategy.signals import run_strategy
 
 # A classic decision is taken once per closed bar of the strategy's own timeframe (minutes).
 STRATEGY_TIMEFRAME: Mapping[str, int] = {"trend": 60, "breakout": 15, "meanrev": 15, "ensemble": 15}
+
+
+def quote_problem(p: Mapping[str, Any], symbol: Symbol, qs: Quotes) -> str:
+    """Why ``symbol`` cannot be decided on ``qs`` (Spec 011 AK7), or "".
+
+    A market without a fresh quote gets no decision, so its bar stays open (Spec 004). A held
+    market without one also blocks the other market: the depot's value is unknown then.
+    """
+    if symbol not in qs:
+        return f"MarketDataError: {symbol.market}: no fresh quote - no decision"
+    held = unquoted_holdings(p, qs)
+    if held:
+        markets = ", ".join(s.market for s in held)
+        return f"MarketDataError: {markets}: no fresh quote for the held position"
+    return ""
 
 
 def _decide(
@@ -57,8 +78,14 @@ def _decide(
     qs: Quotes,
     costs: Costs,
     now: str,
+    stops: list[RiskStop],
+    paused: bool = False,
 ) -> MarketResult:
-    """At most one decision per new closed bar of the agent's own timeframe."""
+    """At most one decision per new closed bar of the agent's own timeframe.
+
+    While trading is paused (ADR-0021) the decision is stored with status PAUSED and not traded,
+    so the log shows what the strategy would have done.
+    """
     symbol = snap.symbol
     bar_ts = snap.bars[STRATEGY_TIMEFRAME[agent]][-1].ts
     exists = con.execute(
@@ -69,26 +96,65 @@ def _decide(
         return decision_result(con, agent, symbol, bar_ts, False)
     p = balance(con, agent)
     if p["halted"]:
-        return MarketResult(agent, symbol, bar_ts, error="portfolio halted")
+        # Arena quant_cycle: a stopped depot takes no decision. ADR-0021: not an error.
+        return MarketResult(agent, symbol, bar_ts, status="HALTED", reason="drawdown stop")
+    problem = quote_problem(p, symbol, qs)
+    if problem:
+        return MarketResult(agent, symbol, bar_ts, error=problem)
     weight = current_weight(p, symbol, qs)
     ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage))
     sig = run_strategy(agent, snap, ind, weight)
     context = feature_payload(snap, ind, weight, costs.fee_rate, costs.slippage)
     new = record_decision(
-        con, agent, symbol, bar_ts, agent.upper(), sig, context, costs=costs, now=now, qs=qs
+        con,
+        agent,
+        symbol,
+        bar_ts,
+        agent.upper(),
+        sig,
+        context,
+        costs=costs,
+        now=now,
+        qs=qs,
+        status="PAUSED" if paused else "OK",
+        stops=stops,
+        partial=True,
     )
     return decision_result(con, agent, symbol, bar_ts, new)
 
 
-def _store_quotes(
-    con: sqlite3.Connection, client: MarketClient, clock: Callable[[], float]
-) -> tuple[Quotes | None, str]:
-    error = ""
-    try:
-        record_quotes(con, client.quotes(), now=iso(clock()))
-    except DATA_ERRORS as exc:
-        error = f"{type(exc).__name__}: {exc}"
-    return latest_quotes(con, now_epoch=clock()), error
+@dataclass
+class _Feed:
+    """Quotes of one cycle: fetched, stored per market and fetched again once they are older
+    than QUOTE_MAX_AGE (Spec 011 AK8), so nothing is traded or valued on old prices."""
+
+    con: sqlite3.Connection
+    client: MarketClient
+    clock: Callable[[], float]
+    fetched_at: float = float("-inf")
+    errors: list[str] = field(default_factory=list)
+
+    def fetch(self) -> set[Symbol]:
+        """Fetch and store; the markets stored by THIS fetch (a failed one stores none)."""
+        # Whole seconds, like the stored stamps (iso): the stored age is never above
+        # clock() - fetched_at, so current() fetches again before fresh_quotes drops a quote.
+        self.fetched_at = float(int(self.clock()))
+        try:
+            book = self.client.quotes()
+        except DATA_ERRORS as exc:
+            self.errors.append(f"{type(exc).__name__}: {exc}")
+            return set()
+        stored = set(record_quotes(self.con, book, now=iso(self.clock())))
+        if problem := book.problem():
+            self.errors.append(f"MarketDataError: {problem}")
+        return stored
+
+    def current(self) -> dict[Symbol, Quote]:
+        now = self.clock()
+        if now - self.fetched_at > QUOTE_MAX_AGE:
+            self.fetch()
+            now = self.clock()
+        return fresh_quotes(self.con, now_epoch=now)
 
 
 def paper_cycle(
@@ -100,25 +166,44 @@ def paper_cycle(
     model: SignalModel | None = None,
     clock: Callable[[], float] = time.time,
     stop_requested: Callable[[], bool] = lambda: False,
+    controls: Controls | None = None,
 ) -> CycleReport:
     """Run one cycle. Precondition: the caller holds the WriterLock of this database.
 
     ``stop_requested`` is asked before the GPT step: while the service is stopping, no new paid
     request is started, but the depots are still valued (Spec 008 AK5).
 
-    Fails closed like the Arena's quant_cycle: without fresh quotes of both markets no decision
-    is taken at all, so the bar stays open. A failing market or depot is reported and skipped;
-    it never blocks another market or depot.
+    Fails closed per market (Spec 011 AK7, ADR-0021): a market without a fresh quote gets no
+    decision, so its bar stays open; a depot holding that market decides in neither market and
+    gets no equity point. A failing market or depot is reported and skipped; it never blocks
+    another market or depot.
+
+    ``controls`` (Spec 011, ADR-0021): release requests are applied first; while trading is
+    paused nothing is bought or sold except by the drawdown stop, which keeps running.
     """
     at = int(clock())
     now = iso(at)
-    report = CycleReport(at, config.agents)
+    controls = controls or Controls()
+    report = CycleReport(at, config.agents, paused=controls.paused)
+    feed = _Feed(con, client, clock)
+    # Also depots switched off meanwhile: the web offers the release for every stopped depot,
+    # and a refusal must be reported, not skipped (Spec 011 AK5).
+    for agent, requested_at in controls.resumes.items():
+        why = release(con, agent, requested_at, clock())
+        if not why:
+            report.released.append(agent)
+        elif why != NOT_STOPPED:
+            report.refused.append((agent, why))
 
-    qs, report.quotes_error = _store_quotes(con, client, clock)
-    if qs is None:
+    feed.fetch()
+    qs = fresh_quotes(con, now_epoch=clock())
+    report.quotes_error = feed.errors[0] if feed.errors else ""
+    if not qs:
         report.quotes_error = report.quotes_error or "stored quotes missing or stale"
         return report
-    report.buyhold_bought = initialize_buyhold(con, qs, costs, when=now)
+    if set(qs) == set(SYMBOLS) and not controls.paused:
+        # Arena: the benchmark buys only on fresh quotes of both markets.
+        report.buyhold_bought = initialize_buyhold(con, qs, costs, when=now)
 
     errors: dict[Symbol, str] = {}
 
@@ -130,6 +215,8 @@ def paper_cycle(
         last_minute = fresh_snap.bars[1][-1]
         record_bar(con, fresh_snap.symbol, bar_ts=last_minute.ts, last_close=last_minute.close)
 
+    # One quote set for every classic depot of the round, no older than QUOTE_MAX_AGE.
+    classic_qs = feed.current() if config.classic else {}
     for agent in config.classic:
         for symbol in SYMBOLS:
             snap = snaps.get(symbol)
@@ -139,7 +226,18 @@ def paper_cycle(
                 )
                 continue
             try:
-                report.markets.append(_decide(con, snap, agent, qs, costs, now))
+                report.markets.append(
+                    _decide(
+                        con,
+                        snap,
+                        agent,
+                        classic_qs,
+                        costs,
+                        now,
+                        report.risk_stops,
+                        controls.paused,
+                    )
+                )
             except Exception as exc:
                 # CLAUDE.md: a BTC failure never blocks ETH. record_decision rolled back its own
                 # transaction; the error stays visible in the report and the exit code.
@@ -157,11 +255,11 @@ def paper_cycle(
             raise ValueError("GPT depots configured but no model client given")
 
         def refresh() -> Quotes | None:
-            # Fail closed: a failed fetch must not fall back to the quotes stored before the
-            # request - the drift check would then compare two prices from the same moment
-            # and trade at a price from before the answer (Spec 005 AK6).
-            fresh, error = _store_quotes(con, client, clock)
-            return None if error else fresh
+            # Fail closed: only markets stored by THIS fetch count. Falling back to quotes
+            # stored before the request would compare two prices from the same moment in the
+            # drift check and trade at a price from before the answer (Spec 005 AK6).
+            stored = feed.fetch()
+            return {s: q for s, q in fresh_quotes(con, now_epoch=clock()).items() if s in stored}
 
         for outcome, results in run_llm_depots(
             con,
@@ -172,16 +270,34 @@ def paper_cycle(
             costs,
             refresh_quotes=refresh,
             clock=clock,
+            stops=report.risk_stops,
+            paused=controls.paused,
         ):
             report.llm.append(outcome)
             report.markets.extend(results)
 
     names = (*config.agents, BUYHOLD)
-    latest = latest_quotes(con, now_epoch=clock()) or qs
+    # Spec 011 AK8: the final valuation never uses quotes older than QUOTE_MAX_AGE.
+    latest = feed.current()
+    valued = []
     with write_tx(con):
         for name in names:
-            mark(con, name, latest, now)
-    for name in names:
+            p = balance(con, name)
+            if held := unquoted_holdings(p, latest):
+                report.unvalued.extend(
+                    MarketResult(
+                        name,
+                        s,
+                        error=f"MarketDataError: {s.market}: no fresh quote for the held"
+                        " position - no equity point",
+                    )
+                    for s in held
+                )
+                continue
+            if (stop := mark(con, name, latest, now, costs)) is not None:
+                report.risk_stops.append(stop)
+            valued.append(name)
+    for name in valued:
         p = balance(con, name)
         report.equity.append(Equity(name, value(p, latest), p["cash"], p["btc"], p["eth"]))
     return report

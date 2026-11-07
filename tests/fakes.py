@@ -8,7 +8,7 @@ from typing import cast
 from golden import scenarios
 from golden_scenarios import Params, build_bars, quote_for
 from llm_trading_bot.market.http import HTTPFailure
-from llm_trading_bot.market.models import Candle, Quote, Symbol
+from llm_trading_bot.market.models import Candle, Quote, QuoteBook, Symbol
 
 
 class FakeTransport:
@@ -46,7 +46,11 @@ VALID_BOOK: list[dict[str, str]] = [
 
 
 def bitvavo_handler(
-    now: int, *, eth_candles_fail: bool = False, quotes_fail: bool = False
+    now: int,
+    *,
+    eth_candles_fail: bool = False,
+    quotes_fail: bool = False,
+    eth_quote_bad: bool = False,
 ) -> Callable[[str], object]:
     """Answers like Bitvavo: newest candle first, millisecond stamps, string values."""
     minutes = {"1m": 1, "15m": 15, "1h": 60, "4h": 240}
@@ -55,6 +59,8 @@ def bitvavo_handler(
         if url.endswith("/ticker/book"):
             if quotes_fail:
                 raise HTTPFailure(503)
+            if eth_quote_bad:
+                return [VALID_BOOK[0], {"market": "ETH-EUR", "bid": "nan", "ask": "3200.2"}]
             return VALID_BOOK
         if eth_candles_fail and "/ETH-EUR/" in url:
             raise HTTPFailure(500)
@@ -79,14 +85,19 @@ class ScenarioClient:
         self.params = {Symbol.BTCEUR: params(btc, "BTCEUR"), Symbol.ETHEUR: params(eth, "ETHEUR")}
         self.fail_candles: set[Symbol] = set()
         self.fail_quotes = False
+        self.bad_quotes: set[Symbol] = set()
+        """Markets whose quote is unusable (Spec 011 AK7: only that market is lost)."""
         self.quote_calls = 0
 
-    def quotes(self) -> dict[Symbol, Quote]:
+    def quotes(self) -> QuoteBook:
         self.quote_calls += 1
         if self.fail_quotes:
             raise HTTPFailure(503)
-        result = {}
+        result = QuoteBook()
         for symbol, p in self.params.items():
+            if symbol in self.bad_quotes:
+                result.errors[symbol] = "ticker/book: unusable quote (fake)"
+                continue
             bid, ask = quote_for(p, build_bars(p))
             result[symbol] = Quote(bid, ask)
         return result

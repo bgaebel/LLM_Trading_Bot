@@ -10,7 +10,14 @@ from typing import Protocol
 
 from llm_trading_bot.market.bitvavo import fill_tiny_gaps
 from llm_trading_bot.market.http import HTTPFailure, TransportError
-from llm_trading_bot.market.models import SYMBOLS, Candle, MarketDataError, Quote, Symbol
+from llm_trading_bot.market.models import (
+    SYMBOLS,
+    Candle,
+    MarketDataError,
+    Quote,
+    QuoteBook,
+    Symbol,
+)
 
 INTERVALS: tuple[int, ...] = (1, 15, 60, 240)
 # Equal to the Arena strategies' MIN_BARS (strategies.py); Spec 003 keeps them and a golden test
@@ -36,7 +43,7 @@ DATA_ERRORS = (
 
 
 class MarketClient(Protocol):
-    def quotes(self) -> dict[Symbol, Quote]: ...
+    def quotes(self) -> QuoteBook: ...
 
     def closed_candles(
         self, symbol: Symbol, interval: int, *, now_epoch: int
@@ -136,7 +143,8 @@ def build_snapshots(
         try:
             quote = quotes.get(symbol)
             if quote is None:
-                raise MarketDataError(f"{symbol.market}: no quote")
+                why = quotes.errors.get(symbol, "missing")
+                raise MarketDataError(f"{symbol.market}: no quote - {why}")
             snap = MarketSnapshot(symbol, bars[symbol], quote, fetched_at, quote_at, filled[symbol])
             snap.validate(now_epoch=int(clock()), min_bars=min_bars)
             snapshots[symbol] = snap

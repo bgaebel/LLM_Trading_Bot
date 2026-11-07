@@ -68,17 +68,20 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 ### market
 - **Zweck:** öffentliche Marktdaten holen und nur geprüfte Daten weitergeben (fail closed). Aus der Arena übernommen (ADR-0003).
 - **Schnittstelle:**
-  - `models`: `Symbol` (BTCEUR/ETHEUR), `Quote`, `Candle`, `MarketDataError`
+  - `models`: `Symbol` (BTCEUR/ETHEUR), `Quote`, `QuoteBook` (gültige Quotes je Markt + `errors`), `Candle`,
+    `MarketDataError`
   - `http`: `Transport`-Protocol, `UrllibTransport` (nur GET), `HTTPFailure(status, retry_after)`,
     `TransportError` (abgebrochene/unlesbare Antwort)
-  - `bitvavo`: `BitvavoClient.quotes()`, `.closed_candles(symbol, interval, now_epoch=)`, `fill_tiny_gaps()`
+  - `bitvavo`: `BitvavoClient.quotes() -> QuoteBook`, `.closed_candles(symbol, interval, now_epoch=)`,
+    `fill_tiny_gaps()`
   - `snapshot`: `build_snapshots(client, clock=, min_bars=, on_error=)` → `dict[Symbol, MarketSnapshot]`;
     `DATA_ERRORS` = Fehler, die als „Markt gerade unbrauchbar“ gelten (alles andere ist ein Bug und wird geworfen)
 - **Invarianten:** nur öffentliche GET-Endpunkte, keine Keys (ADR-0004); nur abgeschlossene Kerzen; höchstens 2
   fehlende 1m-Kerzen werden ergänzt; Snapshot ungültig bei Lücke in den letzten 60 Kerzen, veralteten Daten,
   Quote älter als 20 s, Spread > 50 bp oder Uhrzeitabweichung > 120 s. Nach HTTP 429 keine Anfrage bis zum Ende
-  der Pause (eine `BitvavoClient`-Instanz je Prozess). Ein Markt blockiert den anderen nicht; ein Ausfall von
-  `/ticker/book` betrifft beide.
+  der Pause (eine `BitvavoClient`-Instanz je Prozess). Ein Markt blockiert den anderen nicht – auch nicht bei
+  den Quotes: ein ungültiger, doppelter oder fehlender Eintrag kostet nur seinen Markt (Spec 011); nur eine
+  unlesbare Antwort von `/ticker/book` als Ganzes betrifft beide.
 
 ### strategy
 - **Zweck:** aus einem `MarketSnapshot` Indikatoren, Signale und den LLM-Kontext berechnen. Kein Netz, keine Orders.
@@ -100,17 +103,33 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
     `ensure_portfolios(con, agents)` (Startkapital nur für neue Depots), `check_schema`, `SchemaError`,
     `write_tx(con)` (eine `BEGIN IMMEDIATE`-Transaktion), `balance`, `START_CASH = 10_000`
   - `lock`: `WriterLock(db_path)` (Betriebssystem-Sperre neben der DB), `WriterLockBusy`
-  - `execution`: `Costs` (Gebühr/Slippage, `from_env`), `record_decision`, `trade_to_target`, `mark`,
-    `initialize_buyhold`, `record_quotes`, `latest_quotes`, `value`, `current_weight`
-  - `cycle`: `paper_cycle(con, client, config, costs=, model=, clock=, stop_requested=) -> CycleReport`
-    (bei Stopp-Wunsch keine GPT-Anfrage, Status `STOPPING`; bewertet wird trotzdem), `STRATEGY_TIMEFRAME`
-  - `report`: `CycleReport`, `MarketResult`, `LlmOutcome`, `Equity`
+  - `execution`: `Costs` (Gebühr/Slippage, `from_env`), `record_decision(..., stops=, partial=)`,
+    `trade_to_target`, `mark(con, agent, qs, now, costs) -> RiskStop | None` (Drawdown-Stopp, `DRAWDOWN_KILL =
+    0.10`), `initialize_buyhold`, `record_quotes` (je Markt), `fresh_quotes` (je Markt), `latest_quotes` (beide
+    oder None), `value`, `current_weight`, `covers`, `unquoted_holdings`
+  - `cycle`: `paper_cycle(con, client, config, costs=, model=, clock=, stop_requested=, controls=) -> CycleReport`
+    (bei Stopp-Wunsch keine GPT-Anfrage, Status `STOPPING`; bewertet wird trotzdem), `STRATEGY_TIMEFRAME`,
+    `quote_problem`
+  - `risk`: `read_controls(env, secrets) -> Controls` (Handelspause, Freigaben; fail-closed),
+    `release_problem` (nur lesend, auch für die Weboberfläche), `release(con, agent, requested_at, now)` (gibt ein gestopptes Depot frei, wenn die Anforderung jünger als sein letzter Trade
+    und höchstens `RESUME_MAX_AGE = 24 h` alt ist), `parse_resumes`
+  - `report`: `CycleReport` (u. a. `risk_stops`, `unvalued`, `paused`, `released`, `refused`), `MarketResult`
+    (Status `HALTED`/`PAUSED` sind keine Fehler), `LlmOutcome`, `Equity`
 - **Invarianten:** Schema `user_version = 2` (v2: `llm_calls`); andere Versionen oder Formen werden abgelehnt, nie
   migriert (ADR-0012). Genau ein Schreiber (`WriterLock`). Eine Entscheidung je (Agent, Markt, Bar), mit Trade und Depot in
-  einer Transaktion. Ohne frische Quotes beider Märkte (≤ 20 s) kein Trade. Buy & Hold kauft je Markt einmal.
-  Ausführung identisch zu Arena@7563724, belegt durch `tests/paper/fixtures/execution_golden_v0.3.1.json`
-  (Grenzfälle und Verläufe bitgenau per SHA-256) und `mutation_check.py`. Der 10-%-Drawdown-Stopp der Arena ist
-  noch nicht übernommen (M1 Nr. 4); `halted` wird nur gelesen. SQL-Rechnungen nicht umformen.
+  einer Transaktion. Kurse je Markt (Spec 011): ein Markt ohne frischen Quote (≤ 20 s) bekommt keine Entscheidung
+  (Kerze bleibt offen); hält das Depot dort Bestand, entscheidet es auch im anderen Markt nicht und bekommt keinen
+  Equity-Punkt. Vor den klassischen Entscheidungen und vor der Schlussbewertung werden Quotes, die älter als 20 s
+  sind, neu geholt. Ein Markt ohne Bestand trägt genau 0,0 bei, deshalb sind Entscheidungen mit Teil-Quotes
+  bitgleich zu denen mit beiden (`partial=True` nur aus den Zyklen; Arena-Aufrufe ohne beide Quotes bleiben
+  `STALE_QUOTE`). Buy & Hold kauft je Markt einmal und nur mit beiden Quotes.
+  Drawdown-Stopp wie Arena (`mark_and_risk`, ADR-0021): Equity < 90 % des Allzeithochs (Mittelkurs) → `halted`,
+  Zwangsverkauf aller Bestände als `RISK_SELL` zu `bid × (1 − Slippage)` mit Gebühr (auch unter 50 €), nie für
+  Buy & Hold; geprüft bei jeder Bewertung. Freigabe nur auf Anforderung aus der Weboberfläche; dann
+  `peak = cash`. Handelspause: keine Trades außer `RISK_SELL`, klassische Entscheidungen als `PAUSED`.
+  Ausführung identisch zu Arena@7563724, belegt durch `tests/paper/fixtures/execution_golden_v0.3.1.json` und
+  `execution_drawdown_golden_v0.3.1.json` (Grenzfälle und Verläufe bitgenau per SHA-256; `--check` des Generators
+  belegt die ältere Datei bytegleich) und `mutation_check.py`. SQL-Rechnungen nicht umformen.
 
 ### llm
 - **Zweck:** GPT-Depots fragen und ihre Antworten nur nach strenger Prüfung an `paper` geben (ADR-0012/0013).
@@ -125,13 +144,15 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `openai_client`: `SignalModel`-Protocol, `OpenAIResponses` (Responses API, strict `json_schema`, `store=False`,
     60 s je Anfrage, SDK ohne Wiederholung, eigene Wiederholung ≤ 2 nur bei 429/5xx), `ModelReply.problem()`,
     `ModelReply.requests`
-  - `cycle`: `run_llm_depots(con, agents, settings, model, snaps, costs, refresh_quotes=, clock=)`,
-    `market_triggers(snaps, costs)`
+  - `cycle`: `run_llm_depots(con, agents, settings, model, snaps, costs, refresh_quotes=, clock=, stops=,
+    paused=)`, `market_triggers(snaps, costs)`
 - **Invarianten:** Prompt und Schema festgeschrieben (Hash-Test); Änderung = neue `PROMPT_VERSION`. Ist ein Teil der
   Antwort ungültig, abgelehnt, unvollständig oder kein JSON: kein Trade. Je Versuch eine Zeile `llm_calls` mit
   Reservierung vor dem Aufruf für alle möglichen Anfragen; unbekannte Kosten zählen mit; Wiederholungen werden im
-  schlimmsten Fall abgerechnet; Modell ohne Preis wird nie gefragt. Vor jeder Anfrage frische Quotes (≤ 20 s), nach
-  der Antwort neu geholte Quotes (Mittelkurs ≤ 2 % vom Snapshot, Snapshot ≤ 120 s), sonst `STALE_QUOTE`. Der
+  schlimmsten Fall abgerechnet; Modell ohne Preis wird nie gefragt. Gefragt wird nach den Märkten mit frischem
+  Quote (≤ 20 s); fehlt einem gehaltenen Markt der Quote, keine Anfrage (`NO_QUOTES`). Nach der Antwort neu
+  geholte Quotes je Markt (Mittelkurs ≤ 2 % vom Snapshot, Snapshot ≤ 120 s), sonst nur dieser Markt
+  `STALE_QUOTE`. Gestoppt (`HALTED`) oder pausiert (`PAUSED`): keine Anfrage, keine Kosten. Der
   Signalwechsel-Auslöser vergleicht die Referenzsignale aus Marktsicht (Gewicht 0, `llm_calls.trigger_signals`). Fehler werden nur mit Typnamen
   gespeichert/ausgegeben; der API-Key erscheint nirgends.
 
@@ -144,13 +165,16 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
     überschritten); `install_stop_signals(stop)`; `STALL_SECONDS = 300`, `STOP_SECONDS = 75`, `PING_SECONDS = 20`
   - `notify`: `Notifier.from_env(env)` mit `ready`, `watchdog`, `status`, `stopping` (Datagramm an `NOTIFY_SOCKET`)
   - `status`: `ServiceStatus` (Zustand `starting`/`running`/`degraded`/`stalled`/`stopping`/`stopped`, letzte Runde,
-    Fehler in Folge, nächster Termin, Konfigurationswarnung), `write_status`/`read_status`, `status_path(db)`
+    Fehler in Folge, nächster Termin, Konfigurationswarnung, angewandte Handelspause und ihre Quelle),
+    `write_status`/`read_status` (ältere Dateien ohne die Pausenfelder bleiben lesbar), `status_path(db)`
   - `logs`: `setup_logging(level, stream, journal=)`, `redact(text)`
 - **Invarianten:** `WriterLock` die ganze Laufzeit; die Runde läuft in einem Worker-Thread, der Hauptthread wartet in
   1-s-Scheiben, pingt den Watchdog, bemerkt den Stopp und erzwingt Stall-Grenze und Stopp-Frist (dann `os._exit`,
   SQLite rollt offene Transaktionen zurück). Kein Nachholen verpasster Termine. Ungültige Einstellungen während des
   Betriebs: letzte gültige Konfiguration bleibt, eine Warnung je Fehlerbild. Neuer Key → neuer Client. Keys
-  erscheinen weder im Log noch in der Statusdatei.
+  erscheinen weder im Log noch in der Statusdatei. Handelspause und Freigaben liest der Dienst jede Runde getrennt
+  davon und fail-closed (unlesbar/ungültig = Pause; Umgebung gewinnt). Ein gestopptes Depot ist kein
+  Rundenfehler; jeder Stopp erscheint einmal als WARNING im Journal.
 
 ### web
 - **Zweck:** Betreiber loggt sich ein und pflegt OpenAI-Key und Einstellungen; `paper-cycle` liest sie (ADR-0015).
@@ -158,13 +182,15 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `app`: `WebApp(data_dir, db=, key_check=)` mit `handle(method, path, cookie, form)` (für den Verbindungstest ein
     `KeyCheck`, den der Handler außerhalb der App-Sperre ausführt und mit `key_checked` beendet),
     `make_server(app, host, port)` (nur 127.0.0.1), `serve(...)`; Routen `/` (Übersicht), `/setup`, `/login`,
-    `/logout`, `/settings`, `/settings/test`, `/app.css`, `/app.js`
+    `/logout`, `/settings`, `/settings/test`, `/settings/pause`, `/settings/resume`, `/app.css`, `/app.js`
   - `readonly`: `reading(db)` – ein Lese-Snapshot je Seitenaufruf (`mode=ro`, `query_only`, ADR-0016), sonst
     `DbUnavailable`
   - `overview`: `load(con, now, shares, service=)` → `Overview` (Depots, Equity-Reihen über den Index ausgedünnt,
     Lebenszeichen, Entscheidungen, GPT heute, Trades, Kurse); `service_pulse(status, now)`
   - `auth`: `PasswordStore` (scrypt), `LoginGuard` (5 Fehlversuche → 60 s), `Sessions` (12 h, im Speicher)
-  - `credentials`: `SecretsFile.update(form, agents=, clear_key=)` (prüft mit `load_config`), `load_env_file`, `mask`
+  - `credentials`: `SecretsFile.update(form, agents=, clear_key=)` (prüft mit `load_config`), `set_paused`,
+    `request_resume` (schreiben `BOT_PAUSED`/`BOT_RESUME`, auch wenn andere Einstellungen kaputt sind),
+    `load_env_file`, `mask`
   - `files`: `write_private` (atomar, 600)
 - **Invarianten:** nur 127.0.0.1; Host-Header-Name 127.0.0.1/localhost (Port frei, SSH-Tunnel); POST mit fremdem
   `Origin`/`Sec-Fetch-Site` abgelehnt; Ersteinrichtung nur mit Einrichtungscode aus dem Terminal; jedes Formular
@@ -176,16 +202,18 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 
 ## Datenfluss & Nebenläufigkeit
 `build_snapshots` holt je Markt die Kerzen für 1/15/60/240 min, danach einmal die Quotes (sie veralten am
-schnellsten), dann die Prüfung je Markt. `paper_cycle`: Quotes holen und speichern → frische Quotes aus der DB
-(sonst Ende ohne Entscheidung) → Buy & Hold initialisieren → Snapshots → je Markt eine Entscheidung pro neuem
-abgeschlossenem Bar des Strategie-Zeitrahmens (trend 60 min, sonst 15 min) → GPT-Depots (luna, sol) mit demselben
+schnellsten), dann die Prüfung je Markt. `paper_cycle`: Freigaben anwenden → Quotes holen und je Markt speichern →
+frische Quotes aus der DB (ohne jeden Ende ohne Entscheidung) → Buy & Hold initialisieren (beide Quotes, keine
+Pause) → Snapshots → Quotes älter als 20 s neu holen → je Markt eine Entscheidung pro neuem abgeschlossenem Bar
+des Strategie-Zeitrahmens (trend 60 min, sonst 15 min) → GPT-Depots (luna, sol) mit demselben
 Snapshot: je Depot frische Quotes? fällig? (stündlich, Bewegung ≥ 1,8 % oder Wechsel eines Referenzsignals, ≥ 10 min
 Abstand, ≤ 4/h) → Reservierung; dann alle Anfragen gleichzeitig (Threads, nur Netz) → Quotes einmal neu holen → je
-Depot Abrechnung → Prüfung → Entscheidung je Markt → Equity-Punkt je Depot. Ein Fehler eines Depots blockiert die
-anderen nicht.
+Depot Abrechnung → Prüfung → Entscheidung je Markt → Quotes älter als 20 s neu holen → Equity-Punkt und
+Drawdown-Prüfung je Depot. Ein Fehler eines Depots blockiert die anderen nicht.
 Der Dienst (`service.run`) startet diesen Zyklus jede Minute um :05 in einem Worker-Thread; dauert er länger, folgt
 die nächste Runde am nächsten freien Termin. Anders als in der Arena (getrennte Kurs-, Signal- und LLM-Worker) läuft
-alles in einer Runde (ADR-0017); ein schneller Kurs-/Risiko-Worker folgt mit M1 Nr. 4. Die Weboberfläche liest
+alles in einer Runde (ADR-0017); einen schnellen Kurs-/Risiko-Worker gibt es bewusst nicht (ADR-0021, neu
+bewerten mit M2). Die Weboberfläche liest
 parallel nur lesend (ADR-0016) und dazu `service-status.json`.
 
 ## Externe Schnittstellen
