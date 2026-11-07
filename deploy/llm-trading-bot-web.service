@@ -1,8 +1,10 @@
 # Origin: LLM-Trading-Arena@7563724 deploy unit options (adapted)
-# The web UI (Spec 006/007): only on 127.0.0.1, reached through an SSH tunnel (ADR-0005, ADR-0015).
+# The web UI (Spec 006/007/013): only on 127.0.0.1 - port 8787 for the SSH tunnel, with a public host
+# also 8788 for Caddy, the only way in from outside (ADR-0015, ADR-0024).
 # It reads the bot database read-only (ADR-0016) and writes only secrets.env and its login file.
-# Installed with roadmap Nr. 6: replace __SERVICE_USER__, __APP_DIR__ and __DATA_DIR__, copy to
-# /etc/systemd/system/. Real user names and paths never go into this file: the repo is public.
+# deploy/release.sh replaces __SERVICE_USER__, __APP_DIR__, __DATA_DIR__ and __PUBLIC_HOST_ARG__ (empty,
+# or --public-host <domain> --public-port 8788 from /etc/llm-trading-bot/public-host) and installs it.
+# Real user names, paths and the domain never go into this file: the repo is public.
 [Unit]
 Description=LLM Trading Bot - web UI on 127.0.0.1
 Wants=network-online.target
@@ -14,11 +16,15 @@ Type=simple
 User=__SERVICE_USER__
 WorkingDirectory=__DATA_DIR__
 Environment=PYTHONUNBUFFERED=1
-ExecStart=__APP_DIR__/.venv/bin/trading-bot web --data-dir __DATA_DIR__ --host 127.0.0.1 --port 8787
+ExecStart=__APP_DIR__/.venv/bin/trading-bot web --data-dir __DATA_DIR__ --host 127.0.0.1 --port 8787 __PUBLIC_HOST_ARG__
 Restart=on-failure
 RestartSec=15
 TimeoutStopSec=20
 LogNamespace=llm-trading-bot
+# Spec 013: the page faces the internet - an overload must hit the web UI, never the bot.
+MemoryMax=256M
+TasksMax=64
+OOMScoreAdjust=500
 
 UMask=0077
 NoNewPrivileges=yes
