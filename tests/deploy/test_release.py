@@ -535,7 +535,7 @@ def test_a_failed_unit_install_never_switches_or_starts_the_release(box: Sandbox
         units.chmod(0o755)
         for p in files:
             p.chmod(0o644)
-    assert result.returncode != 0
+    assert result.returncode != 0, result.stdout + result.stderr
     assert box.current() == sha(1)  # never switched to the half-installed release
 
 
