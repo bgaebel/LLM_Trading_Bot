@@ -1,0 +1,66 @@
+# The public HTTPS front of the web UI (Spec 013, ADR-0024). Caddy from its official apt repository.
+# deploy/release.sh replaces __PUBLIC_HOST__ with the domain from /etc/llm-trading-bot/public-host:
+# the repository is public, the real domain never goes into this file.
+# No log directive on purpose: no access log, so no client IPs or paths are kept.
+{
+	# The admin API only as a unix socket (no port 2019); /run/caddy comes from a systemd drop-in.
+	admin unix//run/caddy/admin.sock
+	servers {
+		# Slow clients must not hold the app's threads (LEARNING #web: the app is a ThreadingHTTPServer).
+		timeouts {
+			read_header 5s
+			read_body 10s
+			write 30s
+			idle 60s
+		}
+		# HTTP/3 off: only 80/tcp and 443/tcp are open.
+		protocols h1 h2
+	}
+}
+
+__PUBLIC_HOST__ {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	request_body {
+		max_size 64KB
+	}
+	# Only the app's public listener; it tells the way in by the socket, never by headers. Caddy sets
+	# X-Forwarded-For itself and drops what the client sent, so no request headers are changed here.
+	reverse_proxy 127.0.0.1:8788 {
+		# Bodies are read completely before they reach the app.
+		request_buffers 64KB
+		# The app's own Server header must not reach the internet either.
+		header_down -Server
+		transport http {
+			max_conns_per_host 16
+			response_header_timeout 30s
+		}
+	}
+	# Caddy's own errors (body too large, app down) carry the same headers and a plain status line.
+	handle_errors {
+		header {
+			Strict-Transport-Security "max-age=31536000"
+			-Server
+		}
+		respond "{err.status_code} {err.status_text}"
+	}
+}
+
+# One origin for cookies and CSRF checks.
+www.__PUBLIC_HOST__ {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	redir https://__PUBLIC_HOST__{uri} permanent
+	# Caddy's own errors (body too large, app down) carry the same headers and a plain status line.
+	handle_errors {
+		header {
+			Strict-Transport-Security "max-age=31536000"
+			-Server
+		}
+		respond "{err.status_code} {err.status_text}"
+	}
+}

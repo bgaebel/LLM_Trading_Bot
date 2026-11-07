@@ -186,6 +186,57 @@ def test_rollback_uses_the_newest_green_commit_when_the_tip_is_not_green(local: 
     assert b"# tip" not in sent and green != tip
 
 
+@pytest.mark.parametrize(
+    ("args", "remote"),
+    [
+        (["public", "example.test"], "public 'example.test' 'botsvc'"),
+        (["public", "bot.example.co.uk"], "public 'bot.example.co.uk' 'botsvc'"),
+        (["public", "off"], "public-off 'botsvc'"),
+    ],
+)
+def test_public_runs_the_release_script_of_origin_main_in_one_connection(
+    local: Local, args: list[str], remote: str
+) -> None:
+    done = local.run("srv", "botsvc", *args)
+    assert done.returncode == 0, done.stderr
+    ((ssh_args, script),) = local.ssh_calls()  # one connection: the ufw rate limit
+    assert ssh_args == ["srv", f"sudo bash -s -- {remote}"]
+    assert script == (REPO / "deploy" / "release.sh").read_bytes()
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        "Example.test",
+        "example",
+        "a..test",
+        "-a.test",
+        "a.test;id",
+        "a.test x",
+        "'a.test'",
+        "",
+        "Off",
+    ],
+)
+def test_public_bad_domains_never_reach_the_server(local: Local, domain: str) -> None:
+    done = local.run("srv", "botsvc", "public", domain)
+    assert done.returncode != 0 and "invalid domain" in done.stderr
+    assert local.ssh_calls() == []
+
+
+@pytest.mark.parametrize("args", [["public"], ["public", "example.test", "x"], ["status", "x"]])
+def test_public_and_status_take_exactly_their_arguments(local: Local, args: list[str]) -> None:
+    assert local.run("srv", "botsvc", *args).returncode != 0
+    assert local.ssh_calls() == []
+
+
+def test_public_status_runs_the_release_script_status(local: Local) -> None:
+    done = local.run("srv", "botsvc", "status")
+    assert done.returncode == 0, done.stderr
+    ((ssh_args, _),) = local.ssh_calls()
+    assert ssh_args == ["srv", "sudo bash -s -- status"]
+
+
 def test_deploy_refuses_when_origin_cannot_be_fetched(local: Local) -> None:
     local.git("remote", "set-url", "origin", str(local.work.parent / "gone.git"))
     done = local.run("srv", "botsvc", "deploy")

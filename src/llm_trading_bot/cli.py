@@ -386,6 +386,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     web.add_argument("--port", type=int, default=8787)
     web.add_argument("--host", default="127.0.0.1", help="must stay 127.0.0.1 (ADR-0015)")
+    web.add_argument(
+        "--public-host", default=None, help="the domain Caddy serves (ADR-0024); off if missing"
+    )
+    web.add_argument(
+        "--public-port", type=int, default=8788, help="the 127.0.0.1 port only Caddy uses"
+    )
     args = parser.parse_args(argv)
     # LEARNING(#windows): Umlaute in der Konsolenausgabe kaputt unter Windows
     # The Windows console defaults to cp1252; strategy reasons contain German umlauts.
@@ -416,7 +422,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_restore(args.backup, args.db, out=sys.stdout)
     if args.command == "web":
         try:
-            serve(args.data_dir, port=args.port, host=args.host, out=sys.stdout, db=args.db)
+            serve(
+                args.data_dir,
+                port=args.port,
+                host=args.host,
+                out=sys.stdout,
+                db=args.db,
+                public_host=args.public_host,
+                public_port=args.public_port,
+            )
         except ValueError as exc:
             print(f"web refused: {exc}", file=sys.stdout)
             return EXIT_INVALID

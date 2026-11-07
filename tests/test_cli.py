@@ -406,3 +406,19 @@ def test_live_mode_stops_every_command_before_any_client_or_database(
     with pytest.raises(NotImplementedError):
         cli.main(args)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_web_passes_the_public_host_and_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec 013: the unit's `--public-host <domain> --public-port 8788` reach serve()."""
+    from llm_trading_bot import cli
+
+    seen: list[object] = []
+    monkeypatch.setattr(
+        cli, "serve", lambda data_dir, **kw: seen.append((kw["public_host"], kw["public_port"]))
+    )
+    assert main(["web", "--data-dir", str(tmp_path)]) == EXIT_OK
+    args = ["--public-host", "bot.example.test", "--public-port", "9999"]
+    assert main(["web", "--data-dir", str(tmp_path), *args]) == EXIT_OK
+    assert seen == [(None, 8788), ("bot.example.test", 9999)]

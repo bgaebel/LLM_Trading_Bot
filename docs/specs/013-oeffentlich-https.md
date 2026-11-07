@@ -1,6 +1,6 @@
 # Spec 013: Weboberfläche öffentlich per HTTPS mit Login
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s013-oeffentlich-https` · **Meilenstein:** M1 (Nachtrag zu Nr. 7)
 - **Erstellt:** 2026-11-07
 
@@ -34,7 +34,7 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
   frei) an; Port 8788 (Caddy, nur mit `--public-host`) nur genau den öffentlichen Host (ohne Port, Kleinschreibung
   egal); alles andere → 421. Auf 8787 führt ein `X-Forwarded-For`/`X-Forwarded-Host` zu 421. Ohne
   `--public-host` gibt es nur 8787 und alles verhält sich wie heute. — Nachweis:
-  `tests/web/test_server.py::test_public_host_*`, bestehende Host-Tests grün
+  `tests/web/test_public.py::test_public_host_*`, bestehende Host-Tests grün
 - [ ] AK2: POSTs auf 8788 verlangen `Origin: https://<domain>` (oder kein Origin, dann `Sec-Fetch-Site` wie heute);
   `http://`, fremde und lokale Origins → 403; auf 8787 bleibt die heutige Regel. CSRF-Token wie bisher. —
   Nachweis: `test_public_origin_*`
@@ -47,7 +47,7 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
   unbekannte Geräte. Ein gültiges Geräte-Cookie (HMAC mit Schlüssel `web-device.key`, 600, im Datenverzeichnis;
   90 Tage) nimmt das Gerät von IP- und globaler Sperre aus, es zählt nur die eigenen Fehlversuche. Ein gesperrter
   öffentlicher Zugang sperrt den Tunnel nicht. Gilt für Login. — Nachweis: `tests/web/test_auth.py::test_backoff_*`,
-  `test_device_*`, `tests/web/test_server.py::test_public_lockout_*` (Angreifer-IP gesperrt, andere IP nicht;
+  `test_device_*`, `tests/web/test_public.py::test_public_lockout_*` (Angreifer-IP gesperrt, andere IP nicht;
   global gesperrt, Gerät mit Cookie meldet sich an)
 - [ ] AK5: Öffentlich (8788) gibt es keine Einrichtung: Ohne Passwort antwortet jede öffentliche URL mit 503 und dem
   Hinweis „Einrichtung nur per SSH-Tunnel“, ohne Formular, Cookie oder Code. — Nachweis: `test_public_setup_*`
@@ -56,7 +56,7 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
   „Für den Zugang aus dem Internet bitte ein längeres Passwort setzen (Einstellungen, per Tunnel oder hier nach dem
   Login)“ – ohne Hinweis, ob das Passwort stimmte. Neu: „Passwort ändern“ in den Einstellungen (altes Passwort +
   neues zweimal, CSRF; neue Passwörter immer ≥ 12 Zeichen und nicht häufig). — Nachweis:
-  `tests/web/test_auth.py::test_password_policy_*`, `tests/web/test_server.py::test_public_password_*`,
+  `tests/web/test_auth.py::test_password_policy_*`, `tests/web/test_public.py::test_public_password_*`,
   `test_change_password_*`
 - [ ] AK7: Server-Dateien: `deploy/Caddyfile` mit `__PUBLIC_HOST__` (genau die Adressen `__PUBLIC_HOST__` und
   `www.__PUBLIC_HOST__`, `reverse_proxy 127.0.0.1:8788` mit Grenzen und Puffer, `www`-Weiterleitung, HSTS und
@@ -109,10 +109,10 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
   Tailscale (vom Nutzer verworfen).
 
 ## Plan
-- [ ] 1. Sperre je Schlüssel, Geräte-Cookie, Passwortregel und -änderung (AK4, AK6)
-- [ ] 2. Zweiter Listener, Host/Origin/Cookies/Setup je Weg, `--public-host` (AK1–AK3, AK5)
-- [ ] 3. Caddyfile, Unit, `release.sh`, CI-Prüfung (AK7)
-- [ ] 4. `deploy.sh public` / `public off` / `status` mit Sandbox-Tests (AK8)
+- [x] 1. Sperre je Schlüssel, Geräte-Cookie, Passwortregel und -änderung (AK4, AK6)
+- [x] 2. Zweiter Listener, Host/Origin/Cookies/Setup je Weg, `--public-host` (AK1–AK3, AK5)
+- [x] 3. Caddyfile, Unit, `release.sh`, CI-Prüfung (AK7)
+- [x] 4. `deploy.sh public` / `public off` / `status` mit Sandbox-Tests (AK8)
 - [ ] 5. Doku, ADR, PROJEKT/CLAUDE.md; Prüfung (Workflow); PR (AK10)
 - [ ] 6. Mit Zustimmung: Deploy, `public <domain>`, Prüfung von außen (AK9)
 
@@ -132,6 +132,12 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
   dem Repo; Sperre je IP und Geräte-Cookie statt global; Zugangsweg am Socket; öffentlich keine Einrichtung;
   `__Host-`-Cookies; Caddy aus dem offiziellen Repo mit Grenzen und Admin-Socket; Caddyfile optional und vor dem
   Stoppen geprüft, Neuladen erst nach gesundem Release; Reihenfolge und `public off`.
+- 2026-11-07: Server-Seite parallel in einem Worktree gebaut und gemergt. Review-Workflow (13 bestätigte Punkte),
+  eingearbeitet: Geräte-Cookie bei jedem Login erneuert, Schlüssel nach Passwortwechsel neu (alte Geräte-Cookies
+  ungültig), fehlerhafte Cookies kein Absturz; volle Sperrtabelle vergisst keine gesperrten Clients mehr
+  (Neue teilen einen Überlauf-Schlüssel); `public` startet die Weboberfläche auch nach einem gescheiterten
+  Caddy-Start neu; Caddy-Fehlerseiten mit HSTS und ohne `Server`; Fußzeile/Ticker; Doku-Befehle (`curl -D -`,
+  AAAA für www); Tests für `serve()` und CLI-Verdrahtung.
 
 ## Ergebnis
 - **Erreicht:** …
