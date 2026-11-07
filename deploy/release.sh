@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install, update and roll back the bot on the server (Spec 009, ADR-0018).
+# Install, update and roll back the bot on the server (Spec 009, ADR-0020).
 # Origin: LLM-Trading-Arena@7563724 apps/arena/scripts/deploy_release.py (adapted): build the
 # candidate while the old service runs, stop, back up, switch, health check, on failure roll back
 # code and units only - never the database.
@@ -142,7 +142,7 @@ cmd_install() {
   ensure_dir "$BACKUPS/daily" 700 "$service:"
   ensure_dir "$BACKUPS/pre-update" 700 "$service:"
   install_uv
-  # ADR-0018: time-sync.target only waits for NTP when this service is enabled.
+  # ADR-0020: time-sync.target only waits for NTP when this service is enabled.
   if "$SYSTEMCTL" is-enabled --quiet systemd-time-wait-sync.service; then
     log "unchanged  systemd-time-wait-sync enabled"
   else
@@ -232,28 +232,30 @@ verify_units() {
   rm -rf "$tmp"
 }
 
+# Called from start_release, which runs inside `if`/`||` where set -e is off: every step that
+# can fail returns 1 itself, so a half-installed release is never switched to or started.
 install_units() {
   local release="$1" service="$2" tmp unit
-  tmp="$(mktemp -d)"
-  render_units "$release" "$service" "$CURRENT" "$tmp"
-  install -d -m 755 "$UNIT_DIR"
+  tmp="$(mktemp -d)" || return 1
+  render_units "$release" "$service" "$CURRENT" "$tmp" || return 1
+  install -d -m 755 "$UNIT_DIR" || return 1
   for unit in "${UNITS[@]}"; do
-    install -m 644 "$tmp/$unit" "$UNIT_DIR/$unit"
+    install -m 644 "$tmp/$unit" "$UNIT_DIR/$unit" || return 1
   done
   local journald="$JOURNALD_DIR/$JOURNALD_CONF"
   if ! cmp -s "$tmp/$JOURNALD_CONF" "$journald"; then
-    install -m 644 "$tmp/$JOURNALD_CONF" "$journald"
+    install -m 644 "$tmp/$JOURNALD_CONF" "$journald" || return 1
     # The namespace's journald picks up new limits on its next start.
     "$SYSTEMCTL" try-restart "systemd-journald@llm-trading-bot.service" || true
   fi
   rm -rf "$tmp"
-  "$SYSTEMCTL" daemon-reload
+  "$SYSTEMCTL" daemon-reload || return 1
 }
 
 switch_to() {
   local sha="$1"
-  ln -sfn "$RELEASES/$sha" "$APP/.current.new"
-  mv -T "$APP/.current.new" "$CURRENT"
+  ln -sfn "$RELEASES/$sha" "$APP/.current.new" || return 1
+  mv -T "$APP/.current.new" "$CURRENT" || return 1
 }
 
 current_sha() {
@@ -343,8 +345,8 @@ wait_web() {
 # web UI did not start. Sets FP_CHANGED when secrets.env or a drop-in differs from FP_BEFORE.
 start_release() {
   local sha="$1" service="$2" since
-  install_units "$RELEASES/$sha" "$service"
-  switch_to "$sha"
+  install_units "$RELEASES/$sha" "$service" || return 1
+  switch_to "$sha" || return 1
   # Compared before the web UI runs again: from then on a saved setting is a legitimate change.
   [ "$(fingerprint)" = "$FP_BEFORE" ] || FP_CHANGED=1
   quietly "$SYSTEMCTL" enable --now "$WEB" "$TIMER"
@@ -430,12 +432,18 @@ prune() {
   local keep=() sha
   keep+=("$(current_sha)")
   if [ -L "$PREVIOUS" ]; then keep+=("$(basename "$(readlink "$PREVIOUS")")"); fi
-  local count=0
+  local active=0 failed=0
   while IFS= read -r sha; do
-    count=$((count + 1))
     local kept=0 k
     for k in "${keep[@]}"; do [ "$k" = "$sha" ] && kept=1; done
-    if [ "$kept" -eq 0 ] && [ "$count" -gt "$KEEP_RELEASES" ]; then
+    if grep -q " $sha active$" "$APP/deployed.log" 2>/dev/null; then
+      active=$((active + 1))
+      [ "$active" -le "$KEEP_RELEASES" ] && kept=1
+    else
+      failed=$((failed + 1))
+      [ "$failed" -le 1 ] && kept=1
+    fi
+    if [ "$kept" -eq 0 ]; then
       rm -rf "${RELEASES:?}/$sha"
       log "removed old release $sha"
     fi

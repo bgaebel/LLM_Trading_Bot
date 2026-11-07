@@ -5,6 +5,7 @@ import os
 import sqlite3
 import stat
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -123,3 +124,44 @@ def test_backup_leaves_the_source_untouched(tmp_path: Path) -> None:
     backup_db(db, tmp_path / "backups")
     assert digest(db) == before
     assert os.path.getsize(db) > 0
+
+
+def test_rotation_orders_copies_of_the_same_second_by_their_suffix(tmp_path: Path) -> None:
+    db = bot_db(tmp_path / "bot.db")
+    made = [backup_db(db, tmp_path / "backups", keep=14, clock=at(NOW)) for _ in range(3)]
+    assert [m.path.name.split("Z")[-1] for m in made] == [".db", "-1.db", "-2.db"]
+    rotate(tmp_path / "backups", 2)
+    left = sorted(p.name for p in (tmp_path / "backups").iterdir())
+    assert left == sorted(m.path.name for m in made[1:])  # the oldest (no suffix) went first
+
+
+def test_rotation_removes_temporary_files_of_killed_backups(tmp_path: Path) -> None:
+    directory = tmp_path / "backups"
+    directory.mkdir()
+    stale = directory / ".bot-20270101T000000Z.123.tmp"
+    fresh = directory / ".bot-20270101T000100Z.456.tmp"
+    for path in (stale, fresh):
+        path.write_bytes(b"half a copy")
+    old = time.time() - 2 * 3600
+    os.utime(stale, (old, old))
+    rotate(directory, 14)
+    assert not stale.exists() and fresh.exists()  # a running backup's file stays
+
+
+def test_verify_db_finds_duplicate_keys_even_past_the_schema_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Defence in depth: a database whose unique index was lost must not pass as a good backup.
+    import llm_trading_bot.ops.backup as backup
+
+    db = bot_db(tmp_path / "bot.db")
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE copy AS SELECT * FROM portfolios")
+    con.execute("DROP TABLE portfolios")
+    con.execute("ALTER TABLE copy RENAME TO portfolios")
+    con.execute("INSERT INTO portfolios SELECT * FROM portfolios LIMIT 1")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(backup, "check_schema", lambda con: None)
+    with pytest.raises(BackupError, match="duplicate portfolios key"):
+        verify_db(db)

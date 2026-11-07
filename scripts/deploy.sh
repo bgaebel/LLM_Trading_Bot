@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy the bot from this machine to the server (Spec 009 AK6, ADR-0018). Runs in Git Bash.
+# Deploy the bot from this machine to the server (Spec 009 AK6, ADR-0020). Runs in Git Bash.
 #
 #   scripts/deploy.sh <alias> <service-user> install            one-time layout, uv, time sync
 #   scripts/deploy.sh <alias> <service-user> deploy [<commit>]  default: origin/main

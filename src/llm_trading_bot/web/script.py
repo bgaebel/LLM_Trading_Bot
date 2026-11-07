@@ -12,6 +12,7 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
   const PERIOD = 5000;
   const MAX_WAIT = 60000;
   const DEADLINE = 15000; // one request; a page normally comes in well under a second
+  const HOLD = 60000; // longest wait for a text selection to end before the page is updated
   let wait = PERIOD;
   let offset = 0; // server time minus browser time, in seconds
   let timer = 0;
@@ -68,17 +69,25 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
   }
 
   // Swapping resets horizontal scrolling and drops a text selection: only when the content
-  // changed (about once a round), never while the user has text selected, keeping scrollLeft.
+  // changed (about once a round), keeping scrollLeft, and while text is selected at most
+  // HOLD long - stale levels must not stay on screen forever.
+  let heldSince = 0;
   function swap(current, fresh) {
     if (signature(current) === signature(fresh)) return;
     const selection = window.getSelection();
-    if (selection && !selection.isCollapsed && current.contains(selection.anchorNode)) return;
+    if (selection && !selection.isCollapsed && current.contains(selection.anchorNode)) {
+      heldSince = heldSince || Date.now();
+      if (Date.now() - heldSince < HOLD) return;
+    }
+    heldSince = 0;
     const scrolled = [...current.querySelectorAll(".scroll")].map((e) => e.scrollLeft);
     current.replaceWith(fresh);
     fresh.querySelectorAll(".scroll").forEach((e, i) => {
       if (scrolled[i]) e.scrollLeft = scrolled[i];
     });
   }
+
+  class ServerError extends Error {}
 
   // One fetch at a time: a tab that becomes visible again must not start a second chain.
   let busy = false;
@@ -101,7 +110,7 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
         location.assign("/login"); // the session ended: log in again
         return;
       }
-      if (!response.ok) throw new Error("HTTP " + response.status);
+      if (!response.ok) throw new ServerError("HTTP " + response.status);
       const fresh = new DOMParser().parseFromString(await response.text(), "text/html");
       const main = fresh.querySelector("main");
       if (!main) throw new Error("no overview in the answer");
@@ -118,7 +127,9 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
       wait = PERIOD;
     } catch (error) {
       wait = Math.min(wait * 2, MAX_WAIT);
-      notice("Verbindung unterbrochen – nächster Versuch in " + Math.round(wait / 1000) + " s");
+      const what =
+        error instanceof ServerError ? "Server meldet " + error.message : "Verbindung unterbrochen";
+      notice(what + " – nächster Versuch in " + Math.round(wait / 1000) + " s");
     } finally {
       window.clearTimeout(deadline);
       busy = false;

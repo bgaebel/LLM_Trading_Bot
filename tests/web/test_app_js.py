@@ -30,6 +30,7 @@ from llm_trading_bot.web.script import JS
         r"localStorage|sessionStorage|indexedDB",
         r"\.setAttribute\(\s*[\"']on",
         r"\.style\b",
+        r"XMLHttpRequest|sendBeacon|WebSocket|EventSource",
     ],
 )
 def test_the_script_avoids_what_the_csp_and_adr_0019_rule_out(forbidden: str) -> None:
@@ -161,3 +162,20 @@ def test_a_request_that_never_answers_is_given_up_after_the_deadline() -> None:
         "timers": [5000, 15000, 10000],
         "notice": "Verbindung unterbrochen – nächster Versuch in 10 s",
     }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
+def test_a_server_error_is_named_as_such_not_as_a_lost_connection() -> None:
+    result = run_in_node(
+        """
+        listeners.visibilitychange();
+        pending[0].ok({ url: "http://127.0.0.1:8787/", ok: false, status: 500 });
+        await new Promise((r) => setTimeout(r, 0));
+        console.log(JSON.stringify({ notice: main.child && main.child.textContent }));
+        """
+    )
+    assert result == {"notice": "Server meldet HTTP 500 – nächster Versuch in 10 s"}
+
+
+def test_a_text_selection_holds_the_update_back_at_most_a_minute() -> None:
+    assert "const HOLD = 60000;" in JS and "Date.now() - heldSince < HOLD" in JS

@@ -428,8 +428,30 @@ def test_service_pulse_names_failures_and_configuration_problems() -> None:
         ),
         ("quotes: HTTPFailure: HTTP 503", "no_quotes", 60, overview.DELAYED, "2 Runden mit Fehler"),
         (f"RuntimeError: {GAP}", "error", 60, overview.DELAYED, "2 Runden mit Fehler"),
+        (
+            "breakout BTC-EUR: MarketDataError: BTC-EUR: 1m data stale or in the future (200s)",
+            "incomplete",
+            60,
+            overview.RUNNING,
+            "BTC-EUR ohne Entscheidung: Marktdaten von Bitvavo unbrauchbar",
+        ),
+        (
+            "quotes: MarketDataError: spread too wide",
+            "incomplete",
+            60,
+            overview.RUNNING,
+            "Kursabruf bei Bitvavo gescheitert, gespeicherte Kurse genutzt",
+        ),
     ],
-    ids=["gap", "gap-but-late", "code-error", "no-quotes", "error-quoting-a-gap"],
+    ids=[
+        "gap",
+        "gap-but-late",
+        "code-error",
+        "no-quotes",
+        "error-quoting-a-gap",
+        "stale-data",
+        "quotes-fallback",
+    ],
 )
 def test_a_round_that_only_lacked_market_data_shows_the_bot_running(
     error: str, result: str, age: float, level: str, note: str

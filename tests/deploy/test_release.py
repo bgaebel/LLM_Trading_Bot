@@ -514,3 +514,33 @@ def test_an_incomplete_round_from_a_code_error_still_rolls_back(box: Sandbox) ->
     result = box.run("deploy", sha(2), "botsvc", check=False)
     assert result.returncode != 0 and f"rolled back to {sha(1)}" in result.stderr
     assert box.current() == sha(1)
+
+
+def test_a_failed_unit_install_never_switches_or_starts_the_release(box: Sandbox) -> None:
+    # start_release runs where set -e is off; a failing install must still stop the switch.
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    blocker = box.root / "etc/systemd/system/llm-trading-bot-backup.timer"
+    blocker.unlink()
+    blocker.mkdir()  # `install -m 644` onto a directory fails
+    box.upload(sha(2))
+    result = box.run("deploy", sha(2), "botsvc", check=False)
+    assert result.returncode != 0
+    assert box.current() == sha(1)  # never switched to the half-installed release
+
+
+def test_pruning_counts_only_releases_that_were_active(box: Sandbox) -> None:
+    installed(box).secrets()
+    for n in (1, 2):
+        box.upload(sha(n))
+        box.run("deploy", sha(n), "botsvc")
+    (box.state / f"bad-{sha(3)}").touch()
+    box.upload(sha(3))
+    assert box.run("deploy", sha(3), "botsvc", check=False).returncode != 0  # rolled back
+    for n in (4, 5, 6):
+        box.upload(sha(n))
+        box.run("deploy", sha(n), "botsvc")
+    left = sorted(p.name for p in (box.app / "releases").iterdir())
+    # Three that ran (6 current, 5 previous, 4) plus the newest failed build to look at.
+    assert left == [sha(3), sha(4), sha(5), sha(6)]
