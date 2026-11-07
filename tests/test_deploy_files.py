@@ -187,8 +187,9 @@ def _host_pattern(path: Path) -> str:
     return found.group(1)
 
 
-def test_caddy_domain_pattern_is_the_one_from_the_spec() -> None:
+def test_caddy_domain_pattern_is_the_same_in_both_scripts() -> None:
     pattern = _host_pattern(DEPLOY / "release.sh")
+    assert pattern == _host_pattern(REPO / "scripts" / "deploy.sh")
     assert pattern == r"^[a-z0-9.-]+\.[a-z]{2,}$"  # Spec 013 AK7
     for good in ("example.com", "bot.example.co.uk", "a-b.example.test"):
         assert re.search(pattern, good), good

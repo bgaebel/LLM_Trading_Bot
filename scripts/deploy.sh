@@ -5,13 +5,15 @@
 #   scripts/deploy.sh <alias> <service-user> deploy [<commit>]  default: origin/main
 #   scripts/deploy.sh <alias> <service-user> rollback           back to the previous release
 #   scripts/deploy.sh <alias> <service-user> status
+#   scripts/deploy.sh <alias> <service-user> public <domain>     HTTPS through Caddy (Spec 013)
+#   scripts/deploy.sh <alias> <service-user> public off          back to the tunnel only
 #
 # Only a commit on origin/main with a green CI run is deployed. The server gets `git archive` of
 # exactly that commit - nothing else from this working tree - and runs deploy/release.sh taken
-# from the same commit. install, rollback and status run release.sh of the newest green commit on
-# origin/main, so a red or still running CI on the tip never blocks a rollback.
+# from the same commit. install, rollback, status and public run release.sh of the newest green
+# commit on origin/main, so a red or still running CI on the tip never blocks a rollback.
 # <alias> is the local SSH alias (~/.ssh/config), <service-user> the service account from
-# setup-server.sh: neither is ever written into the repository.
+# setup-server.sh, <domain> the public host name: none of them is ever written into the repository.
 # Never without the user's consent (CLAUDE.md).
 set -euo pipefail
 shopt -s inherit_errexit
@@ -25,7 +27,18 @@ SEARCH=30 # commits of origin/main searched for the newest green one
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log() { printf '%s\n' "$*"; }
 
-usage() { die "usage: scripts/deploy.sh <alias> <service-user> install|deploy [<commit>]|rollback|status"; }
+usage() {
+  die "usage: scripts/deploy.sh <alias> <service-user>" \
+    "install|deploy [<commit>]|rollback|status|public <domain>|public off"
+}
+
+# The same pattern as in deploy/release.sh, which checks it again on the server.
+HOST_RE='^[a-z0-9.-]+\.[a-z]{2,}$'
+valid_host() {
+  local LC_ALL=C # [a-z] means exactly a to z, whatever the locale
+  [[ "$1" =~ $HOST_RE ]] && [[ "$1" != *..* ]] && [[ "$1" != [.-]* ]] \
+    || die "invalid domain: $1 (lower-case, such as example.com)"
+}
 
 [ "$#" -ge 3 ] || usage
 alias_name="$1" service="$2" mode="$3"
@@ -83,6 +96,18 @@ case "$mode" in
     "$GIT" archive --format=tar.gz "$sha" \
       | "$SSH" "$alias_name" "sudo install -d -m 700 $INCOMING && sudo tee $INCOMING/$sha.tar.gz >/dev/null"
     remote "$sha" deploy "$sha" "'$service'"
+    ;;
+  public)
+    [ "$#" -eq 4 ] || usage
+    target="$4"
+    if [ "$target" != off ]; then valid_host "$target"; fi
+    sha="$(newest_green)"
+    # One connection: release.sh takes the deploy lock and does everything in order (Spec 013 AK8).
+    if [ "$target" = off ]; then
+      remote "$sha" public-off "'$service'"
+    else
+      remote "$sha" public "'$target'" "'$service'"
+    fi
     ;;
   *) usage ;;
 esac
