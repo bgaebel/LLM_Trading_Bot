@@ -6,25 +6,21 @@ reads them every round and is the only one to change the database (ADR-0017).
 - ``BOT_PAUSED=1``: no trades except the drawdown stop's forced sale. Fail closed: a file that
   cannot be read or a value that is not ``1``/``0``/empty means pause. The environment wins.
 - ``BOT_RESUME=<depot>@<ISO time>,...``: release a stopped depot, at most once per stop and only
-  for a request that is younger than the stop and at most RESUME_MAX_AGE old.
+  for a request that is newer than the depot's last trade and at most RESUME_MAX_AGE old.
 """
 
-import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from llm_trading_bot.llm.due import iso
 from llm_trading_bot.paper.db import balance, write_tx
 from llm_trading_bot.web.credentials import CONTROL_FIELDS, load_env_file
 
 PAUSE_FIELD, RESUME_FIELD = CONTROL_FIELDS
 RESUME_MAX_AGE = 24 * 3600
 """A request older than a day is not acted on: the user may have forgotten why they asked."""
-MAX_FUTURE_SKEW = 300
-"""Web UI and service run on one machine; more than a few minutes ahead is a broken clock."""
 
 ENVIRONMENT, FILE, INVALID = "environment", "file", "invalid"
 
@@ -103,26 +99,10 @@ def read_controls(env: Mapping[str, str], secrets: Path) -> Controls:
     return Controls(paused, source, resumes, tuple(warnings))
 
 
-RELEASED = "RELEASED"
-"""Status of the marker row a release leaves in ``decisions`` (symbol RELEASE_SYMBOL)."""
-RELEASE_SYMBOL = "DEPOT"
-
-
-def last_stop(con: sqlite3.Connection, agent: str) -> str | None:
-    """Time of the latest forced sale (RISK_SELL), the visible trace of a stop."""
-    row = con.execute(
-        "SELECT MAX(ts) FROM trades WHERE agent=? AND side='RISK_SELL'", (agent,)
-    ).fetchone()
-    stopped: str | None = row[0]
-    return stopped
-
-
-def last_release(con: sqlite3.Connection, agent: str) -> str | None:
-    row = con.execute(
-        "SELECT MAX(ts) FROM decisions WHERE agent=? AND status=?", (agent, RELEASED)
-    ).fetchone()
-    released: str | None = row[0]
-    return released
+def last_trade(con: sqlite3.Connection, agent: str) -> str | None:
+    row = con.execute("SELECT MAX(ts) FROM trades WHERE agent=?", (agent,)).fetchone()
+    traded: str | None = row[0]
+    return traded
 
 
 NOT_STOPPED = "not stopped"
@@ -134,9 +114,11 @@ def release_problem(
     """Why ``release`` would not act on this request ("" if it would); reads only, so the web
     UI (read-only, ADR-0016) shows exactly what the service will do.
 
-    A stop leaves a RISK_SELL only when it had coins to sell; a stop right after a sale to zero
-    leaves none. So a request must also be newer than the last release: every applied request
-    is used up, and an old one can never lift a later stop (Spec 011 AK5).
+    The request must be newer than the depot's last trade. A stop leaves a RISK_SELL only when
+    there were coins to sell, but a released depot starts from cash alone and can only fall
+    again after it traded - so every later stop comes after a trade newer than any request
+    that released an earlier one, and an old request never lifts a later stop (Spec 011 AK5).
+    No marker rows are needed in the trade history.
     """
     try:
         p = balance(con, agent)
@@ -146,13 +128,11 @@ def release_problem(
         return NOT_STOPPED
     if p["btc"] != 0 or p["eth"] != 0:
         return "the depot still holds coins"
-    stopped = last_stop(con, agent)
-    if stopped is not None and requested_at <= epoch(stopped):
-        return "the request is older than the stop"
-    released = last_release(con, agent)
-    if released is not None and requested_at <= epoch(released):
-        return "the request was already used"
-    if requested_at > now_epoch + MAX_FUTURE_SKEW:
+    traded = last_trade(con, agent)
+    if traded is not None and requested_at <= epoch(traded):
+        return "the request is not newer than the depot's last trade"
+    if requested_at > now_epoch:
+        # Web UI and service share one clock (ADR-0005): a request ahead of it is broken.
         return "the request lies in the future"
     if now_epoch - requested_at > RESUME_MAX_AGE:
         return "the request is older than 24 h"
@@ -163,31 +143,13 @@ def release(con: sqlite3.Connection, agent: str, requested_at: float, now_epoch:
     """Release a stopped depot; "" if released, else why not (NOT_STOPPED: nothing to do).
 
     The depot starts again from its cash: after the forced sale it holds no coins, so cash is
-    its whole equity and the new peak. A marker row in ``decisions`` (no schema change) records
-    the release, shows it in the overview and uses the request up. Caller holds the WriterLock.
+    its whole equity and the new peak. Caller holds the WriterLock.
     """
     why = release_problem(con, agent, requested_at, now_epoch)
     if why:
         return why
-    now = iso(now_epoch)
     with write_tx(con):
         con.execute(
             "UPDATE portfolios SET halted=0, peak=cash WHERE agent=? AND halted=1", (agent,)
-        )
-        con.execute(
-            "INSERT OR IGNORE INTO decisions"
-            " (ts,agent,symbol,bar_ts,model,action,target,confidence,reason,inputs,status)"
-            " VALUES (?,?,?,?,?,?,NULL,NULL,?,?,?)",
-            (
-                now,
-                agent,
-                RELEASE_SYMBOL,
-                -int(now_epoch),
-                "RISK",
-                "HOLD",
-                "Risikostopp auf Anforderung freigegeben",
-                json.dumps({"requested_at": iso(requested_at)}),
-                RELEASED,
-            ),
         )
     return ""

@@ -70,10 +70,10 @@ class DepotRow:
 def depots(con: sqlite3.Connection) -> list[DepotRow]:
     rows = con.execute(
         "SELECT p.agent, p.halted, p.peak, p.cash AS p_cash, p.btc AS p_btc, p.eth AS p_eth,"
-        # A forced sale before the latest release belongs to an earlier stop (Spec 011).
-        " (SELECT MAX(ts) FROM trades WHERE agent=p.agent AND side='RISK_SELL' AND ts > COALESCE("
-        "(SELECT MAX(ts) FROM decisions WHERE agent=p.agent AND status='RELEASED'), ''))"
-        " AS stopped_at,"
+        # The stop's forced sale is the depot's last trade; a stop without coins to sell has
+        # none, and an older forced sale belongs to an earlier stop (Spec 011).
+        " (SELECT CASE WHEN side='RISK_SELL' THEN ts END FROM trades WHERE agent=p.agent"
+        " ORDER BY id DESC LIMIT 1) AS stopped_at,"
         " e.ts, e.value, e.cash, e.btc, e.eth FROM portfolios p"
         " LEFT JOIN equity e ON e.id = (SELECT id FROM equity WHERE agent=p.agent"
         " ORDER BY ts DESC, id DESC LIMIT 1)"

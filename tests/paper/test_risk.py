@@ -153,9 +153,9 @@ def test_resume_releases_a_stopped_depot_from_its_cash(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("requested", "now", "why"),
     [
-        (0, 60, "the request is older than the stop"),
-        (-60, 60, "the request is older than the stop"),
-        (400, 60, "the request lies in the future"),
+        (0, 60, "the request is not newer than the depot's last trade"),
+        (-60, 60, "the request is not newer than the depot's last trade"),
+        (61, 60, "the request lies in the future"),
         (60, 60 + DAY + 1, "the request is older than 24 h"),
     ],
 )
@@ -198,26 +198,33 @@ def test_resume_an_old_request_does_not_release_a_later_stop(tmp_path: Path) -> 
         later = "2026-11-07T09:00:00+00:00"
         cheap = {Symbol.BTCEUR: Quote(30_000.0, 30_010.0), Symbol.ETHEUR: QS[Symbol.ETHEUR]}
         assert mark(con, "trend", cheap, later, Costs()) is not None
-    assert release(con, "trend", t + 60, epoch(later) + 60) == "the request is older than the stop"
+    why = release(con, "trend", t + 60, epoch(later) + 60)
+    assert why == "the request is not newer than the depot's last trade"
     assert balance(con, "trend")["halted"] == 1
 
 
-def test_resume_is_used_up_so_a_stop_without_forced_sale_stays(tmp_path: Path) -> None:
+def test_resume_never_lifts_a_later_stop_without_forced_sale(tmp_path: Path) -> None:
     """Review of Spec 011: a stop right after a sale to zero writes no RISK_SELL. The request
-    that released the previous stop must not lift it."""
+    that released the previous stop must not lift it - the later trades are newer than it."""
     con = _stopped(tmp_path)
     t = epoch(STOP_AT)
     assert release(con, "trend", t + 60, t + 120) == ""
-    marker = con.execute(
-        "SELECT symbol, status, model, reason FROM decisions WHERE agent='trend'"
-    ).fetchall()
-    assert [tuple(r) for r in marker] == [
-        ("DEPOT", "RELEASED", "RISK", "Risikostopp auf Anforderung freigegeben")
-    ]
-    with write_tx(con):  # stopped again, with nothing left to sell
+    assert con.execute("SELECT COUNT(*) FROM decisions").fetchone()[0] == 0  # no marker rows
+    sig = Signal("BUY", 0.45, 0.7, "test", "trend")
+    later = "2026-11-07T09:00:00+00:00"
+    record_decision(
+        con, "trend", Symbol.BTCEUR, 7200, "T", sig, {}, costs=Costs(), now=later, qs=QS
+    )
+    sell = Signal("SELL", 0.0, 0.7, "test", "trend")
+    record_decision(
+        con, "trend", Symbol.BTCEUR, 10800, "T", sell, {}, costs=Costs(), now=later, qs=QS
+    )
+    with write_tx(con):  # stopped right after that sale, nothing left to sell
         con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
-    assert release(con, "trend", t + 60, t + 600) == "the request was already used"
-    assert release(con, "trend", t + 300, t + 600) == ""  # a new request after the release
+    sides = [r[0] for r in con.execute("SELECT side FROM trades ORDER BY id")]
+    assert sides[-1] == "SELL"
+    assert release(con, "trend", t + 60, epoch(later) + 60) != ""
+    assert release(con, "trend", epoch(later) + 1, epoch(later) + 60) == ""
 
 
 def test_release_problem_only_reads(tmp_path: Path) -> None:

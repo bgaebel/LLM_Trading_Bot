@@ -532,7 +532,12 @@ def test_risk_stop_time_ignores_sales_from_before_the_latest_release(tmp_path: P
     con = open_db(path, agents=AGENTS)
     sold = con.execute("SELECT MAX(ts) FROM trades WHERE side='RISK_SELL'").fetchone()[0]
     assert release(con, "gpt-luna", epoch(sold) + 1, epoch(sold) + 2) == ""
-    with write_tx(con):  # stopped again without a forced sale
+    with write_tx(con):  # trades again, then stopped right after a sale (no forced sale)
+        con.execute(
+            "INSERT INTO trades(ts,agent,symbol,side,qty,fill,notional,fee,slip_rate,decision_id)"
+            " VALUES (?, 'gpt-luna', 'BTCEUR', 'SELL', 0.01, 60000, 600, 1.5, 0.0005, NULL)",
+            (iso(epoch(sold) + 3600),),
+        )
         con.execute("UPDATE portfolios SET halted=1 WHERE agent='gpt-luna'")
     con.close()
     with reading(path) as ro:

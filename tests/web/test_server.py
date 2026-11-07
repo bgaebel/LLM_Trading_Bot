@@ -695,8 +695,10 @@ def test_resume_button_only_for_stopped_depots(running: Running) -> None:
     assert status == 400
     con = open_db(running.data / "bot.db", agents=())
     with write_tx(con):
-        # After a stop the depot holds no coins (forced sale).
+        # After a stop the depot holds no coins (forced sale). The test data lies in 2027: move
+        # its trades before today, a request must be newer than the depot's last trade.
         con.execute("UPDATE portfolios SET halted=1, btc=0, eth=0 WHERE agent='trend'")
+        con.execute("UPDATE trades SET ts=? WHERE agent='trend'", (iso(time.time() - 3600),))
     con.close()
     page = running.browser.request("GET", "/settings")[2]
     assert "Wieder freigeben" in page and "<b>trend</b>" in page
