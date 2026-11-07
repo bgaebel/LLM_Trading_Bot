@@ -25,3 +25,4 @@
 | [0018](0018-deploy-releases-backup-rollback.md) | Deploy als Release je Commit per SSH mit automatischem Code-Rollback; DB-Backups täglich nur auf dem Server, 14 Tage | abgelöst durch [0020](0020-deploy-gesund-trotz-marktdaten-luecke.md) |
 | [0019](0019-uebersicht-live-eigenes-skript.md) | Übersicht live über ein eigenes Skript `/app.js` (`script-src 'self'`); Server rendert, Skript tauscht aus | angenommen |
 | [0020](0020-deploy-gesund-trotz-marktdaten-luecke.md) | Deploy wie 0018; gesund ist auch eine Runde, die nur an Marktdaten scheitert (löst 0018 ab) | angenommen |
+| [0021](0021-risiko-grenzen-m1.md) | Risiko in M1: Drawdown-Stopp 10 % wie Arena, Freigabe und Handelspause über die Weboberfläche, Kurse je Markt | angenommen |
