@@ -7,11 +7,14 @@
 #   scripts/deploy.sh <alias> <service-user> status
 #   scripts/deploy.sh <alias> <service-user> public <domain>     HTTPS through Caddy (Spec 013)
 #   scripts/deploy.sh <alias> <service-user> public off          back to the tunnel only
+#   scripts/deploy.sh <alias> <service-user> impressum <file>    upload the imprint (Spec 014)
 #
 # Only a commit on origin/main with a green CI run is deployed. The server gets `git archive` of
 # exactly that commit - nothing else from this working tree - and runs deploy/release.sh taken
-# from the same commit. install, rollback, status and public run release.sh of the newest green
-# commit on origin/main, so a red or still running CI on the tip never blocks a rollback.
+# from the same commit. install, rollback, status, public and impressum run release.sh of the newest
+# green commit on origin/main, so a red or still running CI on the tip never blocks a rollback.
+# The imprint (operator's name and address) lives outside the repository and goes to the server only
+# on stdin - never in a command line, the output or a log (Spec 014, ADR-0025).
 # <alias> is the local SSH alias (~/.ssh/config), <service-user> the service account from
 # setup-server.sh, <domain> the public host name: none of them is ever written into the repository.
 # Never without the user's consent (CLAUDE.md).
@@ -29,7 +32,7 @@ log() { printf '%s\n' "$*"; }
 
 usage() {
   die "usage: scripts/deploy.sh <alias> <service-user>" \
-    "install|deploy [<commit>]|rollback|status|public <domain>|public off"
+    "install|deploy [<commit>]|rollback|status|public <domain>|public off|impressum <file>"
 }
 
 # The same pattern as in deploy/release.sh, which checks it again on the server.
@@ -38,6 +41,44 @@ valid_host() {
   local LC_ALL=C # [a-z] means exactly a to z, whatever the locale
   [[ "$1" =~ $HOST_RE ]] && [[ "$1" != *..* ]] && [[ "$1" != [.-]* ]] \
     || die "invalid domain: $1 (lower-case, such as example.com)"
+}
+
+# The web UI's limit (Spec 014 AK3); deploy/release.sh checks everything again on the server.
+IMPRESSUM_MAX=16384
+
+# GNU grep in a UTF-8 locale: `.` matches no invalid byte sequence (overlong forms included), so a
+# line that is not one match of '.*' is not UTF-8. Git Bash has no iconv, and python may be missing.
+utf8_ok() {
+  local rc=0
+  # Without a working UTF-8 locale grep would let every byte through: prove it catches one first.
+  LC_ALL=C.UTF-8 grep -aqxv '.*' <<<$'\377' \
+    || die "this grep finds no invalid UTF-8 (no C.UTF-8 locale?) - cannot check the file"
+  LC_ALL=C.UTF-8 grep -aqxv '.*' "$1" || rc=$?
+  [ "$rc" -eq 1 ] || return 1 # 0: a line that is not UTF-8, 2: grep failed
+  # Surrogates (U+D800-DFFF, bytes ED A0-BF) are no characters, but some greps let them through.
+  rc=0
+  LC_ALL=C grep -aq $'\xed[\xa0-\xbf]' "$1" || rc=$?
+  [ "$rc" -eq 1 ]
+}
+
+# $1 normalised into $2 as the web UI reads it (no BOM, LF line ends), then checked.
+prepare_impressum() {
+  local src="$1" out="$2" size nul
+  [ -f "$src" ] || die "not a file: $src"
+  # Byte-wise (C locale): \xEF\xBB\xBF is the UTF-8 byte order mark.
+  LC_ALL=C sed -e '1s/^\xEF\xBB\xBF//' -e 's/\r$//' "$src" >"$out" || die "cannot read $src"
+  size="$(wc -c <"$out")"
+  size="${size//[[:space:]]/}"
+  [ "$size" -le "$IMPRESSUM_MAX" ] \
+    || die "$src is too big: $size B after normalising (at most $IMPRESSUM_MAX B)"
+  nul="$(LC_ALL=C tr -cd '\000' <"$out" | wc -c)"
+  [ "${nul//[[:space:]]/}" -eq 0 ] || die "$src contains a NUL byte"
+  utf8_ok "$out" || die "$src is not UTF-8"
+  LC_ALL=C grep -q '[^[:space:]]' "$out" || die "$src is empty"
+  # deploy/impressum.example.md unfilled would put placeholders on a public legal page.
+  if LC_ALL=C grep -qE '__[A-Z_]+__|<domain>' "$out"; then
+    die "$src still holds placeholders of deploy/impressum.example.md - fill them in first"
+  fi
 }
 
 [ "$#" -ge 3 ] || usage
@@ -108,6 +149,21 @@ case "$mode" in
     else
       remote "$sha" public "'$target'" "'$service'"
     fi
+    ;;
+  impressum)
+    [ "$#" -eq 4 ] || usage
+    normalised="$(mktemp)"
+    trap 'rm -f "$normalised"' EXIT
+    prepare_impressum "$4" "$normalised"
+    digest="$(sha256sum <"$normalised" | awk '{print $1}')"
+    sha="$(newest_green)" # before the upload: a refusal leaves nothing on the server
+    log "uploading the imprint ($(wc -c <"$normalised" | tr -d '[:space:]') B, sha256 ${digest:0:12})" \
+      "to $alias_name"
+    # Like a release: upload outside the deploy lock (one connection), install under it (a second one).
+    "$SSH" "$alias_name" \
+      "sudo install -d -m 700 $INCOMING && sudo tee $INCOMING/impressum-$digest.md >/dev/null" \
+      <"$normalised"
+    remote "$sha" impressum "$digest"
     ;;
   *) usage ;;
 esac
