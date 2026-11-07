@@ -1,6 +1,6 @@
 # Spec 011: Risiko-Grenzen und Fail-closed
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s011-risiko` · **Meilenstein:** M1 (Nr. 4)
 - **Erstellt:** 2026-11-07
 
@@ -21,7 +21,7 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
 | Prüftakt | jede Runde (60 s) und nach jedem Trade | ein Prozess (ADR-0017); schneller Worker erst mit Echtgeld |
 
 ## Akzeptanzkriterien
-- [ ] AK1: Drawdown-Stopp bitgleich zur Arena: `mark(con, agent, qs, now, costs)` stoppt, wenn `agent != buyhold`,
+- [x] AK1: Drawdown-Stopp bitgleich zur Arena: `mark(con, agent, qs, now, costs)` stoppt, wenn `agent != buyhold`,
   `not halted`, `peak > 0` und `eq < peak * (1 - DRAWDOWN_KILL)` mit `DRAWDOWN_KILL = 0.10` (Bewertung zum Mittelkurs);
   setzt `halted = 1`, verkauft jeden Markt mit Bestand > 0 vollständig zu `bid × (1 − Slippage)` mit Gebühr (auch
   unter 50 €) als `RISK_SELL` ohne `decision_id`, schreibt danach den Equity-Punkt und meldet den Stopp (Depot,
@@ -30,27 +30,27 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
   90 %, 1 ulp darunter/darüber, schon gestoppt, Buy & Hold unter 90 %, `peak = 0`, `RISK_SELL` unter 50 €, nur ein
   Markt mit Bestand, Stopp direkt nach einem Trade in `record_decision`, Kostenvarianten, Fuzz mit weiten Kursläufen;
   `tests/paper/test_risk.py`
-- [ ] AK2: Bestehende Goldens unverändert: Die bisherige Fixture-Datei wird vom Generator bytegleich erzeugt; alle
+- [x] AK2: Bestehende Goldens unverändert: Die bisherige Fixture-Datei wird vom Generator bytegleich erzeugt; alle
   Strategie- und Ausführungs-Goldens bleiben grün; der Mutationstest erkennt Änderungen an 0,10, `<` gegen `<=`,
   `not halted`, `peak > 0`, Ausnahme Buy & Hold und Verkauf zu `bid`. — Nachweis: `tests/paper/test_golden_execution.py`,
   Regenerieren + Vergleich (`tools/golden/generate_execution_golden.py --check`), `tools/golden/mutation_check.py`
-- [ ] AK3: Gestoppt ist kein Fehler: Ein gestopptes klassisches Depot liefert je Markt den Status `HALTED` ohne
+- [x] AK3: Gestoppt ist kein Fehler: Ein gestopptes klassisches Depot liefert je Markt den Status `HALTED` ohne
   Fehler, ein GPT-Depot `HALTED` ohne Anfrage und ohne Kosten; eine Runde mit gestopptem Depot und sonst guten Daten
   hat Ergebnis `ok`, der Dienst bleibt `running`, `failures` bleibt 0. Der Dienst loggt den Stopp genau einmal als
   WARNING. Stoppt ein Depot mitten in einer GPT-Antwort (BTC-Trade löst aus), wird die ETH-Entscheidung gespeichert,
   aber nicht gehandelt (wie Arena). — Nachweis: `tests/paper/test_cycle.py::test_halted_*`,
   `tests/llm/test_llm_cycle.py::test_halted_*`, `tests/service/test_run.py::test_risk_stop_is_logged_once`
-- [ ] AK4: Übersicht: je Depot der Abstand zum Höchststand in Prozent („−4,2 % vom Hoch“, Stopp bei −10 %);
+- [x] AK4: Übersicht: je Depot der Abstand zum Höchststand in Prozent („−4,2 % vom Hoch“, Stopp bei −10 %);
   gestoppte Depots mit „Risikostopp“ und Zeitpunkt des letzten `RISK_SELL` (ohne solchen: ohne Zeit). — Nachweis:
   `tests/web/test_overview.py::test_drawdown_*`, `test_risk_stop_*`
-- [ ] AK5: Wiederfreigabe: Auf der Einstellungsseite steht neben jedem gestoppten Depot „Wieder freigeben“ (CSRF wie
+- [x] AK5: Wiederfreigabe: Auf der Einstellungsseite steht neben jedem gestoppten Depot „Wieder freigeben“ (CSRF wie
   alle Formulare); das speichert `BOT_RESUME` mit Depot und Zeitpunkt in `secrets.env`. Der Dienst setzt in der
   nächsten Runde `halted = 0` und `peak = cash`, wenn das Depot gestoppt ist, keine Bestände hat und die Anforderung
   jünger als sein letzter `RISK_SELL` (falls vorhanden) und höchstens 24 h alt ist; sonst nichts (mit Warnung). Er
   loggt die Freigabe. Eine alte Anforderung gibt ein später erneut gestopptes Depot nicht frei. — Nachweis:
   `tests/paper/test_risk.py::test_resume_*`, `tests/web/test_server.py::test_resume_*`,
   `tests/web/test_credentials.py::test_resume_*`
-- [ ] AK6: Handelspause fail-closed: Schalter „Handel pausieren“ auf der Einstellungsseite schreibt `BOT_PAUSED=1`
+- [x] AK6: Handelspause fail-closed: Schalter „Handel pausieren“ auf der Einstellungsseite schreibt `BOT_PAUSED=1`
   (Ausschalten löscht ihn). Der Dienst liest den Wert jede Runde getrennt von der übrigen Konfiguration: unlesbare
   Datei oder ungültiger Wert → Pause mit Warnung; Umgebung gewinnt (die Seite zeigt dann „durch die Umgebung
   festgelegt“). Während der Pause: Entscheidungen klassischer Depots mit Status `PAUSED` ohne Trade, GPT `PAUSED`
@@ -60,7 +60,7 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
   `tests/paper/test_cycle.py::test_pause_*`, `tests/service/test_config_reload.py::test_pause_*`,
   `tests/web/test_credentials.py::test_pause_*`, `tests/web/test_server.py::test_pause_*`,
   `tests/service/test_status.py::test_older_status_*`
-- [ ] AK7: Kurse je Markt: `bitvavo.quotes()` liefert die gültigen Märkte und je ungültigem Markt einen Fehler statt
+- [x] AK7: Kurse je Markt: `bitvavo.quotes()` liefert die gültigen Märkte und je ungültigem Markt einen Fehler statt
   den ganzen Abruf zu verwerfen; `record_quotes` speichert gültige Märkte einzeln. Im Zyklus: Ein Markt ohne frischen
   Kurs bekommt keine Entscheidung (Kerze bleibt offen); hat ein Depot dort Bestand > 0, entscheidet es auch im anderen
   Markt nicht. GPT fragt nur, wenn alle Märkte der Anfrage und mit Bestand frische Kurse haben (sonst `NO_QUOTES`, keine
@@ -70,15 +70,15 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
   `tests/market/test_bitvavo_quotes.py`, `tests/paper/test_cycle.py::test_bad_eth_quote_does_not_block_btc`,
   `test_holding_the_stale_market_blocks_both`, `tests/llm/test_llm_cycle.py::test_quote_lost_after_answer_*`,
   `tests/paper/test_execution.py::test_value_without_a_zero_holding_market_is_bit_identical`, `tests/test_cli.py::test_market_*`
-- [ ] AK8: Kein Handeln und Bewerten mit alten Kursen: Vor den klassischen Entscheidungen prüft der Zyklus einmal das
+- [x] AK8: Kein Handeln und Bewerten mit alten Kursen: Vor den klassischen Entscheidungen prüft der Zyklus einmal das
   Kursalter und holt bei > 20 s neue Kurse (alle klassischen Depots der Runde nutzen denselben Satz). Vor der
   Schlussbewertung ebenso; ein Depot, dessen Märkte mit Bestand keinen frischen Kurs haben, bekommt in dieser Runde
   keinen Equity-Punkt (und keinen Stopp) – die Runde ist dann `incomplete`, nicht `no_quotes`. — Nachweis:
   `tests/paper/test_cycle.py::test_slow_round_refreshes_quotes_*`, `test_final_valuation_never_uses_stale_quotes`
-- [ ] AK9: [manuell] Auf dem Server (mit Zustimmung): Vor dem Deploy Abstand jedes Depots zum Hoch lesend prüfen (ein
+- [x] AK9: [manuell] Auf dem Server (mit Zustimmung): Vor dem Deploy Abstand jedes Depots zum Hoch lesend prüfen (ein
   Depot unter −10 % würde sofort gestoppt); Deploy gesund; Übersicht zeigt die Abstände; Schalter „Handel pausieren“
   an → nächste Runde ohne Trades, Übersicht „Handel pausiert“; aus → normal.
-- [ ] AK10: Lint, Format, `mypy src tests tools`, CI grün; Doku (ARCHITEKTUR, `docs/betrieb/server.md`: Risikostopp,
+- [x] AK10: Lint, Format, `mypy src tests tools`, CI grün; Doku (ARCHITEKTUR, `docs/betrieb/server.md`: Risikostopp,
   Freigabe, Pause; README).
 
 ## Abgrenzung
@@ -119,8 +119,8 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
 - [x] 2. Gestoppt ohne Fehler, Meldung und Log, Übersicht mit Abstand zum Hoch und Risikostopp (AK3, AK4)
 - [x] 3. Kurse je Markt und Kursalter (AK7, AK8); Goldens und Mutationstest erneut
 - [x] 4. Handelspause und Wiederfreigabe: Konfiguration, Dienst, Statusdatei, Weboberfläche (AK5, AK6)
-- [ ] 5. Doku, Prüfung (Workflow), PR (AK10)
-- [ ] 6. Mit Zustimmung: Abstände lesend prüfen, Deploy, Schalter auf dem Server prüfen (AK9)
+- [x] 5. Doku, Prüfung (Workflow), PR (AK10)
+- [x] 6. Mit Zustimmung: Abstände lesend prüfen, Deploy, Schalter auf dem Server prüfen (AK9)
 
 ## Risiken & offene Fragen
 - **Sofortiger Stopp nach dem Deploy:** Liegt ein Depot schon > 10 % unter seinem Hoch, wird es in der ersten Runde
@@ -159,8 +159,21 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
 - 2026-11-07: Prüfung: zwei unabhängige Prüfer und ein Workflow (5 Blickwinkel, je Befund 3 Gegenprüfer; 12 Befunde, alle bestätigt, alle behoben). Wichtigste Korrektur: Eine Freigabe muss jünger als der letzte Trade des Depots sein (nicht nur als der letzte RISK_SELL) - ein Stopp direkt nach einem Verkauf auf 0 hinterlässt keinen RISK_SELL, eine alte Anforderung hätte ihn sofort aufgehoben. Keine Markierungszeilen in der Historie; Anforderungen aus der Zukunft werden abgelehnt (gleiche Uhr). Kursalter wird ab der gespeicherten ganzen Sekunde gemessen. Freigaben gelten auch für inzwischen abgewählte Depots. Die Weboberfläche zeigt eine Anforderung nur als wartend, wenn der Dienst sie anwenden wird (gleiche Prüfung, nur lesend). Learnings: „Ein Risikostopp ohne Zwangsverkauf hinterlässt keine Spur“, „Gespeicherte Zeitstempel sind ganze Sekunden, die Uhr nicht“.
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Drawdown-Stopp 10 % bitgleich zur Arena, gestoppte Depots ohne Rundenfehler, Abstand zum Hoch und
+  Risikostopp in der Übersicht, Wiederfreigabe und Handelspause über die Weboberfläche (fail-closed), Kurse je
+  Markt mit erneutem Abruf vor Entscheidung und Schlussbewertung. Deployt am 2026-11-07 (Release `5fdddcd`, PR #18).
+- **Abweichungen vom Plan:** Schritte 1+2 und 3+4 je in einem Commit. Freigabe-Regel geschärft: Anforderung jünger als
+  der letzte Trade des Depots (nicht nur als der letzte RISK_SELL), keine Anforderungen aus der Zukunft. Freigaben
+  gelten auch für abgewählte Depots. `record_decision(partial=True)` nur aus den Zyklen. Tests des Lesens der
+  Steuerung in `tests/paper/test_controls.py`. Drawdown-Läufe ohne `random.gauss` (plattformabhängig).
+- **Nachweise:** 1345 Tests lokal grün, CI grün (PR #18 und `main`). `generate_execution_golden.py --check`: beide
+  Fixtures gleich. Mutationstest: alle Mutationen erkannt außer den dokumentiert äquivalenten (nach Korrektur
+  zweier veralteter Suchmuster). Prüfung durch Prüfer-Agent, Fehlersuche und Workflow (12 bestätigte Befunde,
+  behoben). Server (AK9): vor dem Deploy alle Depots zwischen 0,0 % und −0,1 % vom Hoch; Deploy gesund; Pause →
+  Runde 09:02 UTC mit GPT `PAUSED`, 0 Trades, Statusdatei `trading_paused: true`; Fortsetzen → Runde 09:08 UTC
+  `trading resumed`, GPT wieder im Takt.
+- **Offen / Folgearbeit:** Tagesverlustgrenze, Stop-Loss je Position, Cooldown, schneller Risiko-Worker mit M2
+  (ADR-0021). Die ETH-Kerzenlücken bei Bitvavo halten den Dienst zeitweise auf `degraded` (bekannt, Übersicht zeigt
+  „läuft“ mit Hinweis).
+- **Neue ADRs / Learnings:** ADR-0021; Learnings „Ein Risikostopp ohne Zwangsverkauf hinterlässt keine Spur“,
+  „Gespeicherte Zeitstempel sind ganze Sekunden, die Uhr nicht“, „random.gauss rechnet je Plattform anders“.
