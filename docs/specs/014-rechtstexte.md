@@ -1,6 +1,6 @@
 # Spec 014: Impressum und Datenschutzerklärung
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s014-rechtstexte` · **Meilenstein:** M1 (Nachtrag zu Nr. 7)
 - **Erstellt:** 2026-11-07
 

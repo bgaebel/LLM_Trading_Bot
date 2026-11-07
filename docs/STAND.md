@@ -13,7 +13,7 @@
 2. Ab 2026-11-13: M1-Abschluss prüfen (7 Tage Lauf seit 2026-11-06 22:38 UTC).
 
 ## In Arbeit
-- Spec: 014 (freigegeben)
+- Spec: 014 (in Arbeit)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
