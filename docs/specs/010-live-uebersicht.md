@@ -10,28 +10,28 @@ zählt jede Sekunde, eine neue Runde (Equity, Entscheidungen, Trades, GPT-Kosten
 lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript bleibt das Neuladen alle 15 s.
 
 ## Akzeptanzkriterien
-- [ ] AK1: CSP `script-src 'self'`, sonst unverändert; auf jeder Antwort. Nur die Übersicht bindet `/app.js` ein
+- [x] AK1: CSP `script-src 'self'`, sonst unverändert; auf jeder Antwort. Nur die Übersicht bindet `/app.js` ein
   (`<script src="/app.js" defer>`), keine Seite enthält Inline-Skript oder `on…=`-Attribute. `/app.js` enthält
   keine Daten und wird wie `/app.css` ohne Anmeldung ausgeliefert, mit `Content-Type: text/javascript` und
   `Cache-Control: no-store`. — Nachweis: `tests/web/test_server.py::test_*csp*`, `test_app_js_*`,
   `tests/web/test_pages.py::test_*no_inline*`
-- [ ] AK2: `app.js` enthält kein `eval`, kein `new Function`, keinen String als Argument für `setTimeout`/
+- [x] AK2: `app.js` enthält kein `eval`, kein `new Function`, keinen String als Argument für `setTimeout`/
   `setInterval`, kein `document.write`, keine fremde URL; es fragt nur Pfade derselben Herkunft ab. — Nachweis:
   `tests/web/test_app_js.py` (Prüfung des Quelltexts)
-- [ ] AK3: Alle 5 s holt das Skript `/` (gleiche Herkunft, mit Cookies) und ersetzt die aktualisierbaren Bereiche
+- [x] AK3: Alle 5 s holt das Skript `/` (gleiche Herkunft, mit Cookies) und ersetzt die aktualisierbaren Bereiche
   (Kennzahlen, Lebenszeichen, GPT heute, Depots, Equity-Chart, Entscheidungen, Trades, Banner) durch die neue
   Fassung; Scrollposition bleibt, keine Einblend-Animation, der Hintergrund-Chart läuft weiter. Jedes Alter
   („vor N s/min/h“) hat ein `data-at` (Epoche) und zählt im Browser jede Sekunde hoch, mit denselben Stufen wie der
   Server. — Nachweis: `tests/web/test_pages.py::test_ages_carry_their_epoch`, [manuell] AK6
-- [ ] AK4: Fehler: Scheitert eine Abfrage, zeigt die Seite einen Hinweis „Verbindung unterbrochen“ und versucht es
+- [x] AK4: Fehler: Scheitert eine Abfrage, zeigt die Seite einen Hinweis „Verbindung unterbrochen“ und versucht es
   mit wachsendem Abstand (5 s bis 60 s) weiter; kommt die Verbindung wieder, verschwindet der Hinweis. Ist die
   Sitzung abgelaufen (Antwort ist die Anmeldeseite), wechselt der Browser zur Anmeldeseite. — Nachweis: [manuell]
   AK6 (Tunnel trennen und wieder verbinden; abgelaufene Sitzung durch Neustart der Weboberfläche)
-- [ ] AK5: Ohne Skript: `<noscript><meta http-equiv="refresh" content="15"></noscript>` auf der Übersicht; die
+- [x] AK5: Ohne Skript: `<noscript><meta http-equiv="refresh" content="15"></noscript>` auf der Übersicht; die
   Einstellungsseite lädt weder Skript noch Refresh. — Nachweis: `tests/web/test_pages.py::test_*refresh*`
 - [ ] AK6: [manuell] Im Browser (lokal mit Test-DB und auf dem Server per Tunnel): Alter zählt sekündlich, nach einer
   Runde ändern sich Werte ohne Neuladen, Konsole ohne CSP-Verstöße, Verhalten bei Verbindungsabbruch wie AK4.
-- [ ] AK7: Lint, Format, `mypy src tests tools`, CI grün; Deploy auf den Server gesund (mit Zustimmung).
+- [x] AK7: Lint, Format, `mypy src tests tools`, CI grün; Deploy auf den Server gesund (mit Zustimmung).
 
 ## Abgrenzung
 - Nicht Teil dieser Spec: Live-Daten auf der Einstellungsseite, Server-Sent Events/WebSocket, JSON-API,
@@ -60,7 +60,7 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
   Markup, AK5)
 - [x] 2. `app.js` (Abfrage, Austausch, Sekundentakt, Fehler und Sitzungsende) mit Quelltext-Prüfung (AK2–AK4)
 - [x] 3. Browser-Prüfung lokal mit Test-DB (AK6 lokal); Doku (ARCHITEKTUR, Spec 007 Ergebnis-Hinweis)
-- [ ] 4. Mit Zustimmung: PR, Merge, Deploy auf den Server, Browser-Prüfung per Tunnel (AK6, AK7)
+- [x] 4. Mit Zustimmung: PR, Merge, Deploy auf den Server, Browser-Prüfung per Tunnel (AK6, AK7)
 
 ## Risiken & offene Fragen
 - Erstmals JavaScript: jede Änderung an `app.js` ist sicherheitsrelevant; die Quelltext-Prüfung (AK2) und die CSP
@@ -87,6 +87,9 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
   Tabellen zurück und löschte Textauswahl und Suchtreffer (jetzt nur Austausch bei geänderter Seite, also etwa
   einmal je Runde, nie während einer Auswahl, `scrollLeft` bleibt). Im Browser bestätigt: ohne neue Runde bleibt der
   Inhalt unangetastet, eine neue Runde erscheint binnen 5 s, keine CSP-Verstöße.
+- 2026-11-07: PR #16 gemergt (c69ea86, CI grün inkl. Node-Tests, 1179 passed), auf dem Server gesund deployt;
+  `/app.js` kommt über den Tunnel mit `text/javascript` und CSP `script-src 'self'`. Offen: AK6 auf dem Server –
+  Durchsicht durch den Nutzer nach dem Login.
 
 ## Ergebnis
 - **Erreicht:** …
