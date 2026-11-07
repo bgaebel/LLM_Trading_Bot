@@ -28,6 +28,7 @@ MAX_FAILURES = 5
 LOCKOUT_SECONDS = 60
 MAX_LOCKOUT_SECONDS = 3600
 GLOBAL_FAILURES_PER_HOUR = 100
+GLOBAL_WINDOW_SECONDS = 3600  # the hour of GLOBAL_FAILURES_PER_HOUR; named in the privacy notice
 SESSION_SECONDS = 12 * 3600
 DEVICE_SECONDS = 90 * 86400
 # ADR-0025: a client's address is kept no longer than needed to slow down guessing - 24 h after
@@ -257,10 +258,10 @@ class PublicGuard:
 
     def _global_seconds(self) -> int:
         now = self.clock()
-        while self.recent and self.recent[0] <= now - 3600:
+        while self.recent and self.recent[0] <= now - GLOBAL_WINDOW_SECONDS:
             self.recent.popleft()
         if len(self.recent) >= GLOBAL_FAILURES_PER_HOUR:
-            return max(1, int(self.recent[0] + 3600 - now + 0.999))
+            return max(1, int(self.recent[0] + GLOBAL_WINDOW_SECONDS - now + 0.999))
         return 0
 
     def seconds_locked(self, key: str, *, device: bool) -> int:

@@ -92,6 +92,9 @@ IMPRESSUM_INCOMING="" # deleted on exit, whatever happened (cmd_impressum)
 # Spec 014 AK8: the system journal (sshd, kernel, and caddy before its drop-in) keeps visitors' IP
 # addresses at most 14 + 1 days, like the bot's namespace (deploy/journald@llm-trading-bot.conf).
 SYSTEM_JOURNALD_DROPIN="$ROOT/etc/systemd/journald.conf.d/50-llm-trading-bot.conf"
+# The same limits for the namespace caddy logs into, as a drop-in: deploy/journald@llm-trading-bot.conf
+# comes from the active release, and a rollback to one before 014 would install it without them.
+NAMESPACE_JOURNALD_DROPIN="$ROOT/etc/systemd/journald@llm-trading-bot.conf.d/50-llm-trading-bot.conf"
 
 changes=0
 PUBLIC_HOST="" # set by load_public_host (deploy, rollback) or the public command
@@ -744,6 +747,13 @@ SYSTEM_JOURNALD_TEXT='# Spec 014 (deploy/release.sh public): old entries with IP
 MaxRetentionSec=14day
 MaxFileSec=1day'
 
+NAMESPACE_JOURNALD_TEXT='# Spec 014 (deploy/release.sh public): caddy logs the IP addresses of visitors here; at most
+# MaxRetentionSec + MaxFileSec = 15 days, nothing goes on to syslog. Kept across rollbacks.
+[Journal]
+MaxRetentionSec=14day
+MaxFileSec=1day
+ForwardToSyslog=no'
+
 UPGRADES_TEXT="// Spec 013 (deploy/release.sh): caddy is the only service facing the internet - its updates
 // install automatically like the security updates.
 Unattended-Upgrade::Origins-Pattern {
@@ -819,6 +829,13 @@ close_port() {
 # Services keep their log streams across the restart (journald holds them in systemd's fd store).
 journal_limits() {
   local before=$changes
+  ensure_dir "$(dirname "$NAMESPACE_JOURNALD_DROPIN")" 755 root:root
+  put_text "$NAMESPACE_JOURNALD_DROPIN" 644 "$NAMESPACE_JOURNALD_TEXT"
+  if [ "$changes" -ne "$before" ]; then
+    quietly "$SYSTEMCTL" try-restart "systemd-journald@llm-trading-bot.service" || true
+    log "restarted  systemd-journald@llm-trading-bot"
+  fi
+  before=$changes
   put_text "$SYSTEM_JOURNALD_DROPIN" 644 "$SYSTEM_JOURNALD_TEXT"
   [ "$changes" -ne "$before" ] || return 0
   if quietly "$SYSTEMCTL" restart systemd-journald.service; then
@@ -987,6 +1004,10 @@ cmd_impressum() {
   IMPRESSUM_INCOMING="$INCOMING/impressum-$digest.md"
   trap 'rm -f "$IMPRESSUM_INCOMING"' EXIT
   with_lock
+  # Copies of earlier attempts (a failed second connection, an edited file) go too: personal data
+  # never lingers in incoming.
+  find "$INCOMING" -maxdepth 1 -name 'impressum-*.md' ! -name "impressum-$digest.md" -delete \
+    2>/dev/null || true
   [ -f "$IMPRESSUM_INCOMING" ] && [ ! -L "$IMPRESSUM_INCOMING" ] \
     || die "no uploaded imprint for sha256 ${digest:0:12} - upload it with scripts/deploy.sh" \
       "- nothing changed"

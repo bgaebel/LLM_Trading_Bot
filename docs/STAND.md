@@ -20,6 +20,7 @@
 - –
 
 ## Offen – manuell prüfen
-- Optional in der Hetzner-Oberfläche: Cloud-Firewall, Backups/Snapshot (siehe `docs/betrieb/server.md`).
+- Optional in der Hetzner-Oberfläche: Cloud-Firewall; Backups/Snapshot nur nach Anpassung der
+  Datenschutzerklärung (Journal mit IP-Adressen, siehe `docs/betrieb/server.md`).
 - Ausgabenlimit im OpenAI-Konto setzen. Startkapital für M2 offen.
 - Für Spec 014: Postfach `kontakt@<domain>` bei Migadu, AVV mit Hetzner und Migadu prüfen.

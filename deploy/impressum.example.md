@@ -18,7 +18,7 @@ Anschrift wie oben
 
 ## Haftung für Inhalte
 
-Die Inhalte dieser Seite werden mit Sorgfalt erstellt. Für eigene Inhalte bin ich nach § 7 Abs. 1 DDG nach den allgemeinen Gesetzen verantwortlich. Nach §§ 8 bis 10 DDG bin ich nicht verpflichtet, übermittelte oder gespeicherte fremde Informationen zu überwachen oder nach Umständen zu forschen, die auf eine rechtswidrige Tätigkeit hinweisen.
+Die Inhalte dieser Seite werden mit Sorgfalt erstellt. Für eigene Inhalte bin ich nach den allgemeinen Gesetzen verantwortlich. Eine allgemeine Pflicht, übermittelte oder gespeicherte fremde Informationen zu überwachen oder nach Umständen zu forschen, die auf eine rechtswidrige Tätigkeit hinweisen, besteht nicht (Art. 8 Digital Services Act).
 
 Pflichten zur Entfernung oder Sperrung von Informationen nach den allgemeinen Gesetzen bleiben unberührt. Eine Haftung ist erst ab dem Zeitpunkt möglich, zu dem mir eine konkrete Rechtsverletzung bekannt wird; dann entferne ich die betroffenen Inhalte umgehend.
 

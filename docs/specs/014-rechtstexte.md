@@ -58,14 +58,16 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
   - Kein `email`/`acme_ca` im Caddyfile.
   - `ufw logging off` in `release.sh public`.
 
-  — Nachweis: `tests/web/test_legal.py::test_datenschutz_matches_*`
+  — Nachweis: `tests/web/test_legal.py::test_datenschutz_matches_*`, `tests/test_legal_bindings.py::test_datenschutz_matches_*`
 - [ ] AK7: Vergessen im Login-Schutz: Ein Eintrag in `PublicGuard` verfällt 24 h nach dem letzten Fehlversuch bzw.
   nach Ende seiner Sperre (bei jedem Zugriff geprüft); eine laufende Sperre wird nie vorzeitig vergessen. —
   Nachweis: `tests/web/test_auth.py::test_public_guard_forgets_*`
 - [ ] AK8: Server-Protokolle halten die Frist ein, eingerichtet von `release.sh public` (idempotent, `changes: 0`
   beim zweiten Lauf):
   - Caddy-Drop-in mit `LogNamespace=llm-trading-bot`; Caddy-Neustart nur bei Änderung.
-  - Namensraum-Journal mit `MaxFileSec=1day` und `ForwardToSyslog=no`.
+  - Namensraum-Journal mit `MaxFileSec=1day` und `ForwardToSyslog=no` – in der Release-Datei und als Drop-in von
+    `public` (`journald@llm-trading-bot.conf.d/`), damit ein Rollback auf einen Release vor 014 die Grenzen nicht
+    lockert.
   - System-Journal-Drop-in `/etc/systemd/journald.conf.d/50-llm-trading-bot.conf` mit `MaxRetentionSec=14day` und
     `MaxFileSec=1day`, damit alte Einträge mit IP-Adressen von selbst verfallen.
   - `ufw logging off`.
@@ -93,7 +95,7 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
     Impressum-Datei unberührt.
   - Angepasste Prüfungen: `test_deploy_files.py:115`, `test_release.py` (ExecStart-Enden), `check-units.sh`.
 
-  — Nachweis: `tests/deploy/test_release.py::test_rollback_before_014_*`, `tests/test_cli.py::test_web_unit_execstart_*`
+  — Nachweis: `tests/deploy/test_release.py::test_rollback_before_014_*`, `tests/deploy/test_release.py::test_public_log_limits_survive_a_rollback_before_014`, `tests/test_legal_bindings.py::test_web_unit_execstart_*`
 - [ ] AK11: Im Repo kein Impressum mit echten Daten: nur `deploy/impressum.example.md` mit Platzhaltern; ein Test prüft,
   dass kein anderes `impressum*.md` versioniert ist. Die echte Datei liegt lokal außerhalb des Repos. — Nachweis:
   `tests/test_deploy_files.py::test_impressum_only_example_in_repo`
@@ -155,7 +157,7 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
 - [x] 3. Web-Unit mit `--impressum`, Sandbox „vor 014“, ExecStart-Parser-Test (AK10)
 - [x] 4. `release.sh public`: Drop-ins, Journal-Grenzen, `ufw logging off`; `check-units.sh` (AK8)
 - [x] 5. `impressum`-Modus in `release.sh`/`deploy.sh`, `status`, Beispieldatei (AK9, AK11)
-- [ ] 6. Doku, ADR, Prüfung (Workflow), PR (AK13); Impressum-Datei lokal erzeugen
+- [x] 6. Doku, ADR, Prüfung (Workflow), PR (AK13); Impressum-Datei lokal erzeugen
 - [ ] 7. Mit Zustimmung: Server-Schritte (AK12)
 
 ## Risiken & offene Fragen
@@ -175,6 +177,13 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
   `MaxFileSec`, kein Syslog-Weiterleiten, `ufw logging off`, einmaliges Aufräumen); Upload in zwei Verbindungen;
   Vergessensfrist im Login-Schutz; Cookie-Bindung über echte Antworten; Datenschutz als Python-Modul; 405/501
   festgelegt; Renderer-Regeln; BOM/CRLF; Rückfall-Test „vor 014“; Reihenfolge auf dem Server.
+
+- 2026-11-07: Umsetzung in zwei parallelen Worktrees (Web, Deploy), dann gemergt; Bindungstests zwischen Text und
+  Server-Dateien sowie der ExecStart-Parser-Test in `tests/test_legal_bindings.py`. Review-Workflow (8 bestätigt,
+  10 widerlegt), eingearbeitet: Namensraum-Grenzen zusätzlich als Drop-in (Rollback-fest); `deploy.sh impressum`
+  verweigert einen grünen Commit ohne Impressum-Modus vor dem Hochladen, alte Upload-Kopien werden gelöscht;
+  Firewall-Text nennt SSH; Haftungsabsatz ohne veraltete DDG-Paragraphen (Art. 8 DSA); Warnung zu
+  Hetzner-Backups; Zeitfenster der globalen Sperre als Konstante gebunden; Cookie-Dauern verankert geprüft.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

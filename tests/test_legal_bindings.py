@@ -55,6 +55,14 @@ def test_datenschutz_matches_the_namespace_journal() -> None:
     assert journal["ForwardToSyslog"] == "no"  # no second copy with syslog's longer rotation
 
 
+def test_datenschutz_matches_the_namespace_drop_in() -> None:
+    """The drop-in from `public` holds the same limits, so a rollback cannot loosen them."""
+    namespace = _journal((DEPLOY / "journald@llm-trading-bot.conf").read_text(encoding="utf-8"))
+    drop_in = _journal(_shell_constant("NAMESPACE_JOURNALD_TEXT"))
+    assert _days_in_text(drop_in) == _days_in_text(namespace)
+    assert drop_in["ForwardToSyslog"] == "no"
+
+
 def test_datenschutz_matches_the_system_journal() -> None:
     """Older entries (before 014, kernel lines) age out of the system journal just as fast."""
     namespace = _journal((DEPLOY / "journald@llm-trading-bot.conf").read_text(encoding="utf-8"))

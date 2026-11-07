@@ -157,6 +157,10 @@ case "$mode" in
     prepare_impressum "$4" "$normalised"
     digest="$(sha256sum <"$normalised" | awk '{print $1}')"
     sha="$(newest_green)" # before the upload: a refusal leaves nothing on the server
+    # Right after a merge the newest green commit may predate Spec 014: its release.sh would refuse
+    # the mode only after the personal data was uploaded.
+    "$GIT" show "$sha:deploy/release.sh" | grep -q '^    impressum)' \
+      || die "the newest green commit ${sha:0:7} has no impressum mode - wait for CI on main"
     log "uploading the imprint ($(wc -c <"$normalised" | tr -d '[:space:]') B, sha256 ${digest:0:12})" \
       "to $alias_name"
     # Like a release: upload outside the deploy lock (one connection), install under it (a second one).

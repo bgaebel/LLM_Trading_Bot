@@ -608,7 +608,9 @@ def test_datenschutz_matches_cookies(site: Site) -> None:
         }
     )
     for name, seconds in lifetimes.items():
-        assert german_duration(seconds) in _cookie_line(name), name
+        # Anchored: "Dauer: 11 Stunden" must not pass for 1 hour.
+        duration = re.escape(german_duration(seconds))
+        assert re.search(rf"Dauer: {duration}\b", _cookie_line(name)), name
     # No other cookie name in the text: the tunnel's ltb_* concern only the operator.
     mentioned = set(re.findall(r"(?<![\w-])(?:__Host-)?ltb_\w+", TEXT))
     assert mentioned == names
@@ -620,8 +622,11 @@ def test_datenschutz_matches_lockout() -> None:
     section = _section("Schutz vor Passwort-Raten")
     assert f"Nach {MAX_FAILURES} Fehlversuche" in section
     assert f"für {german_duration(LOCKOUT_SECONDS)} gesperrt" in section
-    assert f"höchstens {german_duration(MAX_LOCKOUT_SECONDS)}" in section
+    assert re.search(rf"höchstens {re.escape(german_duration(MAX_LOCKOUT_SECONDS))}\b", section)
     assert f"Nach {GLOBAL_FAILURES_PER_HOUR} Fehlversuchen unbekannter Geräte" in section
+    # The text says "innerhalb einer Stunde": the window of the global ceiling.
+    assert auth.GLOBAL_WINDOW_SECONDS == 3600
+    assert "unbekannter Geräte innerhalb einer Stunde" in section
     assert (
         f"\nSpeicherdauer: gelöscht {german_duration(FORGET_SECONDS)} nach dem letzten "
         "Fehlversuch bzw. nach dem Ende der Sperre"

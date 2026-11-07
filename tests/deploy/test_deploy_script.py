@@ -324,6 +324,20 @@ def test_impressum_refuses_an_invalid_file_before_any_connection(
     assert not (local.state / "gh").exists()  # not even GitHub was asked
 
 
+def test_impressum_refuses_a_green_commit_from_before_014_before_uploading(local: Local) -> None:
+    """Right after the merge the newest green commit may still be the old one: no personal data
+    goes to a server whose release script cannot install (and delete) it."""
+    script = local.work / "deploy" / "release.sh"
+    old = "\n".join(
+        line for line in script.read_text(encoding="utf-8").splitlines() if "impressum)" not in line
+    )
+    local.commit("deploy/release.sh", old + "\n")
+    local.git("push", "-q", "origin", "main")
+    done = local.run("srv", "botsvc", "impressum", str(imprint(local, b"# Impressum\n\nx\n")))
+    assert done.returncode != 0 and "no impressum mode" in done.stderr, done.stderr
+    assert local.ssh_calls() == []
+
+
 def test_impressum_example_is_refused_unfilled(local: Local) -> None:
     done = local.run("srv", "botsvc", "impressum", str(REPO / "deploy" / "impressum.example.md"))
     assert done.returncode != 0 and "placeholders" in done.stderr

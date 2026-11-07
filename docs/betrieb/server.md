@@ -63,7 +63,7 @@ danach `/etc/ssh/sshd_config.d/01-hardening.conf` prüfen bzw. `authorized_keys`
 
 ## Optional (manuell in der Hetzner-Oberfläche)
 - Hetzner-Cloud-Firewall mit denselben Regeln als zweite Schicht vor dem Server.
-- Hetzner-Backups oder ein Snapshot nach der Einrichtung.
+- Hetzner-Backups oder ein Snapshot nach der Einrichtung – **erst nach Anpassung der Datenschutzerklärung** (Spec 014, ADR-0025): Sie enthalten die Journal-Dateien mit IP-Adressen und verlängern deren Speicherdauer.
 
 ## Bot-Betrieb (Spec 008/009, ADR-0017/0018)
 Alles läuft von hier über `scripts/deploy.sh` (Git Bash) und nur mit Zustimmung des Nutzers. Das Skript schickt
@@ -145,7 +145,8 @@ Darin z. B. `[Service]` und `Environment=LOG_LEVEL=DEBUG`; danach `sudo systemct
 Der Timer sichert täglich nach `daily/` (14 bleiben), jedes Update vorher nach `pre-update/` (5 bleiben). Jede
 Kopie ist geprüft (`integrity_check`, Schema, Zeilenzahlen) und hat Rechte 600. `secrets.env` und `web-auth.json`
 werden nicht gesichert. Die Backups liegen **nur auf diesem Server** (ADR-0018); Hetzner-Backups lassen sich in der
-Hetzner-Oberfläche jederzeit zuschalten.
+Hetzner-Oberfläche zuschalten – erst nach Anpassung der Datenschutzerklärung (Spec 014): Sie kopieren auch die
+Journal-Dateien mit IP-Adressen.
 ```bash
 ssh <alias> 'sudo systemctl start llm-trading-bot-backup && sudo ls -l /var/backups/llm-trading-bot/daily'
 ```
@@ -284,7 +285,7 @@ lokal außerhalb des Repos – nie im Repo, nie in einem Commit.
 | Impressum | `/etc/llm-trading-bot/impressum.md`; die Web-Unit übergibt den Pfad fest mit `--impressum` | root, 644 |
 | Vorlage | `deploy/impressum.example.md` (nur Platzhalter) | Repo |
 | Caddy-Log | Drop-in `caddy.service.d/10-llm-trading-bot.conf` mit `LogNamespace=llm-trading-bot` | root, 644 |
-| Namensraum-Journal | `/etc/systemd/journald@llm-trading-bot.conf` (aus jedem Release): 200 MB, `MaxRetentionSec=14day`, `MaxFileSec=1day`, `ForwardToSyslog=no` | root, 644 |
+| Namensraum-Journal | `/etc/systemd/journald@llm-trading-bot.conf` (aus jedem Release): 200 MB, `MaxRetentionSec=14day`, `MaxFileSec=1day`, `ForwardToSyslog=no`; dieselben Grenzen zusätzlich als Drop-in `journald@llm-trading-bot.conf.d/50-llm-trading-bot.conf` von `public`, damit ein Rollback auf einen Release vor 014 sie nicht lockert | root, 644 |
 | System-Journal | Drop-in `/etc/systemd/journald.conf.d/50-llm-trading-bot.conf`: `MaxRetentionSec=14day`, `MaxFileSec=1day` | root, 644 |
 | Firewall-Log | `ufw logging off` | – |
 

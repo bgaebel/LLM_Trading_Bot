@@ -301,6 +301,14 @@ class Sandbox:
             if pre013 or pre014:
                 files[web] = files[web].replace(f" {IMPRESSUM_ARG}", "")
                 assert "--impressum" not in files[web]
+            if pre013 or pre014:
+                # Spec 013's namespace journal: no MaxFileSec, syslog forwarding by default.
+                journald = "deploy/journald@llm-trading-bot.conf"
+                files[journald] = "".join(
+                    line
+                    for line in files[journald].splitlines(keepends=True)
+                    if not line.startswith(("MaxFileSec=", "ForwardToSyslog="))
+                )
             if pre013:
                 files[web] = files[web].replace(" __PUBLIC_HOST_ARG__", "")
             else:
@@ -337,6 +345,10 @@ class Sandbox:
     @property
     def journald_drop_in(self) -> Path:
         return self.root / "etc/systemd/journald.conf.d/50-llm-trading-bot.conf"
+
+    @property
+    def namespace_drop_in(self) -> Path:
+        return self.root / "etc/systemd/journald@llm-trading-bot.conf.d/50-llm-trading-bot.conf"
 
 
 def sha(n: int) -> str:
@@ -1057,6 +1069,10 @@ def test_public_sets_log_limits_and_twice_changes_nothing(box: Sandbox) -> None:
     journald = box.journald_drop_in.read_text(encoding="utf-8")
     assert "\n[Journal]\nMaxRetentionSec=14day\nMaxFileSec=1day\n" in journald
     assert box.journald_drop_in.stat().st_mode & 0o777 == 0o644
+    namespace = box.namespace_drop_in.read_text(encoding="utf-8")
+    assert "\n[Journal]\nMaxRetentionSec=14day\nMaxFileSec=1day\nForwardToSyslog=no\n" in namespace
+    assert box.namespace_drop_in.stat().st_mode & 0o777 == 0o644
+    assert "try-restart systemd-journald@llm-trading-bot.service" in box.calls()[start:]
     assert (box.state / "ufw-logging-off").exists()
     assert "disabled   ufw logging" in out and "restarted  systemd-journald" in out
     calls = box.calls()
@@ -1184,6 +1200,34 @@ def no_secret_anywhere(box: Sandbox, *outputs: str) -> None:
 
 def incoming_imprints(box: Sandbox) -> list[str]:
     return sorted(p.name for p in (box.app / "incoming").glob("impressum-*"))
+
+
+def test_public_log_limits_survive_a_rollback_before_014(box: Sandbox) -> None:
+    """The release's journald@ file of Spec 013 has no MaxFileSec; the drop-in from `public`
+    keeps the 15 days the privacy notice names while caddy goes on logging into the namespace."""
+    installed(box).secrets()
+    box.upload(sha(1), pre014=True)
+    box.run("deploy", sha(1), "botsvc")
+    box.upload(sha(2))
+    box.run("deploy", sha(2), "botsvc")
+    box.run("public", "example.test", "botsvc")
+    drop_in = box.namespace_drop_in.read_bytes()
+    box.run("rollback", "botsvc")
+    assert box.current() == sha(1)
+    installed_conf = (box.root / "etc/systemd/journald@llm-trading-bot.conf").read_text(
+        encoding="utf-8"
+    )
+    assert "MaxFileSec" not in installed_conf  # the old release's file is back ...
+    assert box.namespace_drop_in.read_bytes() == drop_in  # ... the limits stay
+    assert "LogNamespace=llm-trading-bot" in box.caddy_drop_in.read_text(encoding="utf-8")
+
+
+def test_impressum_removes_copies_of_earlier_uploads(box: Sandbox) -> None:
+    installed(box)
+    stale = box.upload_imprint(IMPRINT.replace(b"Impressum", b"Alt"))
+    digest = box.upload_imprint(IMPRINT)
+    box.run("impressum", digest)
+    assert stale != digest and incoming_imprints(box) == []
 
 
 def test_impressum_installs_the_file_and_twice_changes_nothing(box: Sandbox) -> None:
