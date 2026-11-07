@@ -148,6 +148,14 @@
 
 ## Prozess & Werkzeuge
 
+### random.gauss rechnet je Plattform anders #test #golden #ci
+*2026-11-07 · Quelle: Spec 011 (CI)*
+- **Symptom:** Golden-Digests lokal (Windows) grün, in der Linux-CI rot – nur bei Fällen mit vielen Zufallsschritten.
+- **Ursache:** `random.Random(seed)` ist plattformgleich, `gauss` nutzt aber `log`/`cos`/`sqrt` der C-Bibliothek; deren
+  letztes Bit unterscheidet sich zwischen MSVC und glibc. Kleine Kursabweichungen kippen Grenzfälle (Stopp ja/nein).
+- **Lösung / Regel:** Golden-Fälle nur aus `random()`, `uniform`, `choice` und Grundrechenarten bauen. Die älteren
+  Spec-004-Läufe nutzen `gauss` (bisher stabil, Fixture bleibt unverändert) – bei neuen Fällen nicht wiederholen.
+
 ### Ersetzungen per Python-Heredoc greifen bei Nicht-ASCII nicht #windows #encoding #werkzeug
 *2026-11-06 · Quelle: Spec 004*
 - **Symptom:** `python - <<'EOF'` mit `s.replace("…–…", …)` in Git Bash ändert nichts; ein Escape wie

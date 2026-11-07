@@ -276,8 +276,11 @@ def walk(seed: int) -> list[Op]:
     ops: list[Op] = []
     at = T0 + 70_000_000 + seed * 100_000
     for k in range(WALK_STEPS):
-        b *= 1 + rng.gauss(-0.004, 0.03)
-        e *= 1 + rng.gauss(-0.006, 0.04)
+        # LEARNING(#test): random.gauss rechnet je Plattform anders
+        # uniform only: gauss uses log/cos, whose last bit differs between Windows and Linux.
+        # Spread like gauss(0, 0.03) / gauss(0, 0.04), no drift: most walks stop, some do not.
+        b *= 1 + rng.uniform(-0.052, 0.052)
+        e *= 1 + rng.uniform(-0.069, 0.069)
         q = quotes(b, rng.uniform(0, 30), e, rng.uniform(0, 30))
         at += 60 * rng.choice((1, 15, 60))
         if k == 0:

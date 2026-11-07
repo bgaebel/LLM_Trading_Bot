@@ -11,7 +11,7 @@
   "fuzz_per_mode": 300,
   "fuzz_chunk": 25,
   "walk_steps": 40,
-  "walks_stopped": 22,
+  "walks_stopped": 14,
   "coverage": {
    "edge": {
     "stop": 66,
@@ -2437,99 +2437,99 @@
  "walks": [
   {
    "seed": 0,
-   "digest": "fe4b4688b658840a0664edc3"
+   "digest": "91e5304e2abe4a141dbfa577"
   },
   {
    "seed": 1,
-   "digest": "8ed933f81a7e749d04c7ff57"
+   "digest": "37ae9def9da2603428643932"
   },
   {
    "seed": 2,
-   "digest": "3769f0328e9aa0fed2223fbc"
+   "digest": "ed946a7f63bc7facfc7323f1"
   },
   {
    "seed": 3,
-   "digest": "8cb9e53043950ffe0f618655"
+   "digest": "eec5d8172dc4f813e5dfce6e"
   },
   {
    "seed": 4,
-   "digest": "3d231d73acfcbd5530c769f1"
+   "digest": "4ad123d9425a1d813a94fcd5"
   },
   {
    "seed": 5,
-   "digest": "7b1dfd4bc7e7b22153202f53"
+   "digest": "e6715935499e33106fa5e54b"
   },
   {
    "seed": 6,
-   "digest": "4e034203258813e48e3f96a0"
+   "digest": "db6d6b7f33d48117b145f284"
   },
   {
    "seed": 7,
-   "digest": "2f1e8de44f3ca6f685dc16ca"
+   "digest": "fc6de8350e3869945ef0c6ec"
   },
   {
    "seed": 8,
-   "digest": "010fbcbf23b16784ce928e63"
+   "digest": "ae31dd6efe6daf1c6616c5ed"
   },
   {
    "seed": 9,
-   "digest": "ddc109a0b8a0697e82f29692"
+   "digest": "5d8fb1c96ed89395473e28b1"
   },
   {
    "seed": 10,
-   "digest": "ea82c76c8be1cacd6d5487d3"
+   "digest": "f2aad508245c8bc9046545ee"
   },
   {
    "seed": 11,
-   "digest": "8b4439e03695339c0148bfa1"
+   "digest": "c1854381404fefd486a4e5d3"
   },
   {
    "seed": 12,
-   "digest": "a1af5ce37a6ff01e610347a6"
+   "digest": "7f3dff45e0140eb8ef0e2f32"
   },
   {
    "seed": 13,
-   "digest": "0e4930d6990ff70ba6085974"
+   "digest": "b88d037b82f42bd28bb5f56e"
   },
   {
    "seed": 14,
-   "digest": "56934adf871cb8ad133e4755"
+   "digest": "15b5d52a8e212e9b817db851"
   },
   {
    "seed": 15,
-   "digest": "de0b575be141601d84c12329"
+   "digest": "7faa2051cef3104b8a853cb8"
   },
   {
    "seed": 16,
-   "digest": "2e4beafd4676e2e7919ad1ba"
+   "digest": "2f487a702479f2c296e6f439"
   },
   {
    "seed": 17,
-   "digest": "c48500220bc34681c5a4ceda"
+   "digest": "a874c420d68c74ffcefa22d1"
   },
   {
    "seed": 18,
-   "digest": "618bf8eb56f4feb51990e719"
+   "digest": "fe646eca19725a7b81cd31ee"
   },
   {
    "seed": 19,
-   "digest": "80c9c7bed372497f6be24faf"
+   "digest": "b695f39fdefba08c9bc97478"
   },
   {
    "seed": 20,
-   "digest": "5cc585d289d94acf28243f5f"
+   "digest": "94e5b93e7cefeb3f09a9ef5a"
   },
   {
    "seed": 21,
-   "digest": "5d7370f1561fd887172e5a6d"
+   "digest": "0ec42681a6e85eb778fc9c63"
   },
   {
    "seed": 22,
-   "digest": "01e2df5cd7784c054db12d14"
+   "digest": "b4fd0db690c48f127c99e0fd"
   },
   {
    "seed": 23,
-   "digest": "3b14ff151c09cab81cd4a168"
+   "digest": "8866e8861d744bdffccbcc7c"
   }
  ]
 }
