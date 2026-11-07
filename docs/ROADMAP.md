@@ -21,7 +21,7 @@ Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft,
 | 5 | Dienst: Worker-Schleife, sauberer Shutdown, Health, Logging | [008](specs/008-dienst.md) | – |
 | 6 | Hetzner-Server: Härtung (SSH-Key, Firewall, Updates), systemd, Backup, Update/Rollback | [002](specs/002-server-grundeinrichtung.md) (Härtung), [009](specs/009-deploy.md) (Deploy, Backup) | – |
 | 7 | Status-Ansicht nur auf 127.0.0.1, Zugriff per SSH-Tunnel; zuerst Login + Zugangsdaten, dann Übersicht | [006](specs/006-weboberflaeche.md) (Login, Zugangsdaten), [007](specs/007-uebersicht.md) (Übersicht), [010](specs/010-live-uebersicht.md) (live) | – |
-| 8 | Echtgeld-Schnittstelle als Entwurf (Interface + ADR-Vorschlag, keine Implementierung) | – | – |
+| 8 | Echtgeld-Schnittstelle als Entwurf (Interface + ADR-Vorschlag, keine Implementierung) | [012](specs/012-broker-naht.md) | – |
 
 ## M2 – Echtgeld-Minimalbetrieb ⬜
 **Ziel:** Echte Orders über die Bitvavo-Trading-API mit Kleinstbetrag, harten Limits (Positionsgröße,

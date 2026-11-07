@@ -26,3 +26,5 @@
 | [0019](0019-uebersicht-live-eigenes-skript.md) | Übersicht live über ein eigenes Skript `/app.js` (`script-src 'self'`); Server rendert, Skript tauscht aus | angenommen |
 | [0020](0020-deploy-gesund-trotz-marktdaten-luecke.md) | Deploy wie 0018; gesund ist auch eine Runde, die nur an Marktdaten scheitert (löst 0018 ab) | angenommen |
 | [0021](0021-risiko-grenzen-m1.md) | Risiko in M1: Drawdown-Stopp 10 % wie Arena, Freigabe und Handelspause über die Weboberfläche, Kurse je Markt | angenommen |
+| [0022](0022-broker-naht-m1.md) | Broker-Naht in M1: Protokoll plus Paper-Delegation, Sperren als Tests, keine Laufzeitänderung | angenommen |
+| [0023](0023-live-ausfuehrung-m2-vorschlag.md) | Live-Ausführung für M2: zwei Phasen, nie blind wiederholen, getrennte Historie (Vorschlag bis M2) | vorgeschlagen |
