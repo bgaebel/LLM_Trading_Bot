@@ -1,6 +1,6 @@
 # Spec 013: Weboberfläche öffentlich per HTTPS mit Login
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s013-oeffentlich-https` · **Meilenstein:** M1 (Nachtrag zu Nr. 7)
 - **Erstellt:** 2026-11-07
 
