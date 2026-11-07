@@ -118,10 +118,20 @@ footer { padding: 14px 22px; border-top: 1px solid var(--line); background: rgba
   font: 11px/1.6 var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
   color: var(--dim); display: flex; flex-wrap: wrap; gap: 6px 22px; justify-content: center; }
 footer span::before { content: "\\25C6  "; color: var(--line-hot); }
+footer .legal-links { display: flex; gap: 6px 22px; }
+footer a, .legal a { color: var(--cyan); text-decoration: none; }
+footer a:hover, footer a:focus, .legal a:hover, .legal a:focus { text-decoration: underline; }
 .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 20px; }
 .span-7 { grid-column: span 7; } .span-5 { grid-column: span 5; }
 .span-12 { grid-column: span 12; }
 @media (max-width: 860px) { .span-7, .span-5 { grid-column: span 12; } }
+
+/* ---------------------------------------------------------------- legal texts (Spec 014) */
+.legal { max-width: 860px; margin-left: auto; margin-right: auto; overflow-wrap: anywhere; }
+.legal h1 { font: 700 20px/1.3 var(--mono); letter-spacing: 0.08em; margin: 0 0 16px; }
+.legal h2 { font-size: 13px; margin: 24px 0 8px; color: var(--cyan); }
+.legal ul { margin: 0 0 10px; padding-left: 22px; }
+.legal li { margin-bottom: 4px; }
 
 /* ---------------------------------------------------------------- panels */
 .panel {

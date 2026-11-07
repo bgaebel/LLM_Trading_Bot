@@ -22,9 +22,11 @@ from llm_trading_bot.llm.due import iso
 from llm_trading_bot.llm.openai_client import check_key
 from llm_trading_bot.paper.risk import PAUSE_FIELD, RESUME_FIELD, parse_resumes, release_problem
 from llm_trading_bot.service.status import ServiceStatus, read_status, status_path
-from llm_trading_bot.web import overview, pages
+from llm_trading_bot.web import datenschutz, legal, overview, pages
 from llm_trading_bot.web.auth import (
     DEVICE_SECONDS,
+    PRUNE_SECONDS,
+    SESSION_SECONDS,
     DeviceKeys,
     LoginGuard,
     PasswordStore,
@@ -56,8 +58,16 @@ PRE_COOKIE = "ltb_pre"
 PUBLIC_COOKIE = "__Host-ltb_session"
 PUBLIC_PRE_COOKIE = "__Host-ltb_pre"
 DEVICE_COOKIE = "__Host-ltb_device"
+# The session cookie lives as long as the session behind it; the privacy policy names both
+# lifetimes and a test reads them from real Set-Cookie headers (ADR-0025).
+SESSION_COOKIE_SECONDS = SESSION_SECONDS
+PRE_COOKIE_SECONDS = 3600
 PUBLIC_HOST = re.compile(r"[a-z0-9.-]+\.[a-z]{2,}")
 DEFAULT_PUBLIC_PORT = 8788
+# Spec 014: readable without login on both ways, also before setup. Rendered once - the policy
+# is a constant; the Impressum is read per request because it is replaced on the server.
+LEGAL_PATHS = ("/impressum", "/datenschutz")
+DATENSCHUTZ_HTML = legal.render(datenschutz.TEXT)
 EXPIRED = "Formular abgelaufen – bitte erneut."
 PASSWORD_RULE = "Das Passwort braucht mindestens 12 Zeichen und darf nicht leicht zu erraten sein."
 PUBLIC_PASSWORD_RULE = (
@@ -171,6 +181,7 @@ class WebApp:
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
         public_host: str | None = None,
+        impressum: Path | None = None,
     ) -> None:
         if public_host is not None and not PUBLIC_HOST.fullmatch(public_host):
             raise ValueError(f"public host must be a lower-case domain: {public_host!r}")
@@ -178,6 +189,7 @@ class WebApp:
         self.db = db if db is not None else data_dir / "bot.db"
         self.wall_clock = wall_clock
         self.public_host = public_host
+        self.impressum = impressum
         self.passwords = PasswordStore(data_dir / "web-auth.json")
         self.credentials = SecretsFile(data_dir / "secrets.env")
         self.sessions = Sessions(clock)
@@ -198,7 +210,9 @@ class WebApp:
     def _login(self, access: Access, cookies: Mapping[str, str]) -> Response:
         session = self.sessions.create()
         response = redirect("/")
-        response.cookies.append(access.cookie(access.session_cookie, session.token, 43200))
+        response.cookies.append(
+            access.cookie(access.session_cookie, session.token, SESSION_COOKIE_SECONDS)
+        )
         if access.public:
             # ADR-0024: this device logged in; the lockout of strangers spares it. Renewed on
             # every login, so a device in use never expires.
@@ -219,7 +233,9 @@ class WebApp:
         SameSite=Strict cookie never travels with a cross-site form post."""
         token = cookies.get(access.pre_cookie) or secrets.token_urlsafe(24)
         page = build(message, csrf=token)
-        return Response(status, page, cookies=[access.cookie(access.pre_cookie, token, 3600)])
+        return Response(
+            status, page, cookies=[access.cookie(access.pre_cookie, token, PRE_COOKIE_SECONDS)]
+        )
 
     @staticmethod
     def _pre_ok(form: Form, cookies: Mapping[str, str], access: Access = TUNNEL) -> bool:
@@ -300,6 +316,20 @@ class WebApp:
         )
         return Response(status, page)
 
+    def _legal(self, method: str, path: str) -> Response:
+        """Impressum and privacy policy: no session, no cookie, same headers as every page."""
+        if method != "GET":
+            return Response(
+                405, "method not allowed", "text/plain; charset=utf-8", headers={"Allow": "GET"}
+            )
+        if path == "/datenschutz":
+            return Response(200, pages.legal_page("Datenschutz", DATENSCHUTZ_HTML))
+        text = None if self.impressum is None else legal.read_impressum(self.impressum)
+        if text is None:
+            # AK3: neither the path nor the reason - both would describe the server.
+            return Response(503, pages.impressum_missing_page())
+        return Response(200, pages.legal_page("Impressum", legal.render(text)))
+
     # -- routing -----------------------------------------------------------------------------
 
     def handle(
@@ -316,6 +346,9 @@ class WebApp:
         if path == "/app.js" and method == "GET":
             # ADR-0019: holds no data, so like the stylesheet it needs no session.
             return Response(200, JS, "text/javascript; charset=utf-8")
+        if path in LEGAL_PATHS:
+            # Before the setup gate: a site without a password still has to name its operator.
+            return self._legal(method, path)
         if not self.passwords.is_set():
             if access.public:
                 # ADR-0024: the setup code sits in the journal; never set a password from the
@@ -653,6 +686,14 @@ def make_server(app: WebApp, host: str, port: int, *, public: bool = False) -> T
     return server
 
 
+def forget_loop(app: WebApp, stop: threading.Event, interval: float = PRUNE_SECONDS) -> None:
+    """ADR-0025: addresses leave memory on time even if nobody visits the site any more - the
+    lazy check on access alone would keep them until the next request."""
+    while not stop.wait(interval):
+        with app.lock:
+            app.public_guard.prune()
+
+
 def serve(
     data_dir: Path,
     *,
@@ -662,8 +703,9 @@ def serve(
     db: Path | None = None,
     public_host: str | None = None,
     public_port: int = DEFAULT_PUBLIC_PORT,
+    impressum: Path | None = None,
 ) -> None:
-    app = WebApp(data_dir, db=db, public_host=public_host)
+    app = WebApp(data_dir, db=db, public_host=public_host, impressum=impressum)
     server = make_server(app, host, port)
     bound = server.server_address[1]
     print(
@@ -672,6 +714,7 @@ def serve(
         flush=True,
     )
     public_server = None
+    stop = threading.Event()
     if public_host is not None:
         public_server = make_server(app, host, public_port, public=True)
         print(
@@ -681,11 +724,13 @@ def serve(
             flush=True,
         )
         threading.Thread(target=public_server.serve_forever, daemon=True).start()
+        threading.Thread(target=forget_loop, args=(app, stop), daemon=True).start()
     if app.setup_code:
         print(f"Einrichtungscode (einmalig): {app.setup_code}", file=out, flush=True)
     try:
         server.serve_forever()
     finally:
+        stop.set()
         server.server_close()
         if public_server is not None:
             public_server.shutdown()

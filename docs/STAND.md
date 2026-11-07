@@ -13,13 +13,14 @@
 2. Ab 2026-11-13: M1-Abschluss prüfen (7 Tage Lauf seit 2026-11-06 22:38 UTC).
 
 ## In Arbeit
-- Spec: 014 (freigegeben)
+- Spec: 014 (in Arbeit)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
 - –
 
 ## Offen – manuell prüfen
-- Optional in der Hetzner-Oberfläche: Cloud-Firewall, Backups/Snapshot (siehe `docs/betrieb/server.md`).
+- Optional in der Hetzner-Oberfläche: Cloud-Firewall; Backups/Snapshot nur nach Anpassung der
+  Datenschutzerklärung (Journal mit IP-Adressen, siehe `docs/betrieb/server.md`).
 - Ausgabenlimit im OpenAI-Konto setzen. Startkapital für M2 offen.
 - Für Spec 014: Postfach `kontakt@<domain>` bei Migadu, AVV mit Hetzner und Migadu prüfen.

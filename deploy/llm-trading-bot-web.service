@@ -4,6 +4,8 @@
 # It reads the bot database read-only (ADR-0016) and writes only secrets.env and its login file.
 # deploy/release.sh replaces __SERVICE_USER__, __APP_DIR__, __DATA_DIR__ and __PUBLIC_HOST_ARG__ (empty,
 # or --public-host <domain> --public-port 8788 from /etc/llm-trading-bot/public-host) and installs it.
+# Spec 014: the imprint is read from the server on every request (scripts/deploy.sh ... impressum); the
+# file may be missing - /impressum then answers 503 and everything else works as before.
 # Real user names, paths and the domain never go into this file: the repo is public.
 [Unit]
 Description=LLM Trading Bot - web UI on 127.0.0.1
@@ -16,7 +18,7 @@ Type=simple
 User=__SERVICE_USER__
 WorkingDirectory=__DATA_DIR__
 Environment=PYTHONUNBUFFERED=1
-ExecStart=__APP_DIR__/.venv/bin/trading-bot web --data-dir __DATA_DIR__ --host 127.0.0.1 --port 8787 __PUBLIC_HOST_ARG__
+ExecStart=__APP_DIR__/.venv/bin/trading-bot web --data-dir __DATA_DIR__ --host 127.0.0.1 --port 8787 --impressum /etc/llm-trading-bot/impressum.md __PUBLIC_HOST_ARG__
 Restart=on-failure
 RestartSec=15
 TimeoutStopSec=20

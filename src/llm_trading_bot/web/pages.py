@@ -14,7 +14,14 @@ from llm_trading_bot.web import chart
 from llm_trading_bot.web.credentials import AGENT_CHOICES, mask
 from llm_trading_bot.web.style import CSS, TICKER_SECONDS
 
-__all__ = ["CSS", "login_page", "settings_page", "setup_page"]
+__all__ = [
+    "CSS",
+    "impressum_missing_page",
+    "legal_page",
+    "login_page",
+    "settings_page",
+    "setup_page",
+]
 
 TICKER = (
     ("BTC/EUR", "ETH/EUR"),
@@ -179,7 +186,10 @@ def _page(
         f"{items}{items}</div></div><main>{body}</main>"
         "<footer><span>Paper-Modus · kein Echtgeld (ADR-0004)</span>"
         "<span>App nur auf 127.0.0.1 · von außen per HTTPS oder SSH-Tunnel (ADR-0024)</span>"
-        "<span>Zugangsdaten in secrets.env (600)</span></footer></body></html>"
+        "<span>Zugangsdaten in secrets.env (600)</span>"
+        # Spec 014: on every page, also before login - a public site has to name its operator.
+        '<nav class="legal-links" aria-label="Rechtliches"><a href="/impressum">Impressum</a>'
+        '<a href="/datenschutz">Datenschutz</a></nav></footer></body></html>'
     )
 
 
@@ -247,6 +257,21 @@ def setup_closed_page() -> str:
     )
     lines = (*_CONSOLE, ("passwort", "fehlt", "amber"))
     return _page("Einrichtung", _auth("Einrichtung nur per SSH-Tunnel", text, lines))
+
+
+def legal_page(title: str, html: str) -> str:
+    """Impressum or privacy policy; ``html`` comes from ``legal.render`` (already escaped). No
+    logout button and no tabs: the page is the same with or without login."""
+    return _page(title, f'<article class="panel legal">{html}</article>')
+
+
+def impressum_missing_page() -> str:
+    """AK3: no path and no reason - both would describe the server."""
+    return legal_page(
+        "Impressum",
+        "<h1>Impressum nicht hinterlegt</h1>"
+        "<p>Das Impressum ist auf diesem Server noch nicht hinterlegt.</p>",
+    )
 
 
 def login_page(message: str = "", *, csrf: str) -> str:

@@ -392,6 +392,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     web.add_argument(
         "--public-port", type=int, default=8788, help="the 127.0.0.1 port only Caddy uses"
     )
+    web.add_argument(
+        "--impressum",
+        type=Path,
+        default=None,
+        help="Impressum file shown at /impressum (Spec 014); may be missing (then 503)",
+    )
     args = parser.parse_args(argv)
     # LEARNING(#windows): Umlaute in der Konsolenausgabe kaputt unter Windows
     # The Windows console defaults to cp1252; strategy reasons contain German umlauts.
@@ -430,6 +436,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 db=args.db,
                 public_host=args.public_host,
                 public_port=args.public_port,
+                impressum=args.impressum,
             )
         except ValueError as exc:
             print(f"web refused: {exc}", file=sys.stdout)

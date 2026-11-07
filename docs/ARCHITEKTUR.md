@@ -201,19 +201,22 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 ### web
 - **Zweck:** Betreiber loggt sich ein und pflegt OpenAI-Key und Einstellungen; `paper-cycle` liest sie (ADR-0015).
 - **Schnittstelle:**
-  - `app`: `WebApp(data_dir, db=, key_check=, public_host=)` mit `handle(method, path, cookie, form, access)`
+  - `app`: `WebApp(data_dir, db=, key_check=, public_host=, impressum=)` mit `handle(method, path, cookie, form, access)`
     (`Access`: Tunnel oder öffentlich mit Client-Adresse; für den Verbindungstest ein `KeyCheck`, den der Handler
     außerhalb der App-Sperre ausführt und mit `key_checked` beendet), `make_server(app, host, port, public=)` (nur
-    127.0.0.1), `serve(..., public_host=, public_port=)`; Routen `/` (Übersicht), `/setup`, `/login`, `/logout`,
+    127.0.0.1), `serve(..., public_host=, public_port=, impressum=)`; Routen `/` (Übersicht), `/setup`, `/login`, `/logout`,
     `/settings`, `/settings/test`, `/settings/pause`, `/settings/resume`, `/settings/password`, `/app.css`,
-    `/app.js`
+    `/app.js`, `/impressum`, `/datenschutz` (ohne Login, auch vor der Einrichtung; Spec 014, ADR-0025)
+  - `legal`: `render(text)` (kleine Auszeichnung, alles maskiert, nur `mailto:`-Links), `read_impressum(path)`
+    (reguläre Datei, ≤ 16 KB, UTF-8, sonst `None` → 503); `datenschutz`: Text der Datenschutzerklärung, durch
+    Tests an Cookies, Sperrwerte und Server-Dateien gebunden
   - `readonly`: `reading(db)` – ein Lese-Snapshot je Seitenaufruf (`mode=ro`, `query_only`, ADR-0016), sonst
     `DbUnavailable`
   - `overview`: `load(con, now, shares, service=)` → `Overview` (Depots, Equity-Reihen über den Index ausgedünnt,
     Lebenszeichen, Entscheidungen, GPT heute, Trades, Kurse); `service_pulse(status, now)`
   - `auth`: `PasswordStore` (scrypt; neue Passwörter ≥ 12 Zeichen, nicht häufig), `password_problem`,
     `LoginGuard` (5 Fehlversuche → 60 s; öffentlich verdoppelnd bis 1 h), `PublicGuard` (je Client-Adresse, IPv6
-    je /64, globale Obergrenze), `DeviceKeys` (signiertes Geräte-Cookie, 90 Tage), `Sessions` (12 h, im Speicher)
+    je /64, globale Obergrenze, vergisst 24 h nach dem letzten Fehlversuch bzw. der Sperre), `DeviceKeys` (signiertes Geräte-Cookie, 90 Tage), `Sessions` (12 h, im Speicher)
   - `credentials`: `SecretsFile.update(form, agents=, clear_key=)` (prüft mit `load_config`), `set_paused`,
     `request_resume` (schreiben `BOT_PAUSED`/`BOT_RESUME`, auch wenn andere Einstellungen kaputt sind),
     `load_env_file`, `mask`

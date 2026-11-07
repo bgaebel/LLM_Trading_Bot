@@ -1,6 +1,6 @@
-"""Spec 009 AK5, Spec 013 AK7/AK8: deploy/release.sh in a sandbox - real bash, tar, flock, curl and
-python3; systemctl, systemd-analyze, uv, caddy, ufw, apt-get, apt-cache and gpg are stand-ins that
-record what they are asked and play the service.
+"""Spec 009 AK5, Spec 013 AK7/AK8, Spec 014 AK8-AK10: deploy/release.sh in a sandbox - real bash,
+tar, flock, curl and python3; systemctl, systemd-analyze, uv, caddy, ufw, apt-get, apt-cache, gpg
+and journalctl are stand-ins that record what they are asked and play the service.
 
 Linux only (the CI): the script targets Ubuntu and needs GNU tools and flock.
 """
@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,13 @@ UNITS = [
 ]
 CADDYFILE = (REPO / "deploy" / "Caddyfile").read_text(encoding="utf-8")
 WEB_UNIT = "llm-trading-bot-web.service"
+# Spec 014: fixed in the web unit; the sandbox keeps it as it is (not below LTB_ROOT).
+IMPRESSUM_ARG = "--impressum /etc/llm-trading-bot/impressum.md"
+TUNNEL_END = f"--host 127.0.0.1 --port 8787 {IMPRESSUM_ARG}"
+PUBLIC_END = f"{TUNNEL_END} --public-host example.test --public-port 8788"
+# Stands for the operator's name and address: it must never show up in output or logs.
+SECRET = "Erika Mustermann, Musterweg 7"
+IMPRINT = f"# Impressum\n\n## Angaben gemäß § 5 DDG\n\n{SECRET}\n".encode()
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or shutil.which("flock") is None, reason="Linux tools (CI)"
@@ -143,9 +151,24 @@ case "$1" in
 esac
 """
 
-# Rules as files; the messages real ufw prints.
+# Rules and the logging switch as files; the messages real ufw prints.
 FAKE_UFW = r"""#!/usr/bin/env bash
 echo "ufw $*" >>"$FAKE_STATE/calls"
+if [ "$*" = "status verbose" ]; then
+  echo "Status: active"
+  if [ -e "$FAKE_STATE/ufw-logging-off" ]; then echo "Logging: off"
+  else echo "Logging: on (low)"; fi
+  echo "Default: deny (incoming), allow (outgoing), disabled (routed)"
+  exit 0
+fi
+if [ "$1" = logging ]; then
+  case "$2" in
+    off) touch "$FAKE_STATE/ufw-logging-off"; echo "Logging disabled" ;;
+    on | low) rm -f "$FAKE_STATE/ufw-logging-off"; echo "Logging enabled" ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
 del=0
 if [ "$1" = delete ]; then del=1; shift; fi
 [ "$1" = allow ] || exit 1
@@ -185,6 +208,11 @@ for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; done
 in="${*: -1}"
 grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$in" || exit 2
 cp "$in" "$out"
+"""
+
+FAKE_JOURNALCTL = r"""#!/usr/bin/env bash
+echo "journalctl $*" >>"$FAKE_STATE/calls"
+echo "Archived and active journals take up 8.0M in the file system."
 """
 
 KEY = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nfake\n-----END PGP PUBLIC KEY BLOCK-----\n"
@@ -249,17 +277,39 @@ class Sandbox:
             (self.state / "enabled-caddy.service").touch()
             (self.state / "active-caddy.service").touch()
 
-    def upload(self, sha: str, extra: dict[str, str] | None = None, pre013: bool = False) -> None:
+    @property
+    def impressum(self) -> Path:
+        return self.root / "etc" / "llm-trading-bot" / "impressum.md"
+
+    def upload(
+        self,
+        sha: str,
+        extra: dict[str, str] | None = None,
+        pre013: bool = False,
+        pre014: bool = False,
+    ) -> None:
         """What scripts/deploy.sh streams: a tar.gz of the commit with deploy/ inside. pre013: a
-        release from before Spec 013 - no Caddyfile, no public host in the web unit."""
+        release from before Spec 013 - no Caddyfile, no public host in the web unit (and no
+        imprint). pre014: a release from Spec 013 - no --impressum in the web unit."""
         incoming = self.app / "incoming"
         incoming.mkdir(parents=True, exist_ok=True)
         with tarfile.open(incoming / f"{sha}.tar.gz", "w:gz") as tar:
             files = {
                 f"deploy/{u}": (REPO / "deploy" / u).read_text(encoding="utf-8") for u in UNITS
             }
+            web = f"deploy/{WEB_UNIT}"
+            if pre013 or pre014:
+                files[web] = files[web].replace(f" {IMPRESSUM_ARG}", "")
+                assert "--impressum" not in files[web]
+            if pre013 or pre014:
+                # Spec 013's namespace journal: no MaxFileSec, syslog forwarding by default.
+                journald = "deploy/journald@llm-trading-bot.conf"
+                files[journald] = "".join(
+                    line
+                    for line in files[journald].splitlines(keepends=True)
+                    if not line.startswith(("MaxFileSec=", "ForwardToSyslog="))
+                )
             if pre013:
-                web = f"deploy/{WEB_UNIT}"
                 files[web] = files[web].replace(" __PUBLIC_HOST_ARG__", "")
             else:
                 files["deploy/Caddyfile"] = CADDYFILE
@@ -275,6 +325,30 @@ class Sandbox:
         self.data.mkdir(parents=True, exist_ok=True)
         (self.data / "secrets.env").write_text("OPENAI_API_KEY=sk-test\n", encoding="utf-8")
         (self.data / "bot.db").write_bytes(b"the trade history")
+
+    def upload_imprint(self, data: bytes, digest: str | None = None) -> str:
+        """What scripts/deploy.sh streams in its first connection; returns the sha256 it names."""
+        digest = digest or hashlib.sha256(data).hexdigest()
+        incoming = self.app / "incoming"
+        incoming.mkdir(parents=True, exist_ok=True)
+        (incoming / f"impressum-{digest}.md").write_bytes(data)
+        return digest
+
+    def exec_start(self) -> str:
+        (line,) = [ln for ln in self.unit(WEB_UNIT).splitlines() if ln.startswith("ExecStart=")]
+        return line
+
+    @property
+    def caddy_drop_in(self) -> Path:
+        return self.root / "etc/systemd/system/caddy.service.d/10-llm-trading-bot.conf"
+
+    @property
+    def journald_drop_in(self) -> Path:
+        return self.root / "etc/systemd/journald.conf.d/50-llm-trading-bot.conf"
+
+    @property
+    def namespace_drop_in(self) -> Path:
+        return self.root / "etc/systemd/journald@llm-trading-bot.conf.d/50-llm-trading-bot.conf"
 
 
 def sha(n: int) -> str:
@@ -305,6 +379,7 @@ def box(tmp_path: Path) -> Iterator[Sandbox]:
             ("apt-get", FAKE_APT_GET),
             ("apt-cache", FAKE_APT_CACHE),
             ("gpg", FAKE_GPG),
+            ("journalctl", FAKE_JOURNALCTL),
         ]
     }
     key = tmp_path / "caddy-gpg.key"
@@ -325,6 +400,7 @@ def box(tmp_path: Path) -> Iterator[Sandbox]:
         "LTB_APT_GET": fakes["apt-get"],
         "LTB_APT_CACHE": fakes["apt-cache"],
         "LTB_GPG": fakes["gpg"],
+        "LTB_JOURNALCTL": fakes["journalctl"],
         "LTB_CADDY_KEY_URL": key.as_uri(),
         "LTB_HEALTH_SECONDS": "3",
         "LTB_POLL_SECONDS": "0.2",
@@ -680,7 +756,7 @@ def public_box(box: Sandbox) -> Sandbox:
 def test_public_host_file_adds_the_listener_and_installs_the_caddyfile(box: Sandbox) -> None:
     public_box(box).upload(sha(1))
     box.run("deploy", sha(1), "botsvc")
-    assert "--port 8787 --public-host example.test --public-port 8788\n" in box.unit(WEB_UNIT)
+    assert box.exec_start().endswith(PUBLIC_END)
     caddy = box.caddyfile.read_text(encoding="utf-8")
     assert "\nexample.test {\n" in caddy and "\nwww.example.test {\n" in caddy
     assert "redir https://example.test{uri} permanent" in caddy and "__" not in caddy
@@ -693,7 +769,7 @@ def test_public_without_the_host_file_neither_listener_nor_caddy(box: Sandbox) -
     box.caddy()
     box.upload(sha(1))
     box.run("deploy", sha(1), "botsvc")
-    assert "--host 127.0.0.1 --port 8787\n" in box.unit(WEB_UNIT)
+    assert box.exec_start().endswith(TUNNEL_END)
     assert not box.caddyfile.exists()
     assert not any(c.startswith(("caddy ", "reload ")) for c in box.calls())
 
@@ -798,6 +874,7 @@ def test_public_first_deploy_over_a_release_from_before_013(box: Sandbox, public
     assert box.current() == sha(2)
     assert box.caddyfile.exists() == public
     assert ("--public-host example.test --public-port 8788" in box.unit(WEB_UNIT)) == public
+    assert IMPRESSUM_ARG in box.exec_start()
 
 
 def test_public_rollback_to_a_release_from_before_013_leaves_caddy_alone(box: Sandbox) -> None:
@@ -853,7 +930,7 @@ def test_public_command_sets_up_caddy_in_order_and_twice_changes_nothing(box: Sa
     assert not any(c.startswith("ufw limit") for c in calls[start:])  # allow, not limit
     assert box.public_file.read_text(encoding="utf-8") == "example.test\n"
     assert box.public_file.stat().st_mode & 0o777 == 0o644
-    assert "--port 8787 --public-host example.test --public-port 8788\n" in box.unit(WEB_UNIT)
+    assert box.exec_start().endswith(PUBLIC_END)
     assert "\nexample.test {\n" in box.caddyfile.read_text(encoding="utf-8")
     drop_in = box.root / "etc/systemd/system/caddy.service.d/10-llm-trading-bot.conf"
     assert "RuntimeDirectory=caddy\n" in drop_in.read_text(encoding="utf-8")
@@ -937,7 +1014,7 @@ def test_public_off_undoes_everything_and_twice_changes_nothing(box: Sandbox) ->
     assert not box.public_file.exists()
     for name in ("enabled-caddy.service", "active-caddy.service", "ufw-80-tcp", "ufw-443-tcp"):
         assert not (box.state / name).exists(), name
-    assert "--host 127.0.0.1 --port 8787\n" in box.unit(WEB_UNIT)
+    assert box.exec_start().endswith(TUNNEL_END)
     assert f"restart {WEB_UNIT}" in box.calls()[start:]
     assert box.run("public-off", "botsvc").stdout.rstrip().endswith("changes: 0")
     # Off stays off: the next deploy neither validates nor reloads caddy.
@@ -964,3 +1041,325 @@ def test_public_bad_arguments(box: Sandbox) -> None:
     installed(box)
     for args in (["public", "example.test"], ["public-off"], ["public-off", "Bad User"]):
         assert box.run(*args, check=False).returncode != 0, args
+
+
+# ------------------------------------------------------------------ Spec 014: log limits (AK8)
+
+OLD_CADDY_DROP_IN = """# Spec 013 (deploy/release.sh): the admin API is a unix socket in /run/caddy.
+[Service]
+RuntimeDirectory=caddy
+RuntimeDirectoryMode=0750
+"""
+
+
+def deployed(box: Sandbox) -> Sandbox:
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    return box
+
+
+def test_public_sets_log_limits_and_twice_changes_nothing(box: Sandbox) -> None:
+    deployed(box)
+    start = len(box.calls())
+    out = box.run("public", "example.test", "botsvc").stdout
+    drop_in = box.caddy_drop_in.read_text(encoding="utf-8")
+    assert "\nLogNamespace=llm-trading-bot\n" in drop_in
+    assert "\nRuntimeDirectory=caddy\nRuntimeDirectoryMode=0750\n" in drop_in
+    journald = box.journald_drop_in.read_text(encoding="utf-8")
+    assert "\n[Journal]\nMaxRetentionSec=14day\nMaxFileSec=1day\n" in journald
+    assert box.journald_drop_in.stat().st_mode & 0o777 == 0o644
+    namespace = box.namespace_drop_in.read_text(encoding="utf-8")
+    assert "\n[Journal]\nMaxRetentionSec=14day\nMaxFileSec=1day\nForwardToSyslog=no\n" in namespace
+    assert box.namespace_drop_in.stat().st_mode & 0o777 == 0o644
+    assert "try-restart systemd-journald@llm-trading-bot.service" in box.calls()[start:]
+    assert (box.state / "ufw-logging-off").exists()
+    assert "disabled   ufw logging" in out and "restarted  systemd-journald" in out
+    calls = box.calls()
+    # The limits are in place before caddy starts and writes its first lines.
+    order = [
+        index(calls, "daemon-reload", start),
+        index(calls, "restart systemd-journald.service", start),
+        index(calls, "ufw status verbose", start),
+        index(calls, "ufw logging off", start),
+        index(calls, "restart caddy.service", start),
+    ]
+    assert order == sorted(order), calls[start:]
+
+    second = box.run("public", "example.test", "botsvc").stdout
+    assert second.rstrip().endswith("changes: 0"), second
+    again = box.calls()[len(calls) :]
+    assert "ufw status verbose" in again and "ufw logging off" not in again
+    assert not any(c.startswith(("restart ", "daemon-reload")) for c in again), again
+
+
+def test_public_sets_log_limits_on_a_server_set_up_with_013(box: Sandbox) -> None:
+    """`public` again after the 014 deploy (AK12 step 4): drop-in, journald and ufw change, caddy
+    restarts once with its new namespace."""
+    deployed(box).run("public", "example.test", "botsvc")
+    box.caddy_drop_in.write_text(OLD_CADDY_DROP_IN, encoding="utf-8", newline="\n")
+    box.journald_drop_in.unlink()
+    (box.state / "ufw-logging-off").unlink()
+    start = len(box.calls())
+    out = box.run("public", "example.test", "botsvc").stdout
+    assert out.rstrip().endswith("changes: 3"), out
+    calls = box.calls()[start:]
+    for call in (
+        "daemon-reload",
+        "restart systemd-journald.service",
+        "ufw logging off",
+        "restart caddy.service",
+    ):
+        assert calls.count(call) == 1, (call, calls)
+    assert "LogNamespace=llm-trading-bot" in box.caddy_drop_in.read_text(encoding="utf-8")
+    assert box.run("public", "example.test", "botsvc").stdout.rstrip().endswith("changes: 0")
+
+
+def test_public_sets_log_limits_that_public_off_leaves_in_place(box: Sandbox) -> None:
+    deployed(box).run("public", "example.test", "botsvc")
+    drop_in = box.caddy_drop_in.read_bytes()
+    journald = box.journald_drop_in.read_bytes()
+    start = len(box.calls())
+    box.run("public-off", "botsvc")
+    assert box.caddy_drop_in.read_bytes() == drop_in
+    assert box.journald_drop_in.read_bytes() == journald
+    assert (box.state / "ufw-logging-off").exists()
+    calls = box.calls()[start:]
+    assert not any(c.startswith("ufw logging") or "systemd-journald" in c for c in calls), calls
+
+
+def test_public_sets_log_limits_in_the_namespace_journal_with_every_deploy(box: Sandbox) -> None:
+    # deploy/journald@llm-trading-bot.conf comes with each release, not with `public`.
+    deployed(box)
+    conf = box.root / "etc/systemd/journald@llm-trading-bot.conf"
+    j = conf.read_text(encoding="utf-8")
+    assert "\nMaxRetentionSec=14day\nMaxFileSec=1day\nForwardToSyslog=no\n" in j
+    restart = "try-restart systemd-journald@llm-trading-bot.service"
+    assert box.calls().count(restart) == 1
+    box.upload(sha(2))
+    box.run("deploy", sha(2), "botsvc")
+    assert box.calls().count(restart) == 1  # unchanged file: the namespace journal keeps running
+
+
+def test_public_sets_log_limits_and_names_the_namespace_when_caddy_fails(box: Sandbox) -> None:
+    deployed(box)
+    (box.state / "bad-caddy").touch()
+    failed = box.run("public", "example.test", "botsvc", check=False)
+    assert failed.returncode != 0
+    assert "journalctl --namespace=llm-trading-bot -u caddy" in failed.stderr, failed.stderr
+    # Written before caddy's start failed: they stay, a rerun only has to start caddy.
+    assert box.journald_drop_in.exists() and (box.state / "ufw-logging-off").exists()
+
+
+# ------------------------------------------------------------------ Spec 014: Rollback (AK10)
+
+
+@pytest.mark.parametrize("public", [False, True], ids=["tunnel", "public"])
+def test_rollback_before_014_drops_the_argument_and_keeps_the_imprint(
+    box: Sandbox, public: bool
+) -> None:
+    installed(box).secrets()
+    if public:
+        box.caddy()
+        box.public_host("example.test\n")
+    end = " --public-host example.test --public-port 8788" if public else ""
+    box.upload(sha(1), pre014=True)
+    box.run("deploy", sha(1), "botsvc")
+    assert box.exec_start().endswith(f"--host 127.0.0.1 --port 8787{end}")
+    assert "web unit: without --impressum" in box.run("status").stdout
+    # 014 over the old release: the argument comes with the unit, the file may still be missing.
+    box.upload(sha(2))
+    box.run("deploy", sha(2), "botsvc")
+    assert box.exec_start().endswith(f"{TUNNEL_END}{end}")
+    box.run("impressum", box.upload_imprint(IMPRINT))
+    before = box.impressum.stat()
+    box.run("rollback", "botsvc")
+    assert box.current() == sha(1)
+    exec_start = box.exec_start()
+    assert "--impressum" not in exec_start
+    assert exec_start.endswith(f"--host 127.0.0.1 --port 8787{end}")
+    assert box.impressum.read_bytes() == IMPRINT
+    after = box.impressum.stat()
+    assert (after.st_mtime_ns, after.st_ino, after.st_mode) == (
+        before.st_mtime_ns,
+        before.st_ino,
+        before.st_mode,
+    )
+    assert "web unit: without --impressum" in box.run("status").stdout
+
+
+# ------------------------------------------------------------------ Spec 014: imprint (AK9)
+
+
+def no_secret_anywhere(box: Sandbox, *outputs: str) -> None:
+    for text in outputs:
+        assert SECRET not in text
+    log = box.app / "deploy.log"
+    assert not log.exists() or SECRET not in log.read_text(encoding="utf-8")
+
+
+def incoming_imprints(box: Sandbox) -> list[str]:
+    return sorted(p.name for p in (box.app / "incoming").glob("impressum-*"))
+
+
+def test_public_log_limits_survive_a_rollback_before_014(box: Sandbox) -> None:
+    """The release's journald@ file of Spec 013 has no MaxFileSec; the drop-in from `public`
+    keeps the 15 days the privacy notice names while caddy goes on logging into the namespace."""
+    installed(box).secrets()
+    box.upload(sha(1), pre014=True)
+    box.run("deploy", sha(1), "botsvc")
+    box.upload(sha(2))
+    box.run("deploy", sha(2), "botsvc")
+    box.run("public", "example.test", "botsvc")
+    drop_in = box.namespace_drop_in.read_bytes()
+    box.run("rollback", "botsvc")
+    assert box.current() == sha(1)
+    installed_conf = (box.root / "etc/systemd/journald@llm-trading-bot.conf").read_text(
+        encoding="utf-8"
+    )
+    assert "\nMaxFileSec=" not in installed_conf  # the old release's file is back ...
+    assert box.namespace_drop_in.read_bytes() == drop_in  # ... the limits stay
+    assert "LogNamespace=llm-trading-bot" in box.caddy_drop_in.read_text(encoding="utf-8")
+
+
+def test_impressum_removes_copies_of_earlier_uploads(box: Sandbox) -> None:
+    installed(box)
+    stale = box.upload_imprint(IMPRINT.replace(b"Impressum", b"Alt"))
+    digest = box.upload_imprint(IMPRINT)
+    box.run("impressum", digest)
+    assert stale != digest and incoming_imprints(box) == []
+
+
+def test_impressum_installs_the_file_and_twice_changes_nothing(box: Sandbox) -> None:
+    public_box(box)  # /etc/llm-trading-bot exists already
+    first = box.run("impressum", box.upload_imprint(IMPRINT))
+    assert first.stdout.rstrip().endswith("changes: 1"), first.stdout
+    assert box.impressum.read_bytes() == IMPRINT
+    assert box.impressum.stat().st_mode & 0o777 == 0o644
+    assert incoming_imprints(box) == []
+    assert not (box.impressum.parent / ".impressum.md.new").exists()
+    digest = hashlib.sha256(IMPRINT).hexdigest()
+    assert f"({len(IMPRINT)} B, sha256 {digest[:12]})" in first.stdout
+    second = box.run("impressum", box.upload_imprint(IMPRINT))
+    assert second.stdout.rstrip().endswith("changes: 0"), second.stdout
+    assert incoming_imprints(box) == []
+    no_secret_anywhere(box, first.stdout, first.stderr, second.stdout, second.stderr)
+
+
+def test_impressum_creates_the_directory_on_a_tunnel_only_server(box: Sandbox) -> None:
+    installed(box)
+    assert not box.impressum.parent.exists()
+    out = box.run("impressum", box.upload_imprint(IMPRINT)).stdout
+    assert box.impressum.parent.stat().st_mode & 0o777 == 0o755
+    assert box.impressum.read_bytes() == IMPRINT
+    assert out.rstrip().endswith("changes: 2"), out  # the directory and the file
+
+
+def test_impressum_replaces_a_changed_file_in_one_rename(box: Sandbox) -> None:
+    installed(box)
+    box.run("impressum", box.upload_imprint(IMPRINT))
+    old_inode = box.impressum.stat().st_ino
+    new = IMPRINT + b"\n## Kontakt\n\n- E-Mail: kontakt@example.test\n"
+    out = box.run("impressum", box.upload_imprint(new)).stdout
+    assert out.rstrip().endswith("changes: 1")
+    assert box.impressum.read_bytes() == new
+    assert box.impressum.stat().st_ino != old_inode  # a new file renamed over, not rewritten
+    assert sorted(p.name for p in box.impressum.parent.iterdir()) == ["impressum.md"]
+
+
+@pytest.mark.parametrize(
+    ("data", "reason"),
+    [
+        (b"x" * 16385, "too big"),
+        ("ä".encode("latin-1") + b"\n", "not UTF-8"),
+        (b"\xed\xa0\x80\n", "not UTF-8"),  # a surrogate
+        (b"# Impressum\n\x00\n", "NUL"),
+        (b"", "empty"),
+        (b" \n\n\t\n", "empty"),
+    ],
+    ids=["too-big", "latin-1", "surrogate", "nul", "empty", "blank"],
+)
+def test_impressum_refuses_an_invalid_upload(box: Sandbox, data: bytes, reason: str) -> None:
+    installed(box)
+    box.run("impressum", box.upload_imprint(IMPRINT))
+    result = box.run("impressum", box.upload_imprint(data), check=False)
+    assert result.returncode != 0
+    assert reason in result.stderr and "nothing changed" in result.stderr, result.stderr
+    assert box.impressum.read_bytes() == IMPRINT  # the served file stays
+    assert incoming_imprints(box) == []
+
+
+def test_impressum_accepts_exactly_the_limit(box: Sandbox) -> None:
+    installed(box)
+    data = ("ä" * 8191 + "\n\n").encode()
+    assert len(data) == 16384
+    box.run("impressum", box.upload_imprint(data))
+    assert box.impressum.read_bytes() == data
+
+
+def test_impressum_refuses_a_file_that_does_not_match_its_hash(box: Sandbox) -> None:
+    installed(box)
+    digest = hashlib.sha256(b"something else").hexdigest()
+    result = box.run("impressum", box.upload_imprint(IMPRINT, digest=digest), check=False)
+    assert result.returncode != 0 and "does not match its sha256" in result.stderr
+    assert not box.impressum.exists() and incoming_imprints(box) == []
+    no_secret_anywhere(box, result.stdout, result.stderr)
+
+
+def test_impressum_without_an_upload_or_with_a_bad_hash_changes_nothing(box: Sandbox) -> None:
+    installed(box)
+    missing = box.run("impressum", "a" * 64, check=False)
+    assert missing.returncode != 0 and "no uploaded imprint" in missing.stderr
+    for bad in ("A" * 64, "a" * 63, "../../etc/passwd", ""):
+        result = box.run("impressum", bad, check=False)
+        assert result.returncode != 0 and "not a sha256" in result.stderr, bad
+    assert not box.impressum.parent.exists()
+
+
+def test_impressum_needs_the_install_and_one_argument(box: Sandbox) -> None:
+    result = box.run("impressum", hashlib.sha256(IMPRINT).hexdigest(), check=False)
+    assert result.returncode != 0 and "run install first" in result.stderr
+    installed(box)
+    for args in (["impressum"], ["impressum", "a" * 64, "b"]):
+        assert box.run(*args, check=False).returncode != 0, args
+
+
+def test_impressum_another_deploy_running_is_refused(box: Sandbox) -> None:
+    installed(box)
+    digest = box.upload_imprint(IMPRINT)
+    lock = str(box.app / ".deploy.lock")
+    # -o: only flock itself holds the lock, so killing it frees the lock at once.
+    holder = subprocess.Popen(["flock", "-o", lock, "sleep", "30"])
+    try:
+        for _ in range(100):  # until the holder has it
+            if subprocess.run(["flock", "-n", lock, "true"], check=False).returncode != 0:
+                break
+            time.sleep(0.05)
+        result = box.run("impressum", digest, check=False)
+    finally:
+        holder.kill()
+        holder.wait()
+    assert result.returncode != 0 and "another deploy is running" in result.stderr
+    assert not box.impressum.exists()
+    assert incoming_imprints(box) == []  # name and address do not stay behind
+
+
+def test_impressum_status_lines(box: Sandbox) -> None:
+    deployed(box)
+    out = box.run("status").stdout
+    assert "\nimpressum: missing" in out and "\nweb unit: passes --impressum\n" in out
+    box.run("impressum", box.upload_imprint(IMPRINT))
+    out = box.run("status").stdout
+    digest = hashlib.sha256(IMPRINT).hexdigest()
+    assert f"\nimpressum: ok ({len(IMPRINT)} B, sha256 {digest[:12]})\n" in out, out
+    assert "\njournal: Archived and active journals take up" in out
+    no_secret_anywhere(box, out)
+    box.impressum.chmod(0o600)
+    unreadable = "\nimpressum: INVALID (not readable for the web UI: mode 600)"
+    assert unreadable in box.run("status").stdout
+    box.impressum.write_bytes(b"caf\xe9\n")
+    box.impressum.chmod(0o644)
+    assert "\nimpressum: INVALID (not UTF-8)" in box.run("status").stdout
+    box.impressum.unlink()
+    box.impressum.symlink_to(box.data / "secrets.env")
+    assert "\nimpressum: INVALID (a symlink)" in box.run("status").stdout
