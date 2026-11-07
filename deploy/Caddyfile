@@ -31,6 +31,8 @@ __PUBLIC_HOST__ {
 	reverse_proxy 127.0.0.1:8788 {
 		# Bodies are read completely before they reach the app.
 		request_buffers 64KB
+		# The app's own Server header must not reach the internet either.
+		header_down -Server
 		transport http {
 			max_conns_per_host 16
 			response_header_timeout 30s
