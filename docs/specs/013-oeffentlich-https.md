@@ -1,6 +1,6 @@
 # Spec 013: Weboberfläche öffentlich per HTTPS mit Login
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s013-oeffentlich-https` · **Meilenstein:** M1 (Nachtrag zu Nr. 7)
 - **Erstellt:** 2026-11-07
 
@@ -30,18 +30,18 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
 | Zugriffslog | keines (keine `log`-Direktive) | keine IPs/Pfade dauerhaft gespeichert |
 
 ## Akzeptanzkriterien
-- [ ] AK1: Zwei Zugangswege, am Socket unterschieden: Port 8787 (Tunnel) nimmt nur `127.0.0.1`/`localhost` (Port
+- [x] AK1: Zwei Zugangswege, am Socket unterschieden: Port 8787 (Tunnel) nimmt nur `127.0.0.1`/`localhost` (Port
   frei) an; Port 8788 (Caddy, nur mit `--public-host`) nur genau den öffentlichen Host (ohne Port, Kleinschreibung
   egal); alles andere → 421. Auf 8787 führt ein `X-Forwarded-For`/`X-Forwarded-Host` zu 421. Ohne
   `--public-host` gibt es nur 8787 und alles verhält sich wie heute. — Nachweis:
   `tests/web/test_public.py::test_public_host_*`, bestehende Host-Tests grün
-- [ ] AK2: POSTs auf 8788 verlangen `Origin: https://<domain>` (oder kein Origin, dann `Sec-Fetch-Site` wie heute);
+- [x] AK2: POSTs auf 8788 verlangen `Origin: https://<domain>` (oder kein Origin, dann `Sec-Fetch-Site` wie heute);
   `http://`, fremde und lokale Origins → 403; auf 8787 bleibt die heutige Regel. CSRF-Token wie bisher. —
   Nachweis: `test_public_origin_*`
-- [ ] AK3: Auf 8788 heißen alle Cookies `__Host-ltb_*` mit `Secure; HttpOnly; SameSite=Strict; Path=/`, ohne
+- [x] AK3: Auf 8788 heißen alle Cookies `__Host-ltb_*` mit `Secure; HttpOnly; SameSite=Strict; Path=/`, ohne
   `Domain`; nur diese Namen werden dort gelesen (ein `ltb_session` wird ignoriert); der Logout löscht mit denselben
   Attributen. Auf 8787 unverändert `ltb_*` ohne `Secure`. — Nachweis: `test_public_cookies_*`
-- [ ] AK4: Fehlversuche auf 8788 je Quell-IP aus dem `X-Forwarded-For`, das Caddy setzt (letzter Eintrag; IPv6
+- [x] AK4: Fehlversuche auf 8788 je Quell-IP aus dem `X-Forwarded-For`, das Caddy setzt (letzter Eintrag; IPv6
   je /64): 5 → 60 s, danach jede Sperre doppelt (120, 240, …, 3600 s); jeder Fehlversuch während einer abgelaufenen
   Sperrstufe zählt neu ab 5; Erfolg setzt die IP zurück. Global höchstens 100 Fehlversuche je Stunde, dann 429 für
   unbekannte Geräte. Ein gültiges Geräte-Cookie (HMAC mit Schlüssel `web-device.key`, 600, im Datenverzeichnis;
@@ -49,16 +49,16 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
   öffentlicher Zugang sperrt den Tunnel nicht. Gilt für Login. — Nachweis: `tests/web/test_auth.py::test_backoff_*`,
   `test_device_*`, `tests/web/test_public.py::test_public_lockout_*` (Angreifer-IP gesperrt, andere IP nicht;
   global gesperrt, Gerät mit Cookie meldet sich an)
-- [ ] AK5: Öffentlich (8788) gibt es keine Einrichtung: Ohne Passwort antwortet jede öffentliche URL mit 503 und dem
+- [x] AK5: Öffentlich (8788) gibt es keine Einrichtung: Ohne Passwort antwortet jede öffentliche URL mit 503 und dem
   Hinweis „Einrichtung nur per SSH-Tunnel“, ohne Formular, Cookie oder Code. — Nachweis: `test_public_setup_*`
-- [ ] AK6: Öffentlich anmelden kann sich nur ein Passwort mit mindestens 12 Zeichen, das nicht in der eingebetteten
+- [x] AK6: Öffentlich anmelden kann sich nur ein Passwort mit mindestens 12 Zeichen, das nicht in der eingebetteten
   Liste häufiger Passwörter steht (geprüft beim Login, da es dann im Klartext vorliegt); sonst freundliche Meldung
   „Für den Zugang aus dem Internet bitte ein längeres Passwort setzen (Einstellungen, per Tunnel oder hier nach dem
   Login)“ – ohne Hinweis, ob das Passwort stimmte. Neu: „Passwort ändern“ in den Einstellungen (altes Passwort +
   neues zweimal, CSRF; neue Passwörter immer ≥ 12 Zeichen und nicht häufig). — Nachweis:
   `tests/web/test_auth.py::test_password_policy_*`, `tests/web/test_public.py::test_public_password_*`,
   `test_change_password_*`
-- [ ] AK7: Server-Dateien: `deploy/Caddyfile` mit `__PUBLIC_HOST__` (genau die Adressen `__PUBLIC_HOST__` und
+- [x] AK7: Server-Dateien: `deploy/Caddyfile` mit `__PUBLIC_HOST__` (genau die Adressen `__PUBLIC_HOST__` und
   `www.__PUBLIC_HOST__`, `reverse_proxy 127.0.0.1:8788` mit Grenzen und Puffer, `www`-Weiterleitung, HSTS und
   `-Server` in beiden Blöcken, `admin unix//run/caddy/admin.sock`, `protocols h1 h2`, keine `log`- und keine
   `header_up`-Direktive); die Web-Unit hat `__PUBLIC_HOST_ARG__` (leer oder `--public-host <domain>`) und die
@@ -69,19 +69,19 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
   bleibt ein gültiger Rückfall, ein Rollback ändert Caddy nicht. CI prüft das Caddyfile mit `caddy validate` und die
   Web-Unit mit leerem und gesetztem `--public-host`. — Nachweis: `tests/deploy/test_release.py::test_public_*`,
   `tests/test_deploy_files.py::test_caddy*`, `scripts/check-units.sh`
-- [ ] AK8: `bash scripts/deploy.sh <alias> <dienst> public <domain>` (mit Deploy-Sperre): bricht ab, wenn der aktive
+- [x] AK8: `bash scripts/deploy.sh <alias> <dienst> public <domain>` (mit Deploy-Sperre): bricht ab, wenn der aktive
   Release das Caddyfile nicht kennt; sonst in dieser Reihenfolge: Caddy-Repo und Paket (`apt-get -o
   DPkg::Lock::Timeout=300`), Origin in die automatischen Updates, Domain-Datei, Units neu erzeugen, `ufw allow
   80/tcp` und `443/tcp`, Caddyfile prüfen und installieren, Caddy und Web-Unit neu starten. Erneuter Aufruf ändert
   nichts. `public off` macht alles rückgängig (Datei, Caddy aus, Regeln weg, Units neu). `status` nennt Caddy-Version
   und öffentlichen Host-Zustand. — Nachweis: `tests/deploy/test_deploy_script.py::test_public_*`, Sandbox-Tests in
   `tests/deploy/test_release.py` mit Fakes für apt, ufw und caddy
-- [ ] AK9: [manuell] Mit Zustimmung auf dem Server: AAAA-Einträge und Hetzner-Cloud-Firewall prüfen; Release 013
+- [x] AK9: [manuell] Mit Zustimmung auf dem Server: AAAA-Einträge und Hetzner-Cloud-Firewall prüfen; Release 013
   deployen; `public <domain>`; danach `https://<domain>/login` 200 mit gültigem Zertifikat und HSTS, ohne
   App-`Server`-Header; `http://` → `https://`; `www` → Domain; Login (mit Passwort ≥ 12), Übersicht live,
   Einstellungen, Pausenschalter über HTTPS; Tunnel geht weiter; `ss` zeigt Bot-Ports nur auf `127.0.0.1`, keinen
   Port 2019.
-- [ ] AK10: Doku: ADR-0024 (löst ADR-0005 ab, ergänzt ADR-0015), INDEX, PROJEKT-Nicht-Ziel angepasst, CLAUDE.md
+- [x] AK10: Doku: ADR-0024 (löst ADR-0005 ab, ergänzt ADR-0015), INDEX, PROJEKT-Nicht-Ziel angepasst, CLAUDE.md
   („HTTP bindet nur an 127.0.0.1; von außen nur über Caddy“), `docs/betrieb/server.md` (Einrichten, Prüfen,
   Abschalten, Passwort zurücksetzen nur per Tunnel), ARCHITEKTUR; keine echte Domain im Repo; Lint, Format,
   `mypy src tests tools`, Shellcheck, CI grün.
@@ -113,8 +113,8 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
 - [x] 2. Zweiter Listener, Host/Origin/Cookies/Setup je Weg, `--public-host` (AK1–AK3, AK5)
 - [x] 3. Caddyfile, Unit, `release.sh`, CI-Prüfung (AK7)
 - [x] 4. `deploy.sh public` / `public off` / `status` mit Sandbox-Tests (AK8)
-- [ ] 5. Doku, ADR, PROJEKT/CLAUDE.md; Prüfung (Workflow); PR (AK10)
-- [ ] 6. Mit Zustimmung: Deploy, `public <domain>`, Prüfung von außen (AK9)
+- [x] 5. Doku, ADR, PROJEKT/CLAUDE.md; Prüfung (Workflow); PR (AK10)
+- [x] 6. Mit Zustimmung: Deploy, `public <domain>`, Prüfung von außen (AK9)
 
 ## Risiken & offene Fragen
 - **Öffentliche Angriffsfläche:** Login-Seite und statische Dateien sind erreichbar; alles andere verlangt eine
@@ -138,10 +138,30 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
   (Neue teilen einen Überlauf-Schlüssel); `public` startet die Weboberfläche auch nach einem gescheiterten
   Caddy-Start neu; Caddy-Fehlerseiten mit HSTS und ohne `Server`; Fußzeile/Ticker; Doku-Befehle (`curl -D -`,
   AAAA für www); Tests für `serve()` und CLI-Verdrahtung.
+- 2026-11-07: Auf dem Server mit Zustimmung: Release 850221e deployt, `public <domain>` (10 Änderungen), Zertifikat
+  beim ersten Versuch. Das bisherige Passwort hatte 8 Zeichen: per Tunnel zurückgesetzt (Datei beiseitegelegt,
+  Neustart, Einrichtungscode aus dem Journal) und neu gesetzt; danach öffentlicher Login des Nutzers.
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Die Weboberfläche ist unter `https://<domain>/` erreichbar (Caddy, Let's Encrypt, HSTS, `www` und
+  `http://` leiten um), mit gehärtetem Login; die App bindet weiter nur an `127.0.0.1`, der SSH-Tunnel geht wie
+  vorher. AK1–AK10 erfüllt.
+- **Abweichungen vom Plan:** Server-Seite (Schritte 3–4) parallel in einem Worktree gebaut und gemergt. Nach dem
+  Review zusätzlich: Geräte-Cookie bei jedem Login neu, Schlüsselwechsel nach Passwortänderung, Überlauf-Schlüssel
+  statt Verdrängen gesperrter Clients, Caddy-Fehlerseiten mit HSTS, Web-Neustart nach gescheitertem Caddy-Start.
+- **Nachweise:**
+  - Lokal und CI grün (PR #20, 1822 Tests lokal plus Linux-Sandbox-Tests und `caddy validate` in der CI).
+  - Server (2026-11-07, AK9): A-Einträge von Domain und `www` zeigen auf den Server, keine AAAA-Einträge.
+    `https://<domain>/login` 200 mit Let's-Encrypt-Zertifikat, HSTS, ohne `Server`-Header; `http://` 308 und
+    `www` 301 auf die Domain.
+  - Von außen ohne Login: `/` 303 auf `/login`, POST ohne oder mit fremdem `Origin` 403, `/setup` 303,
+    100-KB-Body 413 (mit HSTS), fremder Hostname ohne TLS-Handshake.
+  - Tunnel: 200; mit `X-Forwarded-For` oder dem öffentlichen Host 421. `ss`: 8787/8788 nur auf `127.0.0.1`,
+    80/443 Caddy, kein Port 2019.
+  - Ohne Passwort zeigte die öffentliche Adresse 503 (AK5, live). Login des Nutzers öffentlich mit neuem
+    Passwort ≥ 12 Zeichen; Pause/Fortsetzen über HTTPS schrieb `secrets.env` (zwischen zwei Runden, daher keine
+    PAUSED-Runde im Journal; Wirkung der Pause selbst in Spec 011 auf dem Server belegt).
+- **Offen / Folgearbeit:** Kosmetisch: Caddy nennt sich noch in `Via: 1.0 Caddy` und im `Server`-Header der
+  automatischen Weiterleitung auf Port 80 (ohne Version). Optional: Hetzner-Cloud-Firewall als zweite Schicht
+  (80/443/22).
+- **Neue ADRs / Learnings:** ADR-0024 (löst ADR-0005 ab).
