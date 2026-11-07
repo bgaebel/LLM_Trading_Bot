@@ -15,7 +15,7 @@
    Bisher nur die zwei Erstkäufe von Buy & Hold: sehr ruhiger Markt, alle Strategien warten auf Bewegung.
 
 ## In Arbeit
-- Spec: 015 (freigegeben), 016 (freigegeben)
+- Spec: 015 (in Arbeit), 016 (freigegeben)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf

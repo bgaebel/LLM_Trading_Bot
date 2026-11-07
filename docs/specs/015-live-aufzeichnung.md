@@ -1,6 +1,6 @@
 # Spec 015: Strategie-Labor I – Live-Aufzeichnung in der Beobachtungs-DB
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s015-live-aufzeichnung` · **Meilenstein:** M3 (vorgezogen: Strategie-Labor)
 - **Erstellt:** 2026-11-07
 
