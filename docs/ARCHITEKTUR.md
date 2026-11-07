@@ -31,7 +31,7 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
                  [risk]    Limits, Fail-closed bei veralteten Daten
                     │
                     v
-               [execution] Paper-Broker (später: Live-Broker hinter derselben Schnittstelle)
+               [execution] Paper-Broker (später: Live-Broker hinter `broker.Broker`, ADR-0022)
                     │
                     v
                 [store]    SQLite (WAL, Single-Writer) ──> [backup]
@@ -49,12 +49,13 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | `src/llm_trading_bot/core.py` | Reine Logik ohne I/O (aktuell: Modusauflösung) |
 | `src/llm_trading_bot/market/` | Marktdaten: Modelle, HTTP-Transport, Bitvavo-Client, Snapshot-Prüfung |
 | `src/llm_trading_bot/strategy/` | Indikatoren, klassische Strategien, LLM-Kontext (reine Logik, ADR-0007) |
+| `src/llm_trading_bot/broker/` | Broker-Naht für M2 (Spec 012, ADR-0022): Vertrag `Broker` und Börsenseite `OrderExchange` mit Live-Typen (`contract`), Paper-Delegation (`paper`), Live-Sperre (`live`), Zustandsmaschine der Order-Vorgänge (`intents`) – ohne I/O, ohne Börsen-Implementierung |
 | `src/llm_trading_bot/paper/` | Paper-Ausführung: Schema (`db`), Single-Writer-Sperre (`lock`), virtuelle Orders (`execution`), Zyklus (`cycle`), Ergebnis (`report`) |
 | `src/llm_trading_bot/web/` | Weboberfläche: Login (`auth`), Zugangsdaten-Datei (`credentials`), Seiten (`pages`, Übersicht `overview_page`, Stylesheet `style`, Deko-Chart `chart`, Live-Skript `script` als `/app.js`), Übersichtsdaten (`overview`), Nur-Lese-Zugriff auf die Bot-DB (`readonly`, ADR-0016), Server und Routen (`app`), private Dateien (`files`) |
 | `src/llm_trading_bot/ops/` | Betrieb: geprüfte Backups, Prüfung und Wiederherstellung der Bot-DB (`backup`, ADR-0018) |
 | `src/llm_trading_bot/llm/` | GPT-Depots: Prompt v1 und Antwortprüfung (`contract`), Takt (`due`), Budget (`budget`), Konfiguration (`agents`), OpenAI-Adapter (`openai_client`), Ablauf je Depot (`cycle`) |
 | `tools/golden/` | Generator der Golden-Fixtures aus dem Arena-Code; `mutation_check.py` prüft, dass die Tests Änderungen an Schwellen/Gewichten erkennen (nur Entwicklung) |
-| `tests/` | pytest-Tests; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests der Strategien; `golden_execution_cases.py`/`golden_execution_runner.py` + `paper/fixtures/` Golden-Tests der Ausführung; `llm_fakes.py` Fake-Modell; Marker `net` = echte API (standardmäßig aus) |
+| `tests/` | pytest-Tests; `broker/` Vertrag, Sperren und Order-Pfad-Prüfung (Spec 012), `broker/fixtures/markets_2026-11.json` öffentliche `/markets`-Antwort; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests der Strategien; `golden_execution_cases.py`/`golden_execution_runner.py` + `paper/fixtures/` Golden-Tests der Ausführung; `llm_fakes.py` Fake-Modell; Marker `net` = echte API (standardmäßig aus) |
 | `deploy/` | Server-Dateien: `setup-server.sh` härtet einen frischen Server (Spec 002); `release.sh` installiert, aktualisiert und rollt zurück (Spec 009, ADR-0018); systemd-Units `llm-trading-bot.service` (Dienst), `llm-trading-bot-web.service` (Weboberfläche), `llm-trading-bot-backup.service`/`.timer` (tägliches Backup) und `journald@llm-trading-bot.conf` mit Platzhaltern |
 | `scripts/` | `deploy.sh` (Deploy von hier: nur geprüfte Commits von `origin/main`, Spec 009), `docs-check.sh` (Doku-Hygiene), `check-units.sh` (Units mit Testwerten per `systemd-analyze verify`), `github-labels.sh` |
 | `.github/workflows/` | CI (ruff, mypy, pytest, shellcheck, systemd-Units) und Doku-Prüfung |
@@ -130,6 +131,25 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   Ausführung identisch zu Arena@7563724, belegt durch `tests/paper/fixtures/execution_golden_v0.3.1.json` und
   `execution_drawdown_golden_v0.3.1.json` (Grenzfälle und Verläufe bitgenau per SHA-256; `--check` des Generators
   belegt die ältere Datei bytegleich) und `mutation_check.py`. SQL-Rechnungen nicht umformen.
+
+### broker
+- **Zweck:** Vertrag, an den M2 einen Live-Broker anschließt (Spec 012, ADR-0022; Entwurf für M2 in ADR-0023).
+  In M1 rufen die Zyklen weiter `paper.execution` direkt auf; nichts im laufenden Dienst nutzt das Paket.
+- **Schnittstelle:**
+  - `contract`: `Broker` (Signaturen von `paper.execution` plus `unresolved`, `dispatch`); Börsenseite
+    `OrderExchange` (nur Protocol), `OrderIntent` (BUY: EUR-Budget, SELL/RISK_SELL: Basismenge; UUID4 als
+    `client_order_id`, `operator_id: int`), `ExecutedFill`, `OrderOutcome` (Zustand nach ausgeführter Menge,
+    `classify`), `MarketRules` (aus dem öffentlichen `GET /markets`), `AccountBalances` – Beträge nur `Decimal`
+  - `paper`: `PaperBroker` (reine Delegation); `live`: `LiveTradingLocked`, `refuse_live`;
+    `make_broker(mode)` (LIVE → `LiveTradingLocked`)
+  - `intents`: `ALLOWED`, `move`, `on_restart` (PLANNED → UNKNOWN), `may_plan`
+- **Invarianten:** Kein Order-Code (ADR-0004). `tests/broker/test_no_order_path.py` prüft statisch über `src`,
+  `tests`, `tools`, `scripts`, `deploy` und die Paketliste: keine privaten Bitvavo-Pfade, kein Auth-Header, nur
+  die öffentlichen GET-Pfade, HTTP nur über `urllib` in `market/http.py`, keine weitere HTTP-/Prozess-Bibliothek,
+  `hmac` nur in `web/auth.py`, keine `BITVAVO_*`/`LIVE_*`-Namen, keine börsenartige Klasse, kein Börsen-SDK – jede
+  Regel mit Negativtest. Die Arena-Regeln (Größe, Limits, Risikostopp) liegen in `paper.execution` *unterhalb*
+  der Naht; M2 löst sie golden-geprüft heraus, bevor ein Live-Broker sie nutzt. Beide Golden-Fixtures laufen
+  zusätzlich über den `PaperBroker`. Ein Vorgang wird nie erneut gesendet (`intents`).
 
 ### llm
 - **Zweck:** GPT-Depots fragen und ihre Antworten nur nach strenger Prüfung an `paper` geben (ADR-0012/0013).
