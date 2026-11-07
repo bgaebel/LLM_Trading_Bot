@@ -110,8 +110,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `cycle`: `paper_cycle(con, client, config, costs=, model=, clock=, stop_requested=, controls=) -> CycleReport`
     (bei Stopp-Wunsch keine GPT-Anfrage, Status `STOPPING`; bewertet wird trotzdem), `STRATEGY_TIMEFRAME`,
     `quote_problem`
-  - `risk`: `read_controls(env, secrets) -> Controls` (Handelspause, Freigaben; fail-closed), `release(con, agent,
-    requested_at, now)` (gibt ein gestopptes Depot frei, `RESUME_MAX_AGE = 24 h`), `parse_resumes`
+  - `risk`: `read_controls(env, secrets) -> Controls` (Handelspause, Freigaben; fail-closed),
+    `release_problem` (nur lesend, auch für die Weboberfläche), `release(con, agent, requested_at, now)` (gibt ein gestopptes Depot frei, wenn die Anforderung jünger als sein letzter Trade
+    und höchstens `RESUME_MAX_AGE = 24 h` alt ist), `parse_resumes`
   - `report`: `CycleReport` (u. a. `risk_stops`, `unvalued`, `paused`, `released`, `refused`), `MarketResult`
     (Status `HALTED`/`PAUSED` sind keine Fehler), `LlmOutcome`, `Equity`
 - **Invarianten:** Schema `user_version = 2` (v2: `llm_calls`); andere Versionen oder Formen werden abgelehnt, nie

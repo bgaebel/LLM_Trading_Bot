@@ -156,6 +156,8 @@ ETH blockiert BTC nicht mehr (und umgekehrt), und nichts handelt oder bewertet m
   steht in `test_config_reload.py`), damit die Paper-Mutationen sie sehen. `paper-cycle` (CLI) beachtet Pause und
   Freigaben ebenfalls.
 
+- 2026-11-07: Prüfung: zwei unabhängige Prüfer und ein Workflow (5 Blickwinkel, je Befund 3 Gegenprüfer; 12 Befunde, alle bestätigt, alle behoben). Wichtigste Korrektur: Eine Freigabe muss jünger als der letzte Trade des Depots sein (nicht nur als der letzte RISK_SELL) - ein Stopp direkt nach einem Verkauf auf 0 hinterlässt keinen RISK_SELL, eine alte Anforderung hätte ihn sofort aufgehoben. Keine Markierungszeilen in der Historie; Anforderungen aus der Zukunft werden abgelehnt (gleiche Uhr). Kursalter wird ab der gespeicherten ganzen Sekunde gemessen. Freigaben gelten auch für inzwischen abgewählte Depots. Die Weboberfläche zeigt eine Anforderung nur als wartend, wenn der Dienst sie anwenden wird (gleiche Prüfung, nur lesend). Learnings: „Ein Risikostopp ohne Zwangsverkauf hinterlässt keine Spur“, „Gespeicherte Zeitstempel sind ganze Sekunden, die Uhr nicht“.
+
 ## Ergebnis
 - **Erreicht:** …
 - **Abweichungen vom Plan:** …
