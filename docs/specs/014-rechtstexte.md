@@ -149,12 +149,12 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
   200 MB reichen, Warnungen sind selten).
 
 ## Plan
-- [ ] 1. `web/legal.py` (Renderer, Lesen) mit Tests (AK3, AK4)
-- [ ] 2. Routen, Fußzeile, `--impressum`, Cookie-Konstanten, Vergessensfrist, `datenschutz.py` mit Bindungstests
+- [x] 1. `web/legal.py` (Renderer, Lesen) mit Tests (AK3, AK4)
+- [x] 2. Routen, Fußzeile, `--impressum`, Cookie-Konstanten, Vergessensfrist, `datenschutz.py` mit Bindungstests
   (AK1, AK2, AK5–AK7)
-- [ ] 3. Web-Unit mit `--impressum`, Sandbox „vor 014“, ExecStart-Parser-Test (AK10)
-- [ ] 4. `release.sh public`: Drop-ins, Journal-Grenzen, `ufw logging off`; `check-units.sh` (AK8)
-- [ ] 5. `impressum`-Modus in `release.sh`/`deploy.sh`, `status`, Beispieldatei (AK9, AK11)
+- [x] 3. Web-Unit mit `--impressum`, Sandbox „vor 014“, ExecStart-Parser-Test (AK10)
+- [x] 4. `release.sh public`: Drop-ins, Journal-Grenzen, `ufw logging off`; `check-units.sh` (AK8)
+- [x] 5. `impressum`-Modus in `release.sh`/`deploy.sh`, `status`, Beispieldatei (AK9, AK11)
 - [ ] 6. Doku, ADR, Prüfung (Workflow), PR (AK13); Impressum-Datei lokal erzeugen
 - [ ] 7. Mit Zustimmung: Server-Schritte (AK12)
 
