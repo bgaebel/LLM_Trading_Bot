@@ -1,6 +1,6 @@
 # Spec 010: Live-Übersicht ohne Neuladen
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s010-live-uebersicht` · **Meilenstein:** M1 (Nr. 7)
 - **Erstellt:** 2026-11-07
 
@@ -13,8 +13,8 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
 - [x] AK1: CSP `script-src 'self'`, sonst unverändert; auf jeder Antwort. Nur die Übersicht bindet `/app.js` ein
   (`<script src="/app.js" defer>`), keine Seite enthält Inline-Skript oder `on…=`-Attribute. `/app.js` enthält
   keine Daten und wird wie `/app.css` ohne Anmeldung ausgeliefert, mit `Content-Type: text/javascript` und
-  `Cache-Control: no-store`. — Nachweis: `tests/web/test_server.py::test_*csp*`, `test_app_js_*`,
-  `tests/web/test_pages.py::test_*no_inline*`
+  `Cache-Control: no-store`. — Nachweis: `tests/web/test_server.py::test_every_response_has_the_security_headers`,
+  `test_app_js_*`, `tests/web/test_pages.py::test_no_page_carries_inline_event_handlers`
 - [x] AK2: `app.js` enthält kein `eval`, kein `new Function`, keinen String als Argument für `setTimeout`/
   `setInterval`, kein `document.write`, keine fremde URL; es fragt nur Pfade derselben Herkunft ab. — Nachweis:
   `tests/web/test_app_js.py` (Prüfung des Quelltexts)
@@ -93,8 +93,18 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
 - 2026-11-07: AK6 vom Nutzer auf dem Server abgenommen („Ja, passt“).
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Die Übersicht aktualisiert sich ohne Neuladen: Alter zählen jede Sekunde (mit der Serverzeit), neue
+  Runden erscheinen binnen 5 s, bei Abbruch ein Hinweis mit wachsendem Abstand, bei Sitzungsende die Anmeldeseite.
+  Ein eigenes Skript `/app.js` unter CSP `script-src 'self'`, das HTML rendert weiter nur der Server. Umgesetzt in
+  PR #16 (c69ea86) und im Abschluss-PR, deployt, vom Nutzer auf dem Server abgenommen.
+- **Abweichungen vom Plan:** Statt einzelner Bereiche mit `data-live` tauscht das Skript das ganze `<main>` und den
+  Ticker – aber nur, wenn sich der Inhalt (ohne Alter) geändert hat, nie länger als 60 s zurückgehalten, solange
+  Text markiert ist, und mit erhaltener Scrollposition. Das Skript liegt als `web/script.py` (Code-Anker in
+  ADR-0019 nennt noch das geplante `app.js`). Frist je Abfrage (15 s) und „Server meldet HTTP …“ statt „Verbindung
+  unterbrochen“ bei Fehlerantworten kamen aus den Prüfungen. `RUF001` auch für `tests/web` erlaubt.
+- **Nachweise:** CI grün inkl. `tests/web/test_app_js.py` (Quelltext-Regeln und Node-Tests: Altersstufen, eine
+  Abfrage zur Zeit, Frist, Sitzungsende, Server-Fehler); Browser lokal und auf dem Server (AK6). Prüfungen: Sicherheit
+  ohne Befund; Verhaltensbefunde umgesetzt.
+- **Offen / Folgearbeit:** Den Wechsel zur Anmeldung bei abgelaufener Sitzung hat niemand im echten Browser gesehen
+  (nur Node-Test).
+- **Neue ADRs / Learnings:** ADR-0019.

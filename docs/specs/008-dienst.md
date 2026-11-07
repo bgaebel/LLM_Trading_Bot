@@ -159,5 +159,7 @@ systemd-Dateien liegen geprüft bereit; installiert werden sie mit Nr. 6 (ADR-00
     `RestartPreventExitStatus=` oder ein StartLimit bewusst festlegen.
   - Der Client wird beim Start außerhalb der Fehlerbehandlung angelegt; ein Fehler dort beendet den Prozess (systemd
     startet neu) – unkritisch, beim Deploy beobachten.
+- **Später geändert:** Mit Spec 009 (Nutzer 2026-11-07) zeigt das Lebenszeichen „Dienst“ bei `degraded` „läuft“
+  mit Grund, wenn das gemeldete Problem nur Marktdaten von Bitvavo sind (AK8 sah dafür „verzögert“ vor).
 - **Neue ADRs / Learnings:** ADR-0017 (angenommen mit dieser Spec); Learning „Signal-Handler setzt Event, auf das
   der Hauptthread wartet“ (#python #signal #dienst).

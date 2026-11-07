@@ -1,6 +1,6 @@
 # ADR-0018: Deploy als Release je Commit per SSH, Backups täglich auf dem Server, automatischer Code-Rollback
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0020](0020-deploy-gesund-trotz-marktdaten-luecke.md)
 - **Löst ab:** –
 - **Datum:** 2026-11-06
 - **Bereich:** #betrieb #deploy #backup #hetzner
