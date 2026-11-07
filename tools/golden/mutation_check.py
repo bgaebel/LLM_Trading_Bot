@@ -582,17 +582,15 @@ M += [
     ),
     (
         PR,
-        "        stored = None\n        warnings.append(",
-        "        stored = {}\n        warnings.append(",
+        "        stored = None\n        # Say what",
+        "        stored = {}\n        # Say what",
         "pause unreadable file",
     ),
     (PR, "if PAUSE_FIELD in env:", "if False:", "pause environment wins"),
     (
         PR,
-        'warnings.append(f"{PAUSE_FIELD}={raw[:20]!r} is not 1 or 0: trading paused")\n'
-        "        return Controls(True,",
-        'warnings.append(f"{PAUSE_FIELD}={raw[:20]!r} is not 1 or 0: trading paused")\n'
-        "        return Controls(False,",
+        "        return Controls(\n            True, ENVIRONMENT if",
+        "        return Controls(\n            False, ENVIRONMENT if",
         "pause invalid fails closed",
     ),
 ]
