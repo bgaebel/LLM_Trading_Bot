@@ -1,5 +1,5 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/backup.py and operations.py (adapted)
-"""Backups of the bot database (Spec 009, ADR-0018).
+"""Backups of the bot database (Spec 009, ADR-0020).
 
 A backup reads the database through a read-only connection (ADR-0016: never the WriterLock, the
 service keeps running) and copies it with SQLite's online backup API inside one read
@@ -23,9 +23,11 @@ from pathlib import Path
 from llm_trading_bot.paper.db import COLUMNS, UNIQUE_KEYS, SchemaError, check_schema
 
 KEEP = 14
-NAME = re.compile(r"^bot-\d{8}T\d{6}Z(?:-\d+)?\.db$")
+NAME = re.compile(r"^bot-(\d{8}T\d{6}Z)(?:-(\d+))?\.db$")
 """Names this module writes; rotation never touches anything else in the directory."""
 SIDECARS = ("-wal", "-shm", "-journal")
+STALE_SECONDS = 3600
+"""A temporary copy older than this belongs to a backup that was killed; rotation removes it."""
 
 
 class BackupError(RuntimeError):
@@ -148,11 +150,23 @@ def rotate(directory: Path, keep: int) -> list[Path]:
     """Remove the oldest of this module's copies beyond ``keep``; returns what was removed."""
     if keep < 1:
         raise ValueError("keep must be at least 1")
-    own = sorted(p for p in directory.iterdir() if p.is_file() and NAME.match(p.name))
+    own = sorted((p for p in directory.iterdir() if p.is_file() and NAME.match(p.name)), key=_age)
     removed = own[: max(0, len(own) - keep)]
     for path in removed:
         _drop(path)
+    # A backup killed hard (SIGKILL, power loss, unit timeout) leaves its temporary file behind.
+    for path in directory.glob(".bot-*.tmp"):
+        if time.time() - path.stat().st_mtime > STALE_SECONDS:
+            _drop(path)
+            removed.append(path)
     return removed
+
+
+def _age(path: Path) -> tuple[str, int]:
+    """Oldest first: by the time in the name, then "-1", "-2" after the copy without suffix."""
+    match = NAME.match(path.name)
+    assert match is not None
+    return match.group(1), int(match.group(2) or 0)
 
 
 def backup_db(

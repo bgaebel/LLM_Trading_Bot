@@ -213,7 +213,7 @@ class Service:
             if waited is _Wait.STOP:
                 break
             if waited is _Wait.CLOCK_BACK:
-                # ADR-0018: plan from the new time instead of waiting out the jump; a round of a
+                # ADR-0020: plan from the new time instead of waiting out the jump; a round of a
                 # slot that already ran is harmless (decisions are unique per candle).
                 self.log.warning(
                     "wall clock jumped back: next round re-planned; equity points of a repeated"

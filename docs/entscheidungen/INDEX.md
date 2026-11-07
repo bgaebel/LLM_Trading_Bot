@@ -22,5 +22,6 @@
 | [0015](0015-weboberflaeche-passwort-8.md) | Weboberfläche wie 0014, Passwort mindestens 8 Zeichen (löst 0014 ab) | angenommen |
 | [0016](0016-weboberflaeche-liest-bot-db.md) | Weboberfläche liest die Bot-DB nur lesend (`mode=ro`, `query_only`); genau ein Schreiber | angenommen |
 | [0017](0017-dienst-eine-runde-pro-minute.md) | Dienst: ein Prozess, eine Paper-Runde pro Minute, systemd-Watchdog + Statusdatei, Config je Runde | angenommen |
-| [0018](0018-deploy-releases-backup-rollback.md) | Deploy als Release je Commit per SSH mit automatischem Code-Rollback; DB-Backups täglich nur auf dem Server, 14 Tage | angenommen |
+| [0018](0018-deploy-releases-backup-rollback.md) | Deploy als Release je Commit per SSH mit automatischem Code-Rollback; DB-Backups täglich nur auf dem Server, 14 Tage | abgelöst durch [0020](0020-deploy-gesund-trotz-marktdaten-luecke.md) |
 | [0019](0019-uebersicht-live-eigenes-skript.md) | Übersicht live über ein eigenes Skript `/app.js` (`script-src 'self'`); Server rendert, Skript tauscht aus | angenommen |
+| [0020](0020-deploy-gesund-trotz-marktdaten-luecke.md) | Deploy wie 0018; gesund ist auch eine Runde, die nur an Marktdaten scheitert (löst 0018 ab) | angenommen |

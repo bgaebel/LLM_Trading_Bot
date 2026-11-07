@@ -38,7 +38,7 @@ def test_service_unit_matches_the_service_loop() -> None:
     assert int(s["WatchdogSec"]) >= 2 * PING_SECONDS
     assert int(s["TimeoutStopSec"]) > STOP_SECONDS
     assert int(s["WatchdogSec"]) < STALL_SECONDS
-    # ADR-0018: another writer holding the database is never fought by restarting.
+    # ADR-0020: another writer holding the database is never fought by restarting.
     assert s["RestartPreventExitStatus"] == str(EXIT_LOCKED)
 
 

@@ -224,7 +224,7 @@ def service_pulse(status: ServiceStatus | None, now: float, *, problem: str = ""
     }.get(status.state, "")
     gap = data_gap(status)
     if gap:
-        note = f"{gap} ohne Entscheidung: Marktdaten-Lücke bei Bitvavo"
+        note = gap
     if status.config_warning:
         note = (note + " · " if note else "") + "Einstellungen ungültig"
     if status.state in ("stopped", "stalled", "stopping") or age > SERVICE_DELAYED_SECONDS:
@@ -238,15 +238,20 @@ def service_pulse(status: ServiceStatus | None, now: float, *, problem: str = ""
 
 
 def data_gap(status: ServiceStatus) -> str:
-    """The market of a degraded round whose only reported problem is missing market data
-    (Bitvavo leaves out minutes without trades), else "". The status file names the first
-    problem of the round, as "<depot> <market>: MarketDataError: ..."."""
+    """The note for a degraded round whose reported problem is only market data from Bitvavo
+    (a missing minute, stale or unusable data), else "". The status file names the first
+    problem of the round: "<depot> <market>: MarketDataError: ..." or "quotes: ..."."""
     if status.state != "degraded" or status.last_result != "incomplete":
         return ""
     head, sep, rest = status.last_error.partition(": ")
     if not sep or not rest.startswith("MarketDataError:"):
         return ""
-    return head.rpartition(" ")[2]
+    if head == "quotes":
+        return "Kursabruf bei Bitvavo gescheitert, gespeicherte Kurse genutzt"
+    market = head.rpartition(" ")[2]
+    if "gap in recent" in rest:
+        return f"{market} ohne Entscheidung: Marktdaten-Lücke bei Bitvavo"
+    return f"{market} ohne Entscheidung: Marktdaten von Bitvavo unbrauchbar"
 
 
 def liveness(con: sqlite3.Connection, now: float) -> list[Pulse]:

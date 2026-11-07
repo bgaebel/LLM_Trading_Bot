@@ -16,7 +16,7 @@ WorkingDirectory=__DATA_DIR__
 Environment=PYTHONUNBUFFERED=1
 ExecStart=__APP_DIR__/.venv/bin/trading-bot run --db __DATA_DIR__/bot.db
 # Exit 1 (settings/schema), 4 (round hung) and a missed watchdog restart; a fixed setting in the
-# web UI is then picked up without a manual restart. ADR-0018: exit 3 (another writer holds the
+# web UI is then picked up without a manual restart. ADR-0020: exit 3 (another writer holds the
 # database) does not - two writers must never take turns.
 Restart=on-failure
 RestartSec=15

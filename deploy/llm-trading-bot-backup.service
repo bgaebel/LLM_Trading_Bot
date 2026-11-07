@@ -1,5 +1,5 @@
 # Origin: LLM-Trading-Arena@7563724 deploy backup service (adapted)
-# ADR-0018: a checked copy of the bot database on this server, started daily by the timer.
+# ADR-0020: a checked copy of the bot database on this server, started daily by the timer.
 # Reads the database read-only (ADR-0016), never the WriterLock; the service keeps running.
 # Installed by deploy/release.sh: replaces __SERVICE_USER__, __APP_DIR__, __DATA_DIR__ and
 # __BACKUP_DIR__. Real user names never go into this file: the repo is public.

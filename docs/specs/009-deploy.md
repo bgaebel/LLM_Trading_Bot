@@ -1,6 +1,6 @@
 # Spec 009: Deploy auf Hetzner – Installation, Update/Rollback, Backup und Wiederherstellung
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s009-deploy` · **Meilenstein:** M1 (Nr. 6)
 - **Erstellt:** 2026-11-06
 
@@ -11,26 +11,26 @@ ist ein Befehl von hier: geprüfter Commit von `main` → neues Release → Gesu
 Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung ist einmal echt geprobt (ADR-0018).
 
 ## Akzeptanzkriterien
-- [ ] AK1: `trading-bot backup --db <pfad> --dir <verz> [--keep N]` sichert über die SQLite-Online-Backup-API,
+- [x] AK1: `trading-bot backup --db <pfad> --dir <verz> [--keep N]` sichert über die SQLite-Online-Backup-API,
   auch während ein Schreiber läuft und eine Transaktion offen hat; die Kopie besteht `integrity_check`, hat die
   Schemaversion 2 und dieselben Zeilenzahlen je Tabelle wie der gesicherte Stand; Name mit UTC-Zeit, Rechte 600,
   erst nach Prüfung unter dem endgültigen Namen sichtbar (nie überschrieben). Rotation löscht nur eigene Kopien in
   diesem Verzeichnis über `N` hinaus (Standard 14); ein fehlgeschlagenes Backup löscht nichts. Exit ≠ 0 bei Fehler.
   — Nachweis: `tests/ops/test_backup.py`
-- [ ] AK2: `trading-bot verify-db --db <pfad>` prüft nur lesend (Schemaversion, `integrity_check`, eindeutige
+- [x] AK2: `trading-bot verify-db --db <pfad>` prüft nur lesend (Schemaversion, `integrity_check`, eindeutige
   Schlüssel) und gibt Zeilenzahlen aus; `trading-bot restore --backup <datei> --db <neuer pfad>` prüft die Kopie und
   schreibt nur in ein Ziel, das es noch nicht gibt (sonst Exit ≠ 0, nichts geändert). — Nachweis:
-  `tests/ops/test_restore.py`, `tests/test_cli.py::test_verify_db_*`, `test_restore_*`
-- [ ] AK3: Springt die Wanduhr während des Wartens zurück, berechnet der Dienst seinen nächsten Termin neu und
+  `tests/ops/test_restore.py` (inkl. `test_verify_db_cli`, `test_restore_cli_*`)
+- [x] AK3: Springt die Wanduhr während des Wartens zurück, berechnet der Dienst seinen nächsten Termin neu und
   verpasst höchstens die laufende Minute (statt so lange zu warten, wie die Uhr zurücksprang); ein Sprung vorwärts
   bleibt wie bisher (kein Nachholen). — Nachweis: `tests/service/test_run.py::test_a_clock_jump_back_*`
-- [ ] AK4: Units in `deploy/`: Bot-Unit mit `RestartPreventExitStatus=3`; neue `llm-trading-bot-backup.service`
+- [x] AK4: Units in `deploy/`: Bot-Unit mit `RestartPreventExitStatus=3`; neue `llm-trading-bot-backup.service`
   (Oneshot, Dienstbenutzer, gehärtet, schreibt nur Backup- und Datenverzeichnis) und `.timer` (täglich 03:30 UTC,
   `Persistent=true`, `RandomizedDelaySec`). Alle mit Platzhaltern, in der CI per `systemd-analyze verify` geprüft;
   keine echten Server-Daten. — Nachweis: `scripts/check-units.sh` in der CI, `tests/test_deploy_files.py`
-- [ ] AK5: `deploy/release.sh` (läuft per `sudo bash -s` auf dem Server, wie `setup-server.sh`) mit den Modi
-  `install` (Verzeichnisse und Rechte, uv in fester Version mit SHA-256-Prüfung, Journal-Konfiguration,
-  `systemd-time-wait-sync`; idempotent), `deploy <sha>`, `rollback`, `status`. `deploy`:
+- [x] AK5: `deploy/release.sh` (läuft per `sudo bash -s` auf dem Server, wie `setup-server.sh`) mit den Modi
+  `install` (Verzeichnisse und Rechte, uv in fester Version mit SHA-256-Prüfung, `systemd-time-wait-sync`;
+  idempotent; die Journal-Konfiguration installiert `deploy` mit den Units), `deploy <sha>`, `rollback`, `status`. `deploy`:
   - lehnt ein Archiv mit `secrets.env`, `.env*`, `*.db*` oder `web-auth.json` ab,
   - baut den Kandidaten (venv, `verify-db` auf der bestehenden DB), bevor der laufende Dienst gestoppt wird,
   - sichert vor dem Umschalten, installiert die Units, schaltet `current` atomar um, startet,
@@ -41,7 +41,7 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
   — Nachweis: `tests/deploy/test_release.py` (Bash-Skript in einer Sandbox mit Ersatz für `systemctl`, `uv`,
   `runuser`; Linux, in der CI): Erfolg, Gesundheitscheck scheitert → Rollback, verbotene Datei → Abbruch vor dem
   Stoppen, Idempotenz von `install`, Aufräumen alter Releases; `shellcheck`
-- [ ] AK6: `scripts/deploy.sh <alias> [<sha>]` (lokal, Git Bash) verweigert einen Commit, der nicht auf
+- [x] AK6: `scripts/deploy.sh <alias> <dienst> install|deploy [<sha>]|rollback|status` (lokal, Git Bash) verweigert einen Commit, der nicht auf
   `origin/main` liegt oder keine grüne CI hat, überträgt `git archive` genau dieses Commits und ruft
   `release.sh` aus demselben Commit auf; sendet nie lokale Dateien außerhalb des Archivs. Nimmt den Alias als
   Argument, im Repo steht kein Server-Name. — Nachweis: `tests/deploy/test_deploy_script.py` (Verweigerung mit
@@ -61,10 +61,10 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
   erzeugt; Wiederherstellungsprobe: `restore` der Kopie in ein neues Verzeichnis, `verify-db` zeigt dieselben
   Zeilenzahlen wie beim Backup. Ablauf der echten Wiederherstellung (Dienst stoppen, DB beiseitelegen, nie löschen,
   Kopie einsetzen, starten) steht in `docs/betrieb/server.md`.
-- [ ] AK11: Doku: `docs/betrieb/server.md` (Installation, Update, Rollback, Backup, Wiederherstellung, Logs,
+- [x] AK11: Doku: `docs/betrieb/server.md` (Installation, Update, Rollback, Backup, Wiederherstellung, Logs,
   Drop-in für Variablen außerhalb von `secrets.env`), `CLAUDE.md` (Deploy- und Log-Befehle), ARCHITEKTUR –
   nur Platzhalter (`<alias>`, `<dienst>`); `docs-check` grün.
-- [ ] AK12: Lint, Format, `mypy src tests tools`, shellcheck, CI grün.
+- [x] AK12: Lint, Format, `mypy src tests tools`, shellcheck, CI grün.
 
 ## Abgrenzung
 - Nicht Teil dieser Spec: Backups außerhalb des Servers (vom Nutzer verworfen, ADR-0018), Schemamigrationen (eigene
@@ -74,7 +74,7 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
 - Die Paper-Historie beginnt auf dem Server neu; lokale Test-DBs werden nicht übertragen.
 
 ## Relevante Entscheidungen & Learnings
-- ADR-0018 (angenommen mit dieser Spec): Release je Commit per SSH, Backups täglich auf dem Server, automatischer
+- ADR-0018 (angenommen mit dieser Spec, abgelöst durch ADR-0020 – Gesundheitscheck mit Marktdaten-Lücken): Release je Commit per SSH, Backups täglich auf dem Server, automatischer
   Code-Rollback, `RestartPreventExitStatus=3`, Zeit-Synchronisation.
 - ADR-0005 / ADR-0006: CX23, systemd, Admin mit sudo ohne Passwort, Dienstbenutzer ohne Shell; HTTP nur 127.0.0.1.
 - ADR-0017: ein Prozess, Runde je Minute, Watchdog, Statusdatei (Grundlage des Gesundheitschecks), Exit-Codes.
@@ -111,8 +111,8 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
 - [x] 3. Units: `RestartPreventExitStatus=3`, Backup-Service und -Timer; `check-units.sh` und Datei-Tests (AK4)
 - [x] 4. `deploy/release.sh` + Sandbox-Tests in der CI (AK5)
 - [x] 5. `scripts/deploy.sh` + Tests (AK6); Doku `docs/betrieb/server.md`, `CLAUDE.md`, ARCHITEKTUR (AK11)
-- [ ] 6. Mit Zustimmung auf dem Server: `install`, `deploy`, Einrichtung durch den Nutzer, `deploy` (AK7)
-- [ ] 7. Mit Zustimmung: Update, `rollback`, Backup und Wiederherstellungsprobe, Neustart (AK8–AK10); STAND
+- [x] 6. Mit Zustimmung auf dem Server: `install`, `deploy`, Einrichtung durch den Nutzer, `deploy` (AK7)
+- [x] 7. Mit Zustimmung: Update, `rollback`, Backup und Wiederherstellungsprobe, Neustart (AK8–AK10); STAND
 
 ## Risiken & offene Fragen
 - **Backups nur auf dem Server** (Entscheidung des Nutzers): Fällt der Server aus oder wird er gelöscht, ist die
@@ -180,10 +180,30 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
   zeigt das Lebenszeichen „Dienst“ jetzt „läuft“ mit dem Hinweis „ETH-EUR ohne Entscheidung: Marktdaten-Lücke bei
   Bitvavo“ (weicht von Spec 008 AK8 ab: dort `degraded` → verzögert); andere Fehler bleiben „verzögert“.
 
+- 2026-11-07: Abschlussprüfung umgesetzt (PR #17). Beobachtung in der CI: Schreibschutz per `chmod` ließ `install`
+  nicht scheitern (der Job hat offenbar Root-Rechte) – der Test erzwingt den Fehler jetzt mit einer Datei an Stelle
+  des Unit-Verzeichnisses.
+
 ## Ergebnis
-<!-- Von /abschluss ausgefüllt. -->
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Der Paper-Bot läuft seit 2026-11-06 22:38 UTC als systemd-Dienst auf dem CX23, die Weboberfläche
+  per Tunnel. Ein Befehl von hier (`scripts/deploy.sh`) bringt nur geprüfte Commits von `main` als eigenes Release
+  auf den Server: bauen, während der alte Dienst läuft, DB lesend prüfen, sichern, umschalten, Gesundheitscheck,
+  sonst automatisch zurück (nie die Daten). Tägliche, geprüfte Backups auf dem Server; Wiederherstellung nur in ein
+  neues Ziel. Update, Rollback, Wiederherstellungsprobe und Neustart auf dem Server bestanden. Umgesetzt in PR #15
+  (5358d59) und Fixes auf `main` (3cb8776, 9310012, 4d3958c) sowie im Abschluss-PR.
+- **Abweichungen vom Plan:** uv 0.13.7 statt 0.13.5 (Grenze von `uv_build`). Gesundheitscheck akzeptiert auch eine
+  Runde, die nur an Marktdaten scheitert (Nutzer 2026-11-07, ADR-0020 löst 0018 ab; AK5 angepasst). Lebenszeichen
+  „Dienst“ zeigt in diesem Fall „läuft“ mit Grund (Nutzerwunsch; weicht von Spec 008 AK8 ab, dort vermerkt).
+  `scripts/deploy.sh` nimmt Dienstbenutzer und Modus als Argumente; `install`/`rollback`/`status` laufen mit dem
+  neuesten grünen Commit. Nicht im ursprünglichen Plan: Prüfung vor dem Server (20 Befunde umgesetzt).
+- **Nachweise:** CI (Linux) grün, zuletzt 1179+ Tests inkl. `tests/deploy` (Sandbox für `release.sh`, `deploy.sh`)
+  und `scripts/check-units.sh`; lokal ruff, mypy strict, shellcheck ohne Befund. Server-Nachweise im Verlauf
+  (AK7–AK10). Unabhängige Prüfung beim Abschluss: Code bereit; Blocker war das fehlende ablösende ADR (ADR-0020
+  angelegt), Hinweise umgesetzt: genauer Hinweistext je Marktdatenfehler, `set -e`-Lücke in `start_release`
+  geschlossen (Test), Temp-Dateien abgebrochener Backups werden aufgeräumt, Rotation sortiert Kopien derselben
+  Sekunde richtig, Aufräumen zählt nur Releases, die aktiv waren (Tests), Duplikat-Prüfung getestet.
+- **Offen / Folgearbeit:**
+  - Backups liegen nur auf dem Server (Entscheidung des Nutzers); Hetzner-Backups lassen sich zuschalten.
+  - Gesundheitscheck und Übersicht sehen nur das erste Problem einer Runde (ADR-0020, Preis der Lockerung).
+  - Ein lokaler Testlauf unter Last hatte einen nicht reproduzierten Fehlschlag (Verlauf) – beobachten.
+- **Neue ADRs / Learnings:** ADR-0018 (abgelöst), ADR-0020; Learning „Nachts fehlen ETH-EUR-Minutenkerzen“.
