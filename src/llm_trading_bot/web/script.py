@@ -57,7 +57,13 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
     element.textContent = text;
   }
 
+  // One fetch at a time: a tab that becomes visible again must not start a second chain.
+  let busy = false;
+
   async function refresh() {
+    if (busy) return;
+    busy = true;
+    window.clearTimeout(timer);
     try {
       const response = await fetch("/", { credentials: "same-origin", cache: "no-store" });
       const path = new URL(response.url).pathname;
@@ -82,15 +88,14 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
     } catch (error) {
       wait = Math.min(wait * 2, MAX_WAIT);
       notice("Verbindung unterbrochen – nächster Versuch in " + Math.round(wait / 1000) + " s");
+    } finally {
+      busy = false;
     }
     timer = window.setTimeout(refresh, wait);
   }
 
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) {
-      window.clearTimeout(timer);
-      refresh();
-    }
+    if (!document.hidden) refresh();
   });
   readServerTime(document);
   tick();

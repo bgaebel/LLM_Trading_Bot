@@ -59,7 +59,7 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
 - [x] 1. ADR-0019 annehmen; CSP, Route `/app.js`, Markup (`data-live`, `data-at`, `noscript`) mit Tests (AK1, AK3
   Markup, AK5)
 - [x] 2. `app.js` (Abfrage, Austausch, Sekundentakt, Fehler und Sitzungsende) mit Quelltext-Prüfung (AK2–AK4)
-- [ ] 3. Browser-Prüfung lokal mit Test-DB (AK6 lokal); Doku (ARCHITEKTUR, Spec 007 Ergebnis-Hinweis)
+- [x] 3. Browser-Prüfung lokal mit Test-DB (AK6 lokal); Doku (ARCHITEKTUR, Spec 007 Ergebnis-Hinweis)
 - [ ] 4. Mit Zustimmung: PR, Merge, Deploy auf den Server, Browser-Prüfung per Tunnel (AK6, AK7)
 
 ## Risiken & offene Fragen
@@ -72,6 +72,15 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
 ---
 
 ## Verlauf
+- 2026-11-07: Schritte 1–2 in einem Commit (Markup und Skript gehören zusammen). Das Skript liegt als Python-Modul
+  `web/script.py` (wie das Stylesheet), damit es ohne Build-Schritt im Paket landet. Altersstufen identisch zu
+  `overview_page.age` (Python rundet halb auf gerade – im Skript nachgebaut, per Node-Test verglichen).
+- 2026-11-07: Browser-Prüfung lokal (Kopie der Test-DB, `trading-bot web` auf 127.0.0.1): eine neue Runde per
+  `paper-cycle` erschien binnen 5 s ohne Neuladen (Markierung im Fenster blieb), Alter zählten sekündlich, keine
+  Konsolenfehler. Gefunden: Wurde der Tab wieder sichtbar, während eine Abfrage lief, startete eine zweite Kette –
+  der Abstand nach Fehlern verdoppelte sich mehrfach („60 s“ nach 7 s). Jetzt immer nur eine Abfrage; Node-Tests
+  für dieses Verhalten und für das Sitzungsende (Wechsel zur Anmeldung, keine weiteren Abfragen). Den Wechsel zur
+  Anmeldung im echten Browser konnte die Prüfung nicht zeigen (das Werkzeug lädt beim Neustart selbst neu).
 
 ## Ergebnis
 - **Erreicht:** …

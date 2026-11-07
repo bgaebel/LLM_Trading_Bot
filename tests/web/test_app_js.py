@@ -65,3 +65,74 @@ def test_the_script_counts_ages_with_the_same_steps_as_the_server() -> None:
     )
     assert done.returncode == 0, done.stderr
     assert json.loads(done.stdout) == [age(s) for s in SAMPLES]
+
+
+# A minimal browser for Node: timers, listeners and fetch are recorded or controlled by the test.
+HARNESS = r"""
+const timers = [];
+let fetchCalls = 0;
+const pending = [];
+const listeners = {};
+const main = { replaceWith() {}, prepend(el) { this.child = el; } };
+globalThis.window = {
+  setTimeout: (f, ms) => { timers.push(ms); return timers.length; },
+  clearTimeout: () => {},
+  setInterval: () => 0,
+};
+globalThis.document = {
+  hidden: false,
+  addEventListener: (type, f) => { listeners[type] = f; },
+  querySelector: (sel) => (sel === "main" ? main : null),
+  querySelectorAll: () => [],
+  getElementById: (id) => (main.child && main.child.id === id ? main.child : null),
+  createElement: () => ({ setAttribute() {}, remove() { main.child = null; } }),
+};
+globalThis.location = { assign(url) { globalThis.assigned = url; } };
+globalThis.fetch = () => {
+  fetchCalls++;
+  return new Promise((ok, fail) => pending.push({ ok, fail }));
+};
+"""
+
+
+def run_in_node(scenario: str) -> dict[str, object]:
+    program = HARNESS + JS + "\n(async () => {\n" + scenario + "\n})();\n"
+    done = subprocess.run(
+        ["node", "-e", program], capture_output=True, text=True, timeout=30, encoding="utf-8"
+    )
+    assert done.returncode == 0, done.stderr
+    result: dict[str, object] = json.loads(done.stdout)
+    return result
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
+def test_a_tab_coming_back_never_starts_a_second_fetch_chain() -> None:
+    result = run_in_node(
+        """
+        for (let i = 0; i < 3; i++) listeners.visibilitychange();
+        const whileBusy = fetchCalls;
+        pending[0].fail(new Error("server down"));
+        await new Promise((r) => setTimeout(r, 0));
+        const notice = main.child && main.child.textContent;
+        console.log(JSON.stringify({ whileBusy, timers, notice }));
+        """
+    )
+    # One fetch despite three "visible again" events; after one failure the next try is in 10 s.
+    assert result == {
+        "whileBusy": 1,
+        "timers": [5000, 10000],
+        "notice": "Verbindung unterbrochen – nächster Versuch in 10 s",
+    }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
+def test_an_ended_session_goes_to_the_login_page_and_stops_fetching() -> None:
+    result = run_in_node(
+        """
+        listeners.visibilitychange();
+        pending[0].ok({ url: "http://127.0.0.1:8787/login", ok: true, text: async () => "" });
+        await new Promise((r) => setTimeout(r, 0));
+        console.log(JSON.stringify({ assigned: globalThis.assigned, timers }));
+        """
+    )
+    assert result == {"assigned": "/login", "timers": [5000]}
