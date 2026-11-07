@@ -1,0 +1,7 @@
+{
+ "source": "GET https://api.bitvavo.com/v2/markets?market=<market> (public, no key), fetched 2026-11-07",
+ "responses": {
+  "BTC-EUR": {"market":"BTC-EUR","status":"trading","base":"BTC","quote":"EUR","pricePrecision":null,"minOrderInBaseAsset":"0.00007294","minOrderInQuoteAsset":"5.00","maxOrderInBaseAsset":"14588.11369242","maxOrderInQuoteAsset":"1000000000.00","quantityDecimals":8,"notionalDecimals":2,"tickSize":"1.00","maxOpenOrders":400,"feeCategory":"A","orderTypes":["market","limit","stopLoss","stopLossLimit","takeProfit","takeProfitLimit"]},
+  "ETH-EUR": {"market":"ETH-EUR","status":"trading","base":"ETH","quote":"EUR","pricePrecision":null,"minOrderInBaseAsset":"0.00242890","minOrderInQuoteAsset":"5.00","maxOrderInBaseAsset":"485780.61212308","maxOrderInQuoteAsset":"1000000000.00","quantityDecimals":8,"notionalDecimals":2,"tickSize":"0.010","maxOpenOrders":100,"feeCategory":"A","orderTypes":["market","limit","stopLoss","stopLossLimit","takeProfit","takeProfitLimit"]}
+ }
+}

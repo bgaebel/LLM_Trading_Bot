@@ -1,6 +1,6 @@
 # Spec 012: Echtgeld-Schnittstelle als Entwurf (Broker-Naht)
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s012-broker-naht` · **Meilenstein:** M1 (Nr. 8)
 - **Erstellt:** 2026-11-07
 
@@ -141,13 +141,13 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
   Live-Limits in M1 (Laufzeitänderung ohne Nutzen vor M2); stille Umdeutung von ADR-0004.
 
 ## Plan
-- [ ] 1. `broker/contract.py` (Protocol `Broker`), `paper.py`, `live.py`, `make_broker`; Tests Vertrag, Spy,
+- [x] 1. `broker/contract.py` (Protocol `Broker`), `paper.py`, `live.py`, `make_broker`; Tests Vertrag, Spy,
   Goldens über den Broker (AK1, AK2, AK4 teilweise)
-- [ ] 2. Live-Typen mit Invarianten; öffentliche `/markets`-Antwort (ohne Key) einmal abrufen und unverändert als
+- [x] 2. Live-Typen mit Invarianten; öffentliche `/markets`-Antwort (ohne Key) einmal abrufen und unverändert als
   Fixture speichern; `MarketRules`; `intents.py` (AK7, AK8)
-- [ ] 3. Sperr-Tests: Order-Pfad-Prüfung mit Negativtests, Konfiguration, fremde DB, `parse_mode`-Varianten,
+- [x] 3. Sperr-Tests: Order-Pfad-Prüfung mit Negativtests, Konfiguration, fremde DB, `parse_mode`-Varianten,
   CLI-Abbruch (AK4, AK5, AK6, AK9)
-- [ ] 4. Mutationstest: Kopierliste, `group_of`, Einträge `broker`/`cli`, `broker noop control` (AK10); Nachweis AK3
+- [x] 4. Mutationstest: Kopierliste, `group_of`, Einträge `broker`/`cli`, `broker noop control` (AK10); Nachweis AK3
 - [ ] 5. ARCHITEKTUR, Ergebnis; Prüfung (Workflow), PR (AK11)
 
 ## Risiken & offene Fragen
@@ -168,6 +168,7 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
   liegen unterhalb der Naht; Absicht nicht auf einen Ordertyp festlegen; Zustände nach ausgeführter Menge;
   PLANNED nach Neustart = UNKNOWN; Prüfregeln, die am heutigen Code scheitern würden; Mutationstest braucht
   `uv.lock`/`deploy/` in der Kopie) – eingearbeitet.
+- 2026-11-07: Prüf-Workflow (4 Blickwinkel, je Befund 3 Gegenprüfer): 23 Befunde, 17 widerlegt, 6 bestätigt und behoben – Skriptregel erkennt nun sendendes `curl` auch mit Host in einer Variablen und die verbotenen Literale in jeder Zeile; Bytes-Literale werden geprüft; börsenartige Klassen auch in `tests/`/`tools/`; Test, dass Bitvavo-Status und `restatementReason` unverändert bleiben; ARCHITEKTUR nennt den Umfang je Regel genau; Code-Anker verweisen auf das angenommene ADR-0022 statt auf den Vorschlag ADR-0023.
 
 ## Ergebnis
 - **Erreicht:** …
