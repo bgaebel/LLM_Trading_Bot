@@ -26,7 +26,7 @@ TICKER = (
     ("GPT", "nur bei Bedarf · max. 4/h"),
     ("Budget", "hartes EUR-Tageslimit"),
     ("Fail closed", "keine Order ohne frische Kurse"),
-    ("Zugang", "127.0.0.1 · SSH-Tunnel"),
+    ("Zugang", "HTTPS mit Login · SSH-Tunnel"),
 )
 
 
@@ -178,7 +178,7 @@ def _page(
         f'<div class="ticker" aria-hidden="true"><div class="ticker-track{phase}">'
         f"{items}{items}</div></div><main>{body}</main>"
         "<footer><span>Paper-Modus · kein Echtgeld (ADR-0004)</span>"
-        "<span>nur 127.0.0.1 · Zugriff per SSH-Tunnel (ADR-0005)</span>"
+        "<span>App nur auf 127.0.0.1 · von außen per HTTPS oder SSH-Tunnel (ADR-0024)</span>"
         "<span>Zugangsdaten in secrets.env (600)</span></footer></body></html>"
     )
 

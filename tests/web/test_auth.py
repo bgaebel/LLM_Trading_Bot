@@ -252,3 +252,39 @@ def test_sessions_drop_others_keeps_the_current_one() -> None:
     a, b = sessions.create(), sessions.create()
     sessions.drop_others(a.token)
     assert sessions.get(a.token) == a and sessions.get(b.token) is None
+
+
+def test_device_cookie_garbage_is_no_device(tmp_path: Path) -> None:
+    keys = DeviceKeys(tmp_path / "web-device.key", wall_clock=lambda: 1_800_000_000.0)
+    head, expiry, sig = keys.issue().split(".")
+    # Non-ASCII bytes in a cookie arrive as latin-1 characters; huge numbers must not be parsed.
+    for bad in (
+        f"\xe4{head}.{expiry}.{sig}",
+        f"{head}.{expiry}.\xe4{sig}",
+        f"{head}.{'9' * 4000}.x",
+    ):
+        assert keys.verify(bad) is None
+
+
+def test_device_key_rotation_voids_every_cookie(tmp_path: Path) -> None:
+    keys = DeviceKeys(tmp_path / "web-device.key", wall_clock=lambda: 1_800_000_000.0)
+    old = keys.issue()
+    keys.rotate()
+    assert keys.verify(old) is None
+    assert keys.verify(keys.issue()) is not None
+
+
+def test_public_guard_full_table_keeps_escalated_clients(monkeypatch: pytest.MonkeyPatch) -> None:
+    from llm_trading_bot.web import auth
+
+    monkeypatch.setattr(auth, "MAX_TRACKED_CLIENTS", 3)
+    guard = PublicGuard(Clock())
+    for key in ("ip:a", "ip:b", "ip:c"):
+        for _ in range(MAX_FAILURES):
+            guard.failed(key, device=False)
+    # A flood of new addresses neither forgets the locked ones nor grows the table without end.
+    for i in range(50):
+        guard.failed(f"ip:new{i}", device=False)
+    assert all(guard.seconds_locked(k, device=True) > 0 for k in ("ip:a", "ip:b", "ip:c"))
+    assert len(guard.guards) <= 4
+    assert guard.seconds_locked("ip:another", device=True) > 0  # newcomers share the overflow

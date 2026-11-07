@@ -50,6 +50,8 @@ done
 cmd="${args[0]}"
 start_unit() {
   [ "$1" = llm-trading-bot-web.service ] && [ -e "$state/bad-web" ] && return 0
+  # bad-caddy: caddy does not start (e.g. port 80 taken).
+  [ "$1" = caddy.service ] && [ -e "$state/bad-caddy" ] && return 1
   touch "$state/active-$1"
   if [ "$1" = llm-trading-bot.service ]; then
     pid=$((RANDOM + 1000))
@@ -809,7 +811,9 @@ def test_public_rollback_to_a_release_from_before_013_leaves_caddy_alone(box: Sa
     assert box.current() == sha(1)
     assert not any(c.startswith("caddy ") or "caddy.service" in c for c in box.calls()[before:])
     assert box.caddyfile.read_text(encoding="utf-8") == caddy
-    assert "--public-host" not in box.unit(WEB_UNIT)
+    # The release from before 013 has no public listener: only the tunnel port in ExecStart.
+    (exec_start,) = [ln for ln in box.unit(WEB_UNIT).splitlines() if ln.startswith("ExecStart=")]
+    assert "--public-host" not in exec_start and exec_start.endswith("--port 8787")
 
 
 def test_public_an_unhealthy_release_rolls_back_without_touching_caddy(box: Sandbox) -> None:
@@ -869,6 +873,22 @@ def test_public_command_sets_up_caddy_in_order_and_twice_changes_nothing(box: Sa
     assert second.rstrip().endswith("changes: 0"), second
     again = box.calls()[len(calls) :]
     assert not any(c.startswith(("apt-get", "restart ", "stop ", "daemon-reload")) for c in again)
+
+
+def test_public_command_after_a_failed_caddy_start_restarts_the_web_ui(box: Sandbox) -> None:
+    """A rerun that only has to start caddy still restarts the web UI with the public listener."""
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    (box.state / "bad-caddy").touch()
+    failed = box.run("public", "example.test", "botsvc", check=False)
+    assert failed.returncode != 0 and "caddy did not start" in failed.stderr, failed.stderr
+    (box.state / "bad-caddy").unlink()
+    start = len(box.calls())
+    out = box.run("public", "example.test", "botsvc").stdout
+    calls = box.calls()[start:]
+    assert "restart caddy.service" in calls and f"restart {WEB_UNIT}" in calls, calls
+    assert out.rstrip().endswith("changes: 0")  # nothing on disk changed, only started
 
 
 def test_public_command_refuses_a_release_without_caddyfile(box: Sandbox) -> None:

@@ -209,7 +209,7 @@ auf dem Server in `/etc/llm-trading-bot/public-host` (eine Zeile, Kleinbuchstabe
 1. **DNS:** A-Eintrag von `<domain>` und `www.<domain>` zeigt auf `<server>`. Gibt es AAAA-Einträge, müssen sie auf
    die IPv6-Adresse des Servers zeigen – sonst scheitert das Zertifikat über IPv6. Prüfen:
    ```bash
-   nslookup -type=A <domain>; nslookup -type=AAAA <domain>; nslookup -type=A www.<domain>
+   nslookup -type=A <domain>; nslookup -type=AAAA <domain>; nslookup -type=A www.<domain>; nslookup -type=AAAA www.<domain>
    ```
 2. **Hetzner-Cloud-Firewall** (falls eingerichtet): eingehend 80/tcp und 443/tcp erlauben. Let's Encrypt erlaubt
    nur wenige Fehlversuche je Stunde – deshalb erst Firewall und DNS, dann `public`.
@@ -238,14 +238,14 @@ Rollback (automatisch oder `rollback`) ändert Caddy nie; ein Release vor Spec 0
 
 ### Prüfen (von außen)
 ```bash
-curl -sI https://<domain>/login
+curl -s -D - -o /dev/null https://<domain>/login
 ```
 Erwartet: `HTTP/2 200`, `strict-transport-security: max-age=31536000`, kein `server`-Header.
 ```bash
-curl -sI http://<domain>/login
+curl -s -D - -o /dev/null http://<domain>/login
 ```
 ```bash
-curl -sI https://www.<domain>/login
+curl -s -D - -o /dev/null https://www.<domain>/login
 ```
 Erwartet: `308`/`301` auf `https://<domain>/login`. Auf dem Server – Bot-Ports nur auf `127.0.0.1`, kein Port 2019:
 ```bash

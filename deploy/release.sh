@@ -765,7 +765,7 @@ restart_web() {
 # AK8 order: repository and package, automatic updates, domain file, units, firewall, Caddyfile,
 # restart caddy and the web UI. A second run changes and restarts nothing.
 cmd_public() {
-  local host="$1" service="$2" work before
+  local host="$1" service="$2" work before started=0
   require_root
   valid_host "$host"
   valid_name "$service"
@@ -802,8 +802,11 @@ cmd_public() {
   if [ "$changes" -gt 0 ] || ! "$SYSTEMCTL" is-active --quiet "$CADDY_UNIT"; then
     quietly "$SYSTEMCTL" restart "$CADDY_UNIT" || die "caddy did not start - journalctl -u caddy"
     log "restarted  caddy"
+    started=1
   fi
-  [ "$changes" -eq 0 ] || restart_web
+  # A rerun after a failed caddy start changes no file, but the web UI still runs without the
+  # public listener from the first try (its unit was rewritten, the restart never came).
+  if [ "$changes" -gt 0 ] || [ "$started" -eq 1 ]; then restart_web; fi
   log "public address: https://$host/ - the tunnel works as before"
   log "changes: $changes"
 }

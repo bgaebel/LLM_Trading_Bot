@@ -38,6 +38,14 @@ __PUBLIC_HOST__ {
 			response_header_timeout 30s
 		}
 	}
+	# Caddy's own errors (body too large, app down) carry the same headers and a plain status line.
+	handle_errors {
+		header {
+			Strict-Transport-Security "max-age=31536000"
+			-Server
+		}
+		respond "{err.status_code} {err.status_text}"
+	}
 }
 
 # One origin for cookies and CSRF checks.
@@ -47,4 +55,12 @@ www.__PUBLIC_HOST__ {
 		-Server
 	}
 	redir https://__PUBLIC_HOST__{uri} permanent
+	# Caddy's own errors (body too large, app down) carry the same headers and a plain status line.
+	handle_errors {
+		header {
+			Strict-Transport-Security "max-age=31536000"
+			-Server
+		}
+		respond "{err.status_code} {err.status_text}"
+	}
 }

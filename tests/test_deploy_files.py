@@ -174,6 +174,15 @@ def test_caddyfile_sends_hsts_and_no_server_header(site: str) -> None:
     assert "-Server" in block
 
 
+@pytest.mark.parametrize("site", ["__PUBLIC_HOST__", "www.__PUBLIC_HOST__"])
+def test_caddyfile_error_responses_keep_hsts_and_hide_the_server(site: str) -> None:
+    block = caddy_blocks()[site]
+    start = block.index("handle_errors {")
+    errors = block[start : start + 6]
+    assert 'Strict-Transport-Security "max-age=31536000"' in errors and "-Server" in errors
+    assert 'respond "{err.status_code} {err.status_text}"' in errors
+
+
 def test_caddyfile_keeps_no_access_log_and_changes_no_request_headers() -> None:
     for name, lines in caddy_blocks().items():
         for line in lines:

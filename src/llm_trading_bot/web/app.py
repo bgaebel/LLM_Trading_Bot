@@ -199,8 +199,9 @@ class WebApp:
         session = self.sessions.create()
         response = redirect("/")
         response.cookies.append(access.cookie(access.session_cookie, session.token, 43200))
-        if access.public and self.devices.verify(cookies.get(DEVICE_COOKIE)) is None:
-            # ADR-0024: this device logged in once; the lockout of strangers spares it.
+        if access.public:
+            # ADR-0024: this device logged in; the lockout of strangers spares it. Renewed on
+            # every login, so a device in use never expires.
             response.cookies.append(
                 access.cookie(DEVICE_COOKIE, self.devices.issue(), DEVICE_SECONDS)
             )
@@ -507,7 +508,12 @@ class WebApp:
         except ValueError:
             return self._settings(session, PASSWORD_RULE, ok=False, status=400)
         self.sessions.drop_others(session.token)
-        return self._settings(session, "Passwort geändert. Andere Sitzungen sind abgemeldet.")
+        # Device cookies issued while the old password was valid (maybe to someone who knew it)
+        # must not keep their lockout exemption.
+        self.devices.rotate()
+        return self._settings(
+            session, "Passwort geändert. Andere Sitzungen und Geräte sind abgemeldet."
+        )
 
     def _test(self, session: Session) -> Response | KeyCheck:
         key = self.credentials.read().get("OPENAI_API_KEY")

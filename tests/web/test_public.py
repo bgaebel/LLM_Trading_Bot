@@ -320,3 +320,64 @@ def test_change_password_through_the_settings(site: Site) -> None:
     assert other.request("GET", "/")[0] == 303  # the other session was logged out
     assert client.request("GET", "/")[0] == 200  # this one stays
     assert site.outside("203.0.113.30").login("ganz-neues-Passwort-1")[0] == 303
+    # The device cookie from before the change lost its exemption (new key).
+    assert site.app.devices.verify(other.cookies["__Host-ltb_device"]) is None
+
+
+def test_public_device_cookie_is_renewed_on_every_login(site: Site) -> None:
+    owner = site.outside()
+    owner.login()
+    first = owner.cookies["__Host-ltb_device"]
+    owner.cookies.pop("__Host-ltb_session")
+    owner.login()
+    second = owner.cookies["__Host-ltb_device"]
+    assert second != first and site.app.devices.verify(second) is not None
+
+
+def test_public_device_cookie_garbage_is_a_stranger(site: Site) -> None:
+    client = site.outside()
+    client.cookies["__Host-ltb_device"] = "äö.123.abc"
+    assert client.login()[0] == 303  # no crash; logged in as an unknown device
+
+
+def test_serve_opens_the_tunnel_and_the_public_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """serve() wires both sockets to one app: the public one knows it is public."""
+    import io
+
+    from llm_trading_bot.web import app as app_module
+
+    servers: list[object] = []
+    real = app_module.make_server
+
+    def capture(*args: object, **kwargs: object) -> object:
+        server = real(*args, **kwargs)  # type: ignore[arg-type]
+        servers.append(server)
+        return server
+
+    monkeypatch.setattr(app_module, "make_server", capture)
+    out = io.StringIO()
+    thread = threading.Thread(
+        target=app_module.serve,
+        args=(tmp_path,),
+        kwargs={"port": 0, "out": out, "public_host": DOMAIN, "public_port": 0},
+        daemon=True,
+    )
+    thread.start()
+    for _ in range(200):
+        if "Einrichtungscode" in out.getvalue():
+            break
+        threading.Event().wait(0.05)
+    try:
+        assert len(servers) == 2
+        tunnel = servers[0].server_address[1]  # type: ignore[attr-defined]
+        public = servers[1].server_address[1]  # type: ignore[attr-defined]
+        assert f"https://{DOMAIN}/" in out.getvalue()
+        # The public socket refuses setup; the tunnel shows it.
+        assert Client(public).request("GET", "/setup")[0] == 503
+        assert Client(tunnel, host=f"127.0.0.1:{tunnel}", ip="").request("GET", "/setup")[0] == 200
+    finally:
+        servers[0].shutdown()  # type: ignore[attr-defined]
+        thread.join(10)
+    assert not thread.is_alive()

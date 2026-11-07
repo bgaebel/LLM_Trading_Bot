@@ -31,6 +31,7 @@ GLOBAL_FAILURES_PER_HOUR = 100
 SESSION_SECONDS = 12 * 3600
 DEVICE_SECONDS = 90 * 86400
 MAX_TRACKED_CLIENTS = 10_000
+OVERFLOW = "overflow"
 
 # Long but common: a dictionary attack tries these first. Lower-case, compared case-insensitively.
 COMMON_PASSWORDS = frozenset(
@@ -208,11 +209,16 @@ class PublicGuard:
         guard = self.guards.get(key)
         if guard is None:
             if len(self.guards) >= MAX_TRACKED_CLIENTS:
-                # Forget the harmless ones first; a flood of fresh addresses must not grow memory.
-                for k in [k for k, g in self.guards.items() if g.idle() or not g.seconds_locked()]:
+                # A flood of fresh addresses must not grow memory - but a client in an escalated
+                # backoff stays tracked (forgetting it would hand it fresh tries). Only clients
+                # without failures and locks are forgotten; beyond that, newcomers share one key.
+                for k in [k for k, g in self.guards.items() if g.idle()]:
                     del self.guards[k]
                 if len(self.guards) >= MAX_TRACKED_CLIENTS:
-                    self.guards.pop(next(iter(self.guards)))
+                    key = OVERFLOW
+                    guard = self.guards.get(key)
+                    if guard is not None:
+                        return guard
             guard = self.guards[key] = LoginGuard(self.clock, doubling=True)
         return guard
 
@@ -225,6 +231,8 @@ class PublicGuard:
         return 0
 
     def seconds_locked(self, key: str, *, device: bool) -> int:
+        if key not in self.guards and len(self.guards) >= MAX_TRACKED_CLIENTS:
+            key = OVERFLOW
         own = self.guards[key].seconds_locked() if key in self.guards else 0
         return own if device else max(own, self._global_seconds())
 
@@ -253,16 +261,23 @@ class DeviceKeys:
         return hmac.new(self._key(), payload.encode("ascii"), hashlib.sha256).hexdigest()
 
     def issue(self) -> str:
+        """A fresh cookie; issued on every public login, so a used device never expires."""
         payload = f"{secrets.token_urlsafe(16)}.{int(self.wall_clock()) + DEVICE_SECONDS}"
         return f"{payload}.{self._sign(payload)}"
 
+    def rotate(self) -> None:
+        """A new key: every cookie issued so far is void (after a password change)."""
+        write_private(self.path, secrets.token_hex(32))
+
     def verify(self, token: str | None) -> str | None:
-        """The device id of a valid, unexpired token; None otherwise."""
-        if not token or token.count(".") != 2:
+        """The device id of a valid, unexpired token; None otherwise - also for any garbage a
+        client sends (non-ASCII bytes arrive as latin-1 characters)."""
+        if not token or not token.isascii() or token.count(".") != 2:
             return None
         device, expiry, signature = token.split(".")
-        payload = f"{device}.{expiry}"
-        if not expiry.isdigit() or not hmac.compare_digest(signature, self._sign(payload)):
+        if not expiry.isdigit() or len(expiry) > 12:
+            return None
+        if not hmac.compare_digest(signature.encode(), self._sign(f"{device}.{expiry}").encode()):
             return None
         return device if int(expiry) > self.wall_clock() else None
 
