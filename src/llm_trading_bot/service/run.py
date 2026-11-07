@@ -27,6 +27,12 @@ from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import SchemaError, ensure_portfolios, open_db
 from llm_trading_bot.paper.execution import BUYHOLD, DRAWDOWN_KILL, Costs
 from llm_trading_bot.paper.lock import WriterLock, WriterLockBusy
+from llm_trading_bot.paper.observations import (
+    ObservationBuffer,
+    ObservationWriter,
+    observations_path,
+    release_sha,
+)
 from llm_trading_bot.paper.report import CycleReport
 from llm_trading_bot.paper.risk import Controls, read_controls
 from llm_trading_bot.service.logs import redact
@@ -160,6 +166,10 @@ class Service:
         self.controls = Controls()
         self.control_warnings: tuple[str, ...] = ()
         self.refusals: set[tuple[str, str]] = set()
+        # Spec 015 (ADR-0027): used only while this process holds the WriterLock of the db.
+        self.release = release_sha()
+        self.observer = ObservationWriter(observations_path(db))
+        self.observer_error: str | None = None
 
     # ------------------------------------------------------------------ start and end
 
@@ -191,6 +201,9 @@ class Service:
             self.log.error("database refused: %s: %s", type(exc).__name__, exc)
             self._update(state="stopped", last_error=f"{type(exc).__name__}: {exc}")
             return EXIT_INVALID
+        # A start marker per run, so gaps in the observations are visible (never raises).
+        self.observer.start(iso(now), self.release, os.getpid())
+        self._log_observations()
         try:
             return self._loop()
         finally:
@@ -293,7 +306,8 @@ class Service:
         self._finish(job, started_at, self.timer.monotonic() - started)
 
     def _work(self, job: _Round) -> None:
-        """Runs in the worker thread: settings, then one paper cycle."""
+        """Runs in the worker thread: settings, then one paper cycle, then its observations."""
+        observations = ObservationBuffer(self.release)
         try:
             self._reload()
             assert self.con is not None and self.config is not None
@@ -306,11 +320,32 @@ class Service:
                 clock=self.timer.now,
                 stop_requested=self.stop.is_set,
                 controls=self._read_controls(),
+                observations=observations,
             )
         except BaseException as exc:  # reported by the main thread; never kills the service
             job.error = exc
         finally:
+            # ADR-0027: after the round and outside every bot.db transaction (the cycle has
+            # returned), in this worker thread - the main thread stays free for signals and the
+            # watchdog - and before done is set, so _finish reads the updated counters.
+            self._write_observations(observations)
             job.done.set()
+
+    def _write_observations(self, observations: ObservationBuffer) -> None:
+        """Never raises and never touches the round's result (Spec 015 AK3)."""
+        try:
+            self.observer.write(observations)
+            self._log_observations()
+        except Exception as exc:  # the writer counts its own failures; this is a last guard
+            self.observer.failed += 1
+            self.observer.last_error = f"{type(exc).__name__}: {exc}"
+
+    def _log_observations(self) -> None:
+        # Once per new error, not every minute: a busy or refused file repeats each round.
+        error = self.observer.last_error
+        if error is not None and error != self.observer_error:
+            self.log.warning("observations not recorded: %s", redact(error))
+        self.observer_error = error
 
     def _reload(self) -> None:
         """Settings saved in the web UI apply from the next round on (Spec 008 AK3)."""
@@ -460,7 +495,14 @@ class Service:
 
     def _update(self, **changes: object) -> None:
         assert self.status is not None
-        self.status = self.status.but(updated_at=iso(self.timer.now()), **changes)
+        self.status = self.status.but(
+            updated_at=iso(self.timer.now()),
+            # Spec 015 AK5: only shown; they never change state, result or failures.
+            observations_written=self.observer.written,
+            observations_failed=self.observer.failed,
+            observations_last_error=self.observer.last_error,
+            **changes,
+        )
         try:
             write_status(self.status_file, self.status)
         except OSError as exc:
