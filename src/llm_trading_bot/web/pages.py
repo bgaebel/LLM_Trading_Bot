@@ -124,9 +124,11 @@ def _page(
     refresh: int | None = None,
     ticker: Sequence[tuple[str, str]] = TICKER,
     now: float | None = None,
+    script: bool = False,
 ) -> str:
     """``ticker``: (label, value) pairs for the strip under the header. ``now`` (wall clock) lets
-    a reloading page continue the strip where the last load left it."""
+    a reloading page continue the strip where the last load left it. ``script`` loads /app.js
+    (ADR-0019); the meta refresh then only works as a fallback without scripts."""
     logout = (
         '<form method="post" action="/logout">'
         f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
@@ -148,8 +150,13 @@ def _page(
         if csrf
         else ""
     )
-    # Meta refresh instead of a script: the CSP forbids scripts (ADR-0015).
     reload = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
+    if script:
+        # ADR-0019: our own file only - the CSP allows no inline script. Without scripts the
+        # page still reloads itself.
+        reload = '<script src="/app.js" defer></script>' + (
+            f"<noscript>{reload}</noscript>" if reload else ""
+        )
     return (
         '<!doctype html><html lang="de"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'

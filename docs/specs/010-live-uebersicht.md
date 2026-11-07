@@ -1,6 +1,6 @@
 # Spec 010: Live-Übersicht ohne Neuladen
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s010-live-uebersicht` · **Meilenstein:** M1 (Nr. 7)
 - **Erstellt:** 2026-11-07
 
@@ -56,9 +56,9 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
 - Verworfen: siehe ADR-0019.
 
 ## Plan
-- [ ] 1. ADR-0019 annehmen; CSP, Route `/app.js`, Markup (`data-live`, `data-at`, `noscript`) mit Tests (AK1, AK3
+- [x] 1. ADR-0019 annehmen; CSP, Route `/app.js`, Markup (`data-live`, `data-at`, `noscript`) mit Tests (AK1, AK3
   Markup, AK5)
-- [ ] 2. `app.js` (Abfrage, Austausch, Sekundentakt, Fehler und Sitzungsende) mit Quelltext-Prüfung (AK2–AK4)
+- [x] 2. `app.js` (Abfrage, Austausch, Sekundentakt, Fehler und Sitzungsende) mit Quelltext-Prüfung (AK2–AK4)
 - [ ] 3. Browser-Prüfung lokal mit Test-DB (AK6 lokal); Doku (ARCHITEKTUR, Spec 007 Ergebnis-Hinweis)
 - [ ] 4. Mit Zustimmung: PR, Merge, Deploy auf den Server, Browser-Prüfung per Tunnel (AK6, AK7)
 
