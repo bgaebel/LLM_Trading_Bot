@@ -48,7 +48,8 @@ def test_the_script_updates_without_reloading_and_backs_off_on_errors() -> None:
     assert "Math.min(wait * 2, MAX_WAIT)" in JS
     assert "Verbindung unterbrochen" in JS
     assert "location.reload" not in JS  # live means: no reload
-    assert 'querySelector("main").replaceWith' in JS
+    assert "current.replaceWith(fresh)" in JS and "signature(current) === signature(fresh)" in JS
+    assert "signal: controller.signal" in JS and "const DEADLINE = 15000;" in JS
     assert "visibilitychange" in JS
 
 
@@ -74,8 +75,9 @@ let fetchCalls = 0;
 const pending = [];
 const listeners = {};
 const main = { replaceWith() {}, prepend(el) { this.child = el; } };
+const timerFns = [];
 globalThis.window = {
-  setTimeout: (f, ms) => { timers.push(ms); return timers.length; },
+  setTimeout: (f, ms) => { timers.push(ms); timerFns.push(f); return timers.length; },
   clearTimeout: () => {},
   setInterval: () => 0,
 };
@@ -88,9 +90,12 @@ globalThis.document = {
   createElement: () => ({ setAttribute() {}, remove() { main.child = null; } }),
 };
 globalThis.location = { assign(url) { globalThis.assigned = url; } };
-globalThis.fetch = () => {
+globalThis.fetch = (url, options) => {
   fetchCalls++;
-  return new Promise((ok, fail) => pending.push({ ok, fail }));
+  return new Promise((ok, fail) => {
+    pending.push({ ok, fail });
+    options.signal.addEventListener("abort", () => fail(new Error("aborted")));
+  });
 };
 """
 
@@ -120,7 +125,7 @@ def test_a_tab_coming_back_never_starts_a_second_fetch_chain() -> None:
     # One fetch despite three "visible again" events; after one failure the next try is in 10 s.
     assert result == {
         "whileBusy": 1,
-        "timers": [5000, 10000],
+        "timers": [5000, 15000, 10000],  # first try, its deadline, the retry
         "notice": "Verbindung unterbrochen – nächster Versuch in 10 s",
     }
 
@@ -135,4 +140,24 @@ def test_an_ended_session_goes_to_the_login_page_and_stops_fetching() -> None:
         console.log(JSON.stringify({ assigned: globalThis.assigned, timers }));
         """
     )
-    assert result == {"assigned": "/login", "timers": [5000]}
+    assert result == {"assigned": "/login", "timers": [5000, 15000]}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
+def test_a_request_that_never_answers_is_given_up_after_the_deadline() -> None:
+    # A half-dead SSH tunnel: the request neither resolves nor fails on its own.
+    result = run_in_node(
+        """
+        listeners.visibilitychange();
+        const deadline = timerFns[timers.indexOf(15000)];
+        deadline();
+        await new Promise((r) => setTimeout(r, 0));
+        const notice = main.child && main.child.textContent;
+        console.log(JSON.stringify({ fetchCalls, timers, notice }));
+        """
+    )
+    assert result == {
+        "fetchCalls": 1,
+        "timers": [5000, 15000, 10000],
+        "notice": "Verbindung unterbrochen – nächster Versuch in 10 s",
+    }

@@ -11,6 +11,7 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
 (() => {
   const PERIOD = 5000;
   const MAX_WAIT = 60000;
+  const DEADLINE = 15000; // one request; a page normally comes in well under a second
   let wait = PERIOD;
   let offset = 0; // server time minus browser time, in seconds
   let timer = 0;
@@ -57,6 +58,28 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
     element.textContent = text;
   }
 
+  // The page apart from what changes every second anyway (ages, the server time marker).
+  function signature(node) {
+    const copy = node.cloneNode(true);
+    for (const element of copy.querySelectorAll("[data-at]")) element.textContent = "";
+    for (const element of copy.querySelectorAll("[data-now]")) element.removeAttribute("data-now");
+    for (const element of copy.querySelectorAll("#live-problem")) element.remove();
+    return new XMLSerializer().serializeToString(copy);
+  }
+
+  // Swapping resets horizontal scrolling and drops a text selection: only when the content
+  // changed (about once a round), never while the user has text selected, keeping scrollLeft.
+  function swap(current, fresh) {
+    if (signature(current) === signature(fresh)) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && current.contains(selection.anchorNode)) return;
+    const scrolled = [...current.querySelectorAll(".scroll")].map((e) => e.scrollLeft);
+    current.replaceWith(fresh);
+    fresh.querySelectorAll(".scroll").forEach((e, i) => {
+      if (scrolled[i]) e.scrollLeft = scrolled[i];
+    });
+  }
+
   // One fetch at a time: a tab that becomes visible again must not start a second chain.
   let busy = false;
 
@@ -64,8 +87,15 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
     if (busy) return;
     busy = true;
     window.clearTimeout(timer);
+    // A half-dead tunnel can leave a request hanging for minutes: give up after a deadline.
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => controller.abort(), DEADLINE);
     try {
-      const response = await fetch("/", { credentials: "same-origin", cache: "no-store" });
+      const response = await fetch("/", {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: controller.signal,
+      });
       const path = new URL(response.url).pathname;
       if (path === "/login" || path === "/setup") {
         location.assign("/login"); // the session ended: log in again
@@ -75,20 +105,22 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
       const fresh = new DOMParser().parseFromString(await response.text(), "text/html");
       const main = fresh.querySelector("main");
       if (!main) throw new Error("no overview in the answer");
-      document.querySelector("main").replaceWith(document.adoptNode(main));
+      readServerTime(fresh);
+      notice("");
+      swap(document.querySelector("main"), document.adoptNode(main));
       // The ticker only changes once a round; replacing it restarts its scroll.
       const track = fresh.querySelector(".ticker-track");
       const shown = document.querySelector(".ticker-track");
       if (track && shown && track.textContent !== shown.textContent) {
         shown.replaceWith(document.adoptNode(track));
       }
-      readServerTime(document);
       tick();
       wait = PERIOD;
     } catch (error) {
       wait = Math.min(wait * 2, MAX_WAIT);
       notice("Verbindung unterbrochen – nächster Versuch in " + Math.round(wait / 1000) + " s");
     } finally {
+      window.clearTimeout(deadline);
       busy = false;
     }
     timer = window.setTimeout(refresh, wait);

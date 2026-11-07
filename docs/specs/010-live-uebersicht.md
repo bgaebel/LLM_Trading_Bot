@@ -81,6 +81,12 @@ lädt die Seite ein eigenes Skript vom selben Server (ADR-0019); ohne Skript ble
   der Abstand nach Fehlern verdoppelte sich mehrfach („60 s“ nach 7 s). Jetzt immer nur eine Abfrage; Node-Tests
   für dieses Verhalten und für das Sitzungsende (Wechsel zur Anmeldung, keine weiteren Abfragen). Den Wechsel zur
   Anmeldung im echten Browser konnte die Prüfung nicht zeigen (das Werkzeug lädt beim Neustart selbst neu).
+- 2026-11-07: Prüfung (Workflow, Sicherheit und Verhalten, je Befund Gegenprüfung): Sicherheit ohne Befund; drei
+  Verhaltensbefunde bestätigt und behoben – eine hängende Abfrage (halb toter Tunnel) hielt die Schleife ohne
+  Hinweis an (jetzt Frist 15 s je Abfrage); der Austausch alle 5 s setzte die waagrechte Scrollposition breiter
+  Tabellen zurück und löschte Textauswahl und Suchtreffer (jetzt nur Austausch bei geänderter Seite, also etwa
+  einmal je Runde, nie während einer Auswahl, `scrollLeft` bleibt). Im Browser bestätigt: ohne neue Runde bleibt der
+  Inhalt unangetastet, eine neue Runde erscheint binnen 5 s, keine CSP-Verstöße.
 
 ## Ergebnis
 - **Erreicht:** …
