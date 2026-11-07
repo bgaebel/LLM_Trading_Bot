@@ -227,16 +227,26 @@ def setup_page(message: str = "", *, csrf: str) -> str:
         + _hidden(csrf)
         + '<label for="code">Einrichtungscode</label>'
         '<input id="code" name="code" type="text" autocomplete="off" spellcheck="false" required>'
-        '<label for="password">Neues Passwort (mindestens 8 Zeichen)</label>'
+        '<label for="password">Neues Passwort (mindestens 12 Zeichen)</label>'
         '<input id="password" name="password" type="password" autocomplete="new-password" '
-        'minlength="8" required>'
+        'minlength="12" required>'
         '<label for="password2">Passwort wiederholen</label>'
         '<input id="password2" name="password2" type="password" autocomplete="new-password" '
-        'minlength="8" required>'
+        'minlength="12" required>'
         '<button type="submit">Passwort festlegen</button></form>'
     )
     lines = (*_CONSOLE, ("passwort", "fehlt", "amber"))
     return _page("Einrichtung", _auth("Ersteinrichtung", form, lines))
+
+
+def setup_closed_page() -> str:
+    """ADR-0024: on the public way there is no setup - no form, no cookie, no code."""
+    text = (
+        '<p class="lead">Noch kein Passwort festgelegt. Die Einrichtung geht nur über den '
+        "SSH-Tunnel (siehe <code>docs/betrieb/server.md</code>).</p>"
+    )
+    lines = (*_CONSOLE, ("passwort", "fehlt", "amber"))
+    return _page("Einrichtung", _auth("Einrichtung nur per SSH-Tunnel", text, lines))
 
 
 def login_page(message: str = "", *, csrf: str) -> str:
@@ -580,5 +590,20 @@ def settings_page(
         '<form method="post" action="/settings/test">'
         + hidden
         + '<button class="alt" type="submit">Gespeicherten Key testen</button></form></section>'
+        '<section class="panel">'
+        + _head("06", "Passwort ändern", "amber")
+        + '<form method="post" action="/settings/password">'
+        + hidden
+        + '<label for="old">Altes Passwort</label>'
+        '<input id="old" name="old" type="password" autocomplete="current-password" required>'
+        '<label for="new">Neues Passwort (mindestens 12 Zeichen)</label>'
+        '<input id="new" name="new" type="password" autocomplete="new-password" '
+        'minlength="12" required>'
+        '<label for="new2">Neues Passwort wiederholen</label>'
+        '<input id="new2" name="new2" type="password" autocomplete="new-password" '
+        'minlength="12" required>'
+        '<p class="hint">Für die Anmeldung aus dem Internet braucht es mindestens 12 Zeichen, '
+        "die nicht leicht zu erraten sind. Andere Sitzungen werden danach abgemeldet.</p>"
+        '<button type="submit">Passwort ändern</button></form></section>'
     )
     return _page("Einstellungen", body, csrf=csrf, active="/settings")

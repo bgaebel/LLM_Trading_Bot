@@ -1,7 +1,8 @@
-"""Routes and HTTP server of the local web UI (Spec 006, ADR-0015).
+"""Routes and HTTP server of the web UI (Spec 006, ADR-0015; public way: Spec 013, ADR-0024).
 
 ``WebApp.handle`` is plain request -> response logic (tested without sockets); ``serve`` wraps it
-in a standard-library HTTP server bound to 127.0.0.1 only.
+in standard-library HTTP servers bound to 127.0.0.1 only: one for the SSH tunnel and, with a
+public host, one that only Caddy talks to. The way in is known from the socket, not from headers.
 """
 
 import re
@@ -23,11 +24,16 @@ from llm_trading_bot.paper.risk import PAUSE_FIELD, RESUME_FIELD, parse_resumes,
 from llm_trading_bot.service.status import ServiceStatus, read_status, status_path
 from llm_trading_bot.web import overview, pages
 from llm_trading_bot.web.auth import (
+    DEVICE_SECONDS,
+    DeviceKeys,
     LoginGuard,
     PasswordStore,
+    PublicGuard,
     Session,
     Sessions,
+    client_key,
     new_setup_code,
+    password_problem,
     same,
 )
 from llm_trading_bot.web.credentials import SecretsFile, mask
@@ -45,7 +51,19 @@ LENGTH = re.compile(r"[0-9]{1,6}")
 # Cookies on 127.0.0.1 are shared by every local app on any port: use names nobody else uses.
 COOKIE = "ltb_session"
 PRE_COOKIE = "ltb_pre"
+# ADR-0024: on the public way the __Host- prefix makes the browser refuse cookies that another
+# host under the domain tries to plant (Secure, Path=/, no Domain attribute).
+PUBLIC_COOKIE = "__Host-ltb_session"
+PUBLIC_PRE_COOKIE = "__Host-ltb_pre"
+DEVICE_COOKIE = "__Host-ltb_device"
+PUBLIC_HOST = re.compile(r"[a-z0-9.-]+\.[a-z]{2,}")
+DEFAULT_PUBLIC_PORT = 8788
 EXPIRED = "Formular abgelaufen – bitte erneut."
+PASSWORD_RULE = "Das Passwort braucht mindestens 12 Zeichen und darf nicht leicht zu erraten sein."
+PUBLIC_PASSWORD_RULE = (
+    "Für den Zugang aus dem Internet braucht das Passwort mindestens 12 Zeichen und darf nicht "
+    "leicht zu erraten sein. Bitte unter Einstellungen ändern (per SSH-Tunnel)."
+)
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
         "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; "
@@ -64,6 +82,32 @@ class Response:
     body: str = ""
     content_type: str = "text/html; charset=utf-8"
     headers: dict[str, str] = field(default_factory=dict)
+    cookies: list[str] = field(default_factory=list)
+    """One Set-Cookie header each."""
+
+
+@dataclass(frozen=True)
+class Access:
+    """How a request came in: through the SSH tunnel (default) or from the internet via Caddy."""
+
+    public: bool = False
+    client: str = ""
+    """Public way only: the client address Caddy put last into X-Forwarded-For."""
+
+    @property
+    def session_cookie(self) -> str:
+        return PUBLIC_COOKIE if self.public else COOKIE
+
+    @property
+    def pre_cookie(self) -> str:
+        return PUBLIC_PRE_COOKIE if self.public else PRE_COOKIE
+
+    def cookie(self, name: str, value: str, max_age: int) -> str:
+        secure = "; Secure" if self.public else ""
+        return f"{name}={value}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{secure}"
+
+
+TUNNEL = Access()
 
 
 def redirect(location: str, **headers: str) -> Response:
@@ -126,26 +170,41 @@ class WebApp:
         key_check: Callable[[str], str] = check_key,
         clock: Callable[[], float] = time.monotonic,
         wall_clock: Callable[[], float] = time.time,
+        public_host: str | None = None,
     ) -> None:
+        if public_host is not None and not PUBLIC_HOST.fullmatch(public_host):
+            raise ValueError(f"public host must be a lower-case domain: {public_host!r}")
         # Next to secrets.env, like paper-cycle expects it (Spec 007 AK10).
         self.db = db if db is not None else data_dir / "bot.db"
         self.wall_clock = wall_clock
+        self.public_host = public_host
         self.passwords = PasswordStore(data_dir / "web-auth.json")
         self.credentials = SecretsFile(data_dir / "secrets.env")
         self.sessions = Sessions(clock)
-        self.guard = LoginGuard(clock)
+        self.guard = LoginGuard(clock)  # the tunnel's
+        self.public_guard = PublicGuard(clock)  # ADR-0024: per client, doubling, global ceiling
+        self.devices = DeviceKeys(data_dir / "web-device.key", wall_clock)
         self.key_check = key_check
         self.setup_code: str | None = None if self.passwords.is_set() else new_setup_code()
+        # One request at a time through the app, for both ways in: sessions, lockouts and file
+        # writes stay consistent.
+        self.lock = threading.Lock()
 
     # -- helpers -----------------------------------------------------------------------------
 
-    def _session(self, cookies: Mapping[str, str]) -> Session | None:
-        return self.sessions.get(cookies.get(COOKIE))
+    def _session(self, cookies: Mapping[str, str], access: Access) -> Session | None:
+        return self.sessions.get(cookies.get(access.session_cookie))
 
-    def _login(self) -> Response:
+    def _login(self, access: Access, cookies: Mapping[str, str]) -> Response:
         session = self.sessions.create()
-        cookie = f"{COOKIE}={session.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200"
-        return redirect("/", **{"Set-Cookie": cookie})
+        response = redirect("/")
+        response.cookies.append(access.cookie(access.session_cookie, session.token, 43200))
+        if access.public and self.devices.verify(cookies.get(DEVICE_COOKIE)) is None:
+            # ADR-0024: this device logged in once; the lockout of strangers spares it.
+            response.cookies.append(
+                access.cookie(DEVICE_COOKIE, self.devices.issue(), DEVICE_SECONDS)
+            )
+        return response
 
     def _public(
         self,
@@ -153,17 +212,17 @@ class WebApp:
         cookies: Mapping[str, str],
         message: str = "",
         status: int = 200,
+        access: Access = TUNNEL,
     ) -> Response:
         """Login and setup pages carry a pre-session CSRF token (double-submit cookie): the
         SameSite=Strict cookie never travels with a cross-site form post."""
-        token = cookies.get(PRE_COOKIE) or secrets.token_urlsafe(24)
+        token = cookies.get(access.pre_cookie) or secrets.token_urlsafe(24)
         page = build(message, csrf=token)
-        cookie = f"{PRE_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600"
-        return Response(status, page, headers={"Set-Cookie": cookie})
+        return Response(status, page, cookies=[access.cookie(access.pre_cookie, token, 3600)])
 
     @staticmethod
-    def _pre_ok(form: Form, cookies: Mapping[str, str]) -> bool:
-        expected = cookies.get(PRE_COOKIE, "")
+    def _pre_ok(form: Form, cookies: Mapping[str, str], access: Access = TUNNEL) -> bool:
+        expected = cookies.get(access.pre_cookie, "")
         return bool(expected) and same(_one(form, "csrf"), expected)
 
     def _status(self) -> ServiceStatus | None:
@@ -243,7 +302,12 @@ class WebApp:
     # -- routing -----------------------------------------------------------------------------
 
     def handle(
-        self, method: str, path: str, cookies: Mapping[str, str], form: Form
+        self,
+        method: str,
+        path: str,
+        cookies: Mapping[str, str],
+        form: Form,
+        access: Access = TUNNEL,
     ) -> Response | KeyCheck:
         """A ``KeyCheck`` asks the caller to run ``key_check`` and then ``key_checked``."""
         if path == "/app.css" and method == "GET":
@@ -252,15 +316,23 @@ class WebApp:
             # ADR-0019: holds no data, so like the stylesheet it needs no session.
             return Response(200, JS, "text/javascript; charset=utf-8")
         if not self.passwords.is_set():
+            if access.public:
+                # ADR-0024: the setup code sits in the journal; never set a password from the
+                # internet. No form, no cookie, no code.
+                return Response(503, pages.setup_closed_page())
             return self._setup(method, path, form, cookies)
-        session = self._session(cookies)
+        session = self._session(cookies, access)
         if path == "/login":
-            return self._login_route(method, form, session, cookies)
+            return self._login_route(method, form, session, cookies, access)
         if session is None:
             return redirect("/login")
         if method == "POST" and not same(_one(form, "csrf"), session.csrf):
             return self._public(
-                pages.login_page, cookies, "Sitzung ungültig – bitte erneut anmelden.", 403
+                pages.login_page,
+                cookies,
+                "Sitzung ungültig – bitte erneut anmelden.",
+                403,
+                access,
             )
         if path == "/" and method == "GET":
             return self._overview(session)
@@ -268,7 +340,9 @@ class WebApp:
             return redirect("/")
         if path == "/logout" and method == "POST":
             self.sessions.drop(session.token)
-            return redirect("/login", **{"Set-Cookie": f"{COOKIE}=; Max-Age=0; Path=/"})
+            response = redirect("/login")
+            response.cookies.append(access.cookie(access.session_cookie, "", 0))
+            return response
         if path == "/settings" and method == "GET":
             return self._settings(session)
         if path == "/settings" and method == "POST":
@@ -279,6 +353,8 @@ class WebApp:
             return self._pause(session, form)
         if path == "/settings/resume" and method == "POST":
             return self._resume(session, form)
+        if path == "/settings/password" and method == "POST":
+            return self._change_password(session, form, cookies, access)
         return self._settings(session, "Seite nicht gefunden.", ok=False, status=404)
 
     def _setup(self, method: str, path: str, form: Form, cookies: Mapping[str, str]) -> Response:
@@ -304,30 +380,66 @@ class WebApp:
         try:
             self.passwords.set(password)
         except ValueError:
-            return self._public(
-                pages.setup_page, cookies, "Das Passwort braucht mindestens 8 Zeichen.", 400
-            )
+            return self._public(pages.setup_page, cookies, PASSWORD_RULE, 400)
         self.setup_code = None
         self.guard.succeeded()
-        return self._login()
+        return self._login(TUNNEL, cookies)
+
+    def _guard_for(self, cookies: Mapping[str, str], access: Access) -> tuple[str, bool]:
+        """Public way: the lockout key and whether this is a known device (ADR-0024)."""
+        device = self.devices.verify(cookies.get(DEVICE_COOKIE))
+        if device is not None:
+            return f"device:{device}", True
+        return f"ip:{client_key(access.client)}", False
+
+    def _seconds_locked(self, cookies: Mapping[str, str], access: Access) -> int:
+        if not access.public:
+            return self.guard.seconds_locked()
+        key, device = self._guard_for(cookies, access)
+        return self.public_guard.seconds_locked(key, device=device)
+
+    def _failed(self, cookies: Mapping[str, str], access: Access) -> None:
+        if not access.public:
+            self.guard.failed()
+            return
+        key, device = self._guard_for(cookies, access)
+        self.public_guard.failed(key, device=device)
+
+    def _succeeded(self, cookies: Mapping[str, str], access: Access) -> None:
+        if not access.public:
+            self.guard.succeeded()
+            return
+        key, _device = self._guard_for(cookies, access)
+        self.public_guard.succeeded(key)
 
     def _login_route(
-        self, method: str, form: Form, session: Session | None, cookies: Mapping[str, str]
+        self,
+        method: str,
+        form: Form,
+        session: Session | None,
+        cookies: Mapping[str, str],
+        access: Access = TUNNEL,
     ) -> Response:
         if method != "POST":
-            return redirect("/") if session else self._public(pages.login_page, cookies)
-        if not self._pre_ok(form, cookies):
-            return self._public(pages.login_page, cookies, EXPIRED, 403)
-        locked = self.guard.seconds_locked()
+            if session:
+                return redirect("/")
+            return self._public(pages.login_page, cookies, access=access)
+        if not self._pre_ok(form, cookies, access):
+            return self._public(pages.login_page, cookies, EXPIRED, 403, access)
+        locked = self._seconds_locked(cookies, access)
         if locked:
-            return self._public(
-                pages.login_page, cookies, f"Zu viele Fehlversuche – {locked} s warten.", 429
-            )
-        if not self.passwords.verify(_one(form, "password")):
-            self.guard.failed()
-            return self._public(pages.login_page, cookies, "Passwort falsch.", 401)
-        self.guard.succeeded()
-        return self._login()
+            message = f"Zu viele Fehlversuche – {locked} s warten."
+            return self._public(pages.login_page, cookies, message, 429, access)
+        password = _one(form, "password")
+        if access.public and password_problem(password, public=True):
+            # ADR-0024: checked before the hash, so the answer never tells whether it was right.
+            self._failed(cookies, access)
+            return self._public(pages.login_page, cookies, PUBLIC_PASSWORD_RULE, 401, access)
+        if not self.passwords.verify(password):
+            self._failed(cookies, access)
+            return self._public(pages.login_page, cookies, "Passwort falsch.", 401, access)
+        self._succeeded(cookies, access)
+        return self._login(access, cookies)
 
     def _save(self, session: Session, form: Form) -> Response:
         try:
@@ -374,6 +486,29 @@ class WebApp:
             session, f"Freigabe für {agent} gespeichert – greift in der nächsten Runde."
         )
 
+    def _change_password(
+        self, session: Session, form: Form, cookies: Mapping[str, str], access: Access
+    ) -> Response:
+        """ADR-0024: new passwords follow the public rule; other sessions are logged out."""
+        locked = self._seconds_locked(cookies, access)
+        if locked:
+            message = f"Zu viele Fehlversuche – {locked} s warten."
+            return self._settings(session, message, ok=False, status=429)
+        if not self.passwords.verify(_one(form, "old")):
+            self._failed(cookies, access)
+            return self._settings(session, "Altes Passwort falsch.", ok=False, status=401)
+        new = _one(form, "new")
+        if new != _one(form, "new2"):
+            return self._settings(
+                session, "Die neuen Passwörter stimmen nicht überein.", ok=False, status=400
+            )
+        try:
+            self.passwords.set(new)
+        except ValueError:
+            return self._settings(session, PASSWORD_RULE, ok=False, status=400)
+        self.sessions.drop_others(session.token)
+        return self._settings(session, "Passwort geändert. Andere Sitzungen sind abgemeldet.")
+
     def _test(self, session: Session) -> Response | KeyCheck:
         key = self.credentials.read().get("OPENAI_API_KEY")
         if not key:
@@ -387,9 +522,11 @@ class WebApp:
         return self._settings(session, "Verbindung zu OpenAI in Ordnung (gpt-6-luna erreichbar).")
 
 
-def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
-    # One request at a time through the app: sessions, lockout and file writes stay consistent.
-    app_lock = threading.Lock()
+def make_handler(app: WebApp, *, public: bool = False) -> type[BaseHTTPRequestHandler]:
+    """``public``: the handler of the socket only Caddy talks to (ADR-0024)."""
+    app_lock = app.lock
+    if public and app.public_host is None:
+        raise ValueError("a public handler needs the public host")
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "llm-trading-bot"
@@ -408,6 +545,8 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             self.send_response(response.status)
             for name, value in response.headers.items():
                 self.send_header(name, value)
+            for cookie in response.cookies:
+                self.send_header("Set-Cookie", cookie)
             self.send_header("Content-Type", response.content_type)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -420,23 +559,45 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
         def _plain(self, status: int, text: str) -> None:
             self._send(Response(status, text, "text/plain; charset=utf-8"))
 
-        def _dispatch(self, method: str) -> None:
-            # A foreign Host header means DNS rebinding or a misrouted request: refuse it.
+        def _access(self) -> Access | None:
+            """The way in, or None for a request that does not belong to this socket."""
             host = self.headers.get("Host", "")
-            if not is_local_host(host):
+            if public:
+                # Only Caddy talks to this socket; it forwards the visitor's Host and appends
+                # the visitor's address to X-Forwarded-For.
+                if host.lower() != app.public_host:
+                    return None
+                forwarded = self.headers.get("X-Forwarded-For", "")
+                return Access(public=True, client=forwarded.rsplit(",", 1)[-1].strip())
+            # A foreign Host header means DNS rebinding or a misrouted request; proxy headers
+            # mean a proxy that should have used the public socket.
+            if not is_local_host(host) or any(
+                self.headers.get(h) for h in ("X-Forwarded-For", "X-Forwarded-Host")
+            ):
+                return None
+            return TUNNEL
+
+        def _origin_ok(self, origin: str, host: str) -> bool:
+            if public:
+                return origin == f"https://{app.public_host}"
+            netloc = urlsplit(origin).netloc
+            return is_local_host(netloc) and same_port(netloc, host)
+
+        def _dispatch(self, method: str) -> None:
+            access = self._access()
+            if access is None:
                 self._plain(421, "wrong host")
                 return
+            host = self.headers.get("Host", "")
             form: dict[str, list[str]] = {}
             if method == "POST":
                 # Cross-site posts (login lockout, guessing) are refused before anything else.
                 # "null" comes from privacy contexts (sandbox, redirects) and proves nothing, so
                 # Sec-Fetch-Site and the form tokens decide - refusing it would lock the owner out.
                 origin = self.headers.get("Origin")
-                if origin and origin != "null":
-                    netloc = urlsplit(origin).netloc
-                    if not is_local_host(netloc) or not same_port(netloc, host):
-                        self._plain(403, "cross-site request")
-                        return
+                if origin and origin != "null" and not self._origin_ok(origin, host):
+                    self._plain(403, "cross-site request")
+                    return
                 if self.headers.get("Sec-Fetch-Site", "same-origin") not in ("same-origin", "none"):
                     self._plain(403, "cross-site request")
                     return
@@ -454,7 +615,7 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
             path = self.path.split("?", 1)[0]
             cookies = parse_cookies(self.headers.get("Cookie"))
             with app_lock:
-                response = app.handle(method, path, cookies, form)
+                response = app.handle(method, path, cookies, form, access)
             if isinstance(response, KeyCheck):
                 # The OpenAI lookup takes up to 15 s: outside the lock, so the overview and the
                 # other pages keep answering meanwhile.
@@ -476,19 +637,27 @@ def make_handler(app: WebApp) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
-def make_server(app: WebApp, host: str, port: int) -> ThreadingHTTPServer:
-    # ADR-0005/0015: never reachable from the network; on the server only through an SSH tunnel.
+def make_server(app: WebApp, host: str, port: int, *, public: bool = False) -> ThreadingHTTPServer:
+    # ADR-0015/0024: never bound to the network; from outside only through Caddy (public
+    # socket) or an SSH tunnel.
     if host != LOCALHOST:
         raise ValueError(f"the web UI binds to {LOCALHOST} only, not {host!r}")
-    server = ThreadingHTTPServer((host, port), make_handler(app))
+    server = ThreadingHTTPServer((host, port), make_handler(app, public=public))
     server.daemon_threads = True
     return server
 
 
 def serve(
-    data_dir: Path, *, port: int, out: TextIO, host: str = LOCALHOST, db: Path | None = None
+    data_dir: Path,
+    *,
+    port: int,
+    out: TextIO,
+    host: str = LOCALHOST,
+    db: Path | None = None,
+    public_host: str | None = None,
+    public_port: int = DEFAULT_PUBLIC_PORT,
 ) -> None:
-    app = WebApp(data_dir, db=db)
+    app = WebApp(data_dir, db=db, public_host=public_host)
     server = make_server(app, host, port)
     bound = server.server_address[1]
     print(
@@ -496,9 +665,22 @@ def serve(
         file=out,
         flush=True,
     )
+    public_server = None
+    if public_host is not None:
+        public_server = make_server(app, host, public_port, public=True)
+        print(
+            f"Public: https://{public_host}/ through Caddy -> {LOCALHOST}:"
+            f"{public_server.server_address[1]}",
+            file=out,
+            flush=True,
+        )
+        threading.Thread(target=public_server.serve_forever, daemon=True).start()
     if app.setup_code:
         print(f"Einrichtungscode (einmalig): {app.setup_code}", file=out, flush=True)
     try:
         server.serve_forever()
     finally:
         server.server_close()
+        if public_server is not None:
+            public_server.shutdown()
+            public_server.server_close()

@@ -1,23 +1,105 @@
-"""Single-operator login for the web UI (ADR-0015): scrypt password hash, lockout, sessions."""
+"""Single-operator login for the web UI (ADR-0015, ADR-0024): scrypt hash, lockout, sessions.
+
+ADR-0024 adds the public way in (HTTPS through Caddy): a lockout per client that doubles up to
+an hour, a global ceiling, a signed device cookie that keeps the owner out of both, and a
+stricter password rule for logins from the internet.
+"""
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
 import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from llm_trading_bot.web.files import write_private
 
-# ADR-0015: the operator chose 8; scrypt, lockout and localhost-only binding carry the rest.
+# ADR-0015: the operator chose 8 for the tunnel; scrypt and the lockout carry the rest.
 MIN_PASSWORD_LENGTH = 8
+# ADR-0024: from the internet, 5 guesses per client and hour must not suffice for a short one.
+PUBLIC_MIN_PASSWORD_LENGTH = 12
 # ~16 MB and a few tens of ms per check: slow for guessing, fast enough for one operator.
 SCRYPT_N, SCRYPT_R, SCRYPT_P, KEY_LENGTH = 2**14, 8, 1, 32
 MAX_FAILURES = 5
 LOCKOUT_SECONDS = 60
+MAX_LOCKOUT_SECONDS = 3600
+GLOBAL_FAILURES_PER_HOUR = 100
 SESSION_SECONDS = 12 * 3600
+DEVICE_SECONDS = 90 * 86400
+MAX_TRACKED_CLIENTS = 10_000
+
+# Long but common: a dictionary attack tries these first. Lower-case, compared case-insensitively.
+COMMON_PASSWORDS = frozenset(
+    {
+        "123456789012",
+        "1234567890123",
+        "12345678901234",
+        "123456123456",
+        "111111111111",
+        "000000000000",
+        "qwertyuiopas",
+        "qwertzuiopue",
+        "qwertzuiopü",
+        "qwertyuiop123",
+        "qwertz123456",
+        "qwerty123456",
+        "asdfghjkl123",
+        "passwort1234",
+        "passwort12345",
+        "password1234",
+        "password12345",
+        "password123!",
+        "passwort123!",
+        "passwordpassword",
+        "passwortpasswort",
+        "iloveyou1234",
+        "letmein12345",
+        "welcome12345",
+        "willkommen123",
+        "hallo1234567",
+        "sommer2025!!",
+        "sommer2026!!",
+        "trustno1trustno1",
+        "administrator",
+        "administrator1",
+        "bitcoin12345",
+        "bitcoinbitcoin",
+        "tradingbot123",
+        "tradingbot2026",
+        "changeme1234",
+        "abc123abc123",
+        "abcdefghijkl",
+        "1q2w3e4r5t6y",
+        "1qaz2wsx3edc",
+        "zaq12wsxcde3",
+        "football1234",
+        "superman1234",
+        "dragon123456",
+        "sunshine1234",
+        "princess1234",
+        "monkey123456",
+        "baseball1234",
+        "starwars1234",
+        "pokemon12345",
+    }
+)
+
+
+def password_problem(password: str, *, public: bool) -> str:
+    """Why ``password`` is not good enough ("" if it is). New passwords always use the public
+    rule; for a login through the tunnel the ADR-0015 minimum still applies."""
+    minimum = PUBLIC_MIN_PASSWORD_LENGTH if public else MIN_PASSWORD_LENGTH
+    if len(password) < minimum:
+        return f"mindestens {minimum} Zeichen"
+    if public:
+        folded = password.casefold()
+        if folded in COMMON_PASSWORDS or len(set(folded)) <= 2 or folded.isdigit():
+            return "zu leicht zu erraten"
+    return ""
 
 
 def _scrypt(password: str, salt: bytes, n: int, r: int, p: int) -> bytes:
@@ -36,8 +118,10 @@ class PasswordStore:
         return self.path.exists()
 
     def set(self, password: str) -> None:
-        if len(password) < MIN_PASSWORD_LENGTH:
-            raise ValueError(f"password needs at least {MIN_PASSWORD_LENGTH} characters")
+        """Every new password follows the public rule (ADR-0024)."""
+        problem = password_problem(password, public=True)
+        if problem:
+            raise ValueError(f"password: {problem}")
         salt = secrets.token_bytes(16)
         record = {
             "version": 1,
@@ -61,11 +145,17 @@ class PasswordStore:
 
 
 class LoginGuard:
-    """After MAX_FAILURES wrong passwords in a row, every attempt is refused for a while."""
+    """After MAX_FAILURES wrong passwords in a row, every attempt is refused for a while.
 
-    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+    The tunnel's guard: a fixed LOCKOUT_SECONDS. ``doubling`` (the public way, ADR-0024) makes
+    every further lock twice as long, up to MAX_LOCKOUT_SECONDS, until a login succeeds.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic, *, doubling: bool = False):
         self.clock = clock
+        self.doubling = doubling
         self.failures = 0
+        self.locks = 0
         self.locked_until = 0.0
 
     def seconds_locked(self) -> int:
@@ -74,11 +164,107 @@ class LoginGuard:
     def failed(self) -> None:
         self.failures += 1
         if self.failures >= MAX_FAILURES:
-            self.locked_until = self.clock() + LOCKOUT_SECONDS
+            factor = 2**self.locks if self.doubling else 1
+            self.locked_until = self.clock() + min(LOCKOUT_SECONDS * factor, MAX_LOCKOUT_SECONDS)
+            self.locks += 1
             self.failures = 0
 
     def succeeded(self) -> None:
         self.failures = 0
+        self.locks = 0
+        self.locked_until = 0.0
+
+    def idle(self) -> bool:
+        """Nothing to remember any more: no failures, no lock (doubling resets only on success,
+        so a client that was locked stays tracked)."""
+        return self.failures == 0 and self.locks == 0
+
+
+def client_key(address: str) -> str:
+    """The lockout key of a client address: an IPv4 address, or the /64 of an IPv6 one (one
+    household or server gets a whole /64)."""
+    try:
+        ip = ipaddress.ip_address(address.strip())
+    except ValueError:
+        return "unknown"
+    if ip.version == 6:
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
+
+
+class PublicGuard:
+    """Lockouts of the public way: per client key, plus a global ceiling for unknown devices.
+
+    A device that once logged in (valid device cookie) is keyed by its device id and ignores
+    the global ceiling, so an attacker can neither lock the owner out nor guess through it.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self.clock = clock
+        self.guards: dict[str, LoginGuard] = {}
+        self.recent: deque[float] = deque()
+
+    def _guard(self, key: str) -> LoginGuard:
+        guard = self.guards.get(key)
+        if guard is None:
+            if len(self.guards) >= MAX_TRACKED_CLIENTS:
+                # Forget the harmless ones first; a flood of fresh addresses must not grow memory.
+                for k in [k for k, g in self.guards.items() if g.idle() or not g.seconds_locked()]:
+                    del self.guards[k]
+                if len(self.guards) >= MAX_TRACKED_CLIENTS:
+                    self.guards.pop(next(iter(self.guards)))
+            guard = self.guards[key] = LoginGuard(self.clock, doubling=True)
+        return guard
+
+    def _global_seconds(self) -> int:
+        now = self.clock()
+        while self.recent and self.recent[0] <= now - 3600:
+            self.recent.popleft()
+        if len(self.recent) >= GLOBAL_FAILURES_PER_HOUR:
+            return max(1, int(self.recent[0] + 3600 - now + 0.999))
+        return 0
+
+    def seconds_locked(self, key: str, *, device: bool) -> int:
+        own = self.guards[key].seconds_locked() if key in self.guards else 0
+        return own if device else max(own, self._global_seconds())
+
+    def failed(self, key: str, *, device: bool) -> None:
+        self._guard(key).failed()
+        if not device:
+            self.recent.append(self.clock())
+
+    def succeeded(self, key: str) -> None:
+        self.guards.pop(key, None)
+
+
+class DeviceKeys:
+    """Signs the device cookie: ``<id>.<expiry epoch>.<hmac>`` with a key kept in the data dir."""
+
+    def __init__(self, path: Path, wall_clock: Callable[[], float] = time.time) -> None:
+        self.path = path
+        self.wall_clock = wall_clock
+
+    def _key(self) -> bytes:
+        if not self.path.exists():
+            write_private(self.path, secrets.token_hex(32))
+        return bytes.fromhex(self.path.read_text(encoding="utf-8").strip())
+
+    def _sign(self, payload: str) -> str:
+        return hmac.new(self._key(), payload.encode("ascii"), hashlib.sha256).hexdigest()
+
+    def issue(self) -> str:
+        payload = f"{secrets.token_urlsafe(16)}.{int(self.wall_clock()) + DEVICE_SECONDS}"
+        return f"{payload}.{self._sign(payload)}"
+
+    def verify(self, token: str | None) -> str | None:
+        """The device id of a valid, unexpired token; None otherwise."""
+        if not token or token.count(".") != 2:
+            return None
+        device, expiry, signature = token.split(".")
+        payload = f"{device}.{expiry}"
+        if not expiry.isdigit() or not hmac.compare_digest(signature, self._sign(payload)):
+            return None
+        return device if int(expiry) > self.wall_clock() else None
 
 
 @dataclass(frozen=True)
@@ -113,6 +299,10 @@ class Sessions:
 
     def drop(self, token: str | None) -> None:
         self._sessions.pop(token or "", None)
+
+    def drop_others(self, token: str) -> None:
+        """After a password change only the session that changed it stays logged in."""
+        self._sessions = {t: s for t, s in self._sessions.items() if t == token}
 
 
 def new_setup_code() -> str:
