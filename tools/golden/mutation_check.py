@@ -8,7 +8,12 @@ Spec 004 adds mutations of the paper execution (paper/execution.py, tests/paper)
 
 Spec 005 adds mutations of the GPT layer (llm/*.py, tests/llm).
 
-Usage: uv run python tools/golden/mutation_check.py [--only strategy|paper|llm]
+Spec 012 adds the broker seam and the live locks (broker/*.py, tests/broker; core.py and cli.py
+with tests/test_core.py and tests/test_cli.py as group "cli"). The temporary copy also holds
+tools/, deploy/, scripts/ and uv.lock, which the broker guards read - without them every broker
+mutant would be "killed" by a missing file instead of by a test.
+
+Usage: uv run python tools/golden/mutation_check.py [--only strategy|paper|llm|service|broker|cli]
 """
 
 import os
@@ -31,6 +36,8 @@ REPO = Path(__file__).resolve().parents[2]
 EQUIVALENT = {
     "ensemble buy thr .55->.6",
     "noop control",
+    # - broker noop control: replaces a text with itself; proves the broker group reports survivors.
+    "broker noop control",
     "exec cash cap removed",
     "exec sell clamp at 0",
     "exec total room floor",
@@ -596,10 +603,143 @@ M += [
 ]
 
 
+# Spec 012 (ADR-0022): the broker seam and the live locks.
+BI, BL, BP, BC, BS = (
+    "broker/__init__.py",
+    "broker/live.py",
+    "broker/paper.py",
+    "broker/contract.py",
+    "broker/intents.py",
+)
+M += [
+    (
+        BL,
+        "LiveTradingLocked(NotImplementedError)",
+        "LiveTradingLocked(NotImplementedError)",
+        "broker noop control",
+    ),
+    (
+        BL,
+        '    raise LiveTradingLocked("live trading is locked until M2 (ADR-0004)")',
+        "    return None  # type: ignore[return-value]",
+        "broker live raises",
+    ),
+    (BI, "    refuse_live()", "    return PaperBroker()", "broker make_broker live"),
+    (BP, "            partial=partial,", "            partial=False,", "broker paper partial"),
+    (BP, "            stops=stops,", "            stops=None,", "broker paper stops"),
+    (BP, "            status=status,", '            status="OK",', "broker paper status"),
+    (
+        BP,
+        "return execution.mark(con, agent, qs, now, costs)",
+        "return execution.mark(con, agent, qs, now, Costs())",
+        "broker paper mark costs",
+    ),
+    (
+        BC,
+        "if type(self.operator_id) is not int or self.operator_id <= 0:",
+        "if self.operator_id <= 0:",
+        "broker operator_id int",
+    ),
+    (
+        BC,
+        "uuid.UUID) or self.client_order_id.version != 4:",
+        "uuid.UUID):",
+        "broker uuid4",
+    ),
+    (
+        BC,
+        "if (self.amount_quote is None) == (self.amount_base is None):",
+        "if False:",
+        "broker exactly one amount",
+    ),
+    (
+        BC,
+        "if type(value) is not Decimal:",
+        "if not isinstance(value, Decimal | float | int):",
+        "broker decimal only",
+    ),
+    (
+        BC,
+        "if self.settled and (self.fee is None or not self.fee_currency):",
+        "if False:",
+        "broker settled fee",
+    ),
+    (BC, "if not with_fills and self.fills:", "if False:", "broker no fills on failure"),
+    (BC, "if with_fills and not self.fills:", "if False:", "broker fills on success"),
+    (
+        BC,
+        "return OrderState.PARTIAL if fills else OrderState.EXPIRED",
+        "return OrderState.EXPIRED",
+        "broker partial by fills",
+    ),
+    (
+        BC,
+        "ROUND_FLOOR if side is OrderSide.BUY else ROUND_CEILING",
+        "ROUND_CEILING if side is OrderSide.BUY else ROUND_CEILING",
+        "broker buy limit rounds down",
+    ),
+    (
+        BC,
+        "ROUND_FLOOR if side is OrderSide.BUY else ROUND_CEILING",
+        "ROUND_FLOOR if side is OrderSide.BUY else ROUND_FLOOR",
+        "broker sell limit rounds up",
+    ),
+    (
+        BC,
+        'return _money("amount", amount).quantize(step, ROUND_DOWN)',
+        'return _money("amount", amount).quantize(step, ROUND_CEILING)',
+        "broker amount rounds down",
+    ),
+    (BC, 'if self.status != "trading":', "if False:", "broker market status"),
+    (BC, "base < self.min_base:", "base <= self.min_base:", "broker min base edge"),
+    (BC, "if type(value) is not str:", "if False:", "broker markets strings"),
+    (
+        BS,
+        "S.UNKNOWN: frozenset({S.FILLED, S.PARTIAL, S.EXPIRED}),",
+        "S.UNKNOWN: frozenset({S.FILLED, S.PARTIAL, S.EXPIRED, S.SENT}),",
+        "broker unknown resend",
+    ),
+    (
+        BS,
+        "S.PLANNED: frozenset({S.SENT, S.UNKNOWN, S.ABORTED}),",
+        "S.PLANNED: frozenset({S.SENT, S.UNKNOWN, S.ABORTED, S.FILLED}),",
+        "broker planned skips send",
+    ),
+    (
+        BS,
+        "return S.UNKNOWN if state is S.PLANNED else state",
+        "return state",
+        "broker restart planned unknown",
+    ),
+    (
+        BS,
+        "OPEN = frozenset({S.PLANNED, S.SENT, S.UNKNOWN})",
+        "OPEN = frozenset({S.PLANNED, S.SENT})",
+        "broker may_plan unknown",
+    ),
+    (
+        "core.py",
+        '        raise NotImplementedError("live trading is not enabled in this version")',
+        "        return TradingMode.PAPER",
+        "cli live refused",
+    ),
+    (
+        "cli.py",
+        '    mode = parse_mode(os.environ.get("TRADING_MODE"))',
+        "    mode = parse_mode(None)",
+        "cli parse_mode call",
+    ),
+]
+
+# Top-level modules and the tests that cover them (Spec 012).
+TOP_LEVEL = {"core.py": "cli", "cli.py": "cli"}
+GROUP_TESTS = {"cli": ["tests/test_core.py", "tests/test_cli.py"]}
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        for item in ("src", "tests", "pyproject.toml"):
+        for item in ("src", "tests", "tools", "deploy", "scripts", "pyproject.toml", "uv.lock"):
             source = REPO / item
             if source.is_dir():
                 shutil.copytree(source, root / item, ignore=shutil.ignore_patterns("__pycache__"))
@@ -611,12 +751,15 @@ def main() -> int:
         only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
 
         def group_of(fname: str) -> str:
+            if fname in TOP_LEVEL:
+                return TOP_LEVEL[fname]
             return fname.split("/")[0] if "/" in fname else "strategy"
 
         selected = [m for m in M if only is None or group_of(m[0]) == only]
         for fname, old, new, label in selected:
             group = group_of(fname)
             path = package / (fname if group != "strategy" else f"strategy/{fname}")
+            tests = GROUP_TESTS.get(group, [f"tests/{group}"])
             original = path.read_text(encoding="utf-8")
             if old not in original:
                 print(f"{'PATTERN MISSING':16} {label}")
@@ -633,7 +776,7 @@ def main() -> int:
                         "-x",
                         "-p",
                         "no:cacheprovider",
-                        f"tests/{group}",
+                        *tests,
                     ],
                     cwd=root,
                     capture_output=True,

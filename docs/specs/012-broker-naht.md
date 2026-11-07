@@ -147,7 +147,7 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
   Fixture speichern; `MarketRules`; `intents.py` (AK7, AK8)
 - [x] 3. Sperr-Tests: Order-Pfad-Prüfung mit Negativtests, Konfiguration, fremde DB, `parse_mode`-Varianten,
   CLI-Abbruch (AK4, AK5, AK6, AK9)
-- [ ] 4. Mutationstest: Kopierliste, `group_of`, Einträge `broker`/`cli`, `broker noop control` (AK10); Nachweis AK3
+- [x] 4. Mutationstest: Kopierliste, `group_of`, Einträge `broker`/`cli`, `broker noop control` (AK10); Nachweis AK3
 - [ ] 5. ARCHITEKTUR, Ergebnis; Prüfung (Workflow), PR (AK11)
 
 ## Risiken & offene Fragen
