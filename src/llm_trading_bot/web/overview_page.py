@@ -343,9 +343,12 @@ def overview_page(
 ) -> str:
     """``view`` is None when the database cannot be shown; ``problem`` then says why. ``now``
     keeps the ticker running across reloads. ``trading`` is the pause note (Spec 011 AK6)."""
+    # The pause comes from the status file and secrets.env, not from the DB: show it always.
+    banner = f'<div class="msg bad" role="status">{escape(trading)}</div>' if trading else ""
     if view is None:
         body = (
-            '<section class="panel">'
+            banner
+            + '<section class="panel">'
             + pages._head("00", "Übersicht", "amber")
             + f'<div class="msg bad" role="status">{escape(problem)}</div>'
             '<p class="hint">Die Übersicht liest die Datenbank des Bots nur lesend (ADR-0016). '
@@ -354,7 +357,7 @@ def overview_page(
         )
     else:
         body = (
-            (f'<div class="msg bad" role="status">{escape(trading)}</div>' if trading else "")
+            banner
             + _readouts(view)
             + '<div class="grid">'
             + '<section class="panel span-5">'

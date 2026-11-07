@@ -228,7 +228,8 @@ class WebApp:
             problem = f"Datenbank nicht lesbar ({type(exc).__name__})."
         else:
             return Response(200, overview_page(view, csrf=session.csrf, now=now, trading=note))
-        return Response(200, overview_page(None, csrf=session.csrf, problem=problem, now=now))
+        page = overview_page(None, csrf=session.csrf, problem=problem, now=now, trading=note)
+        return Response(200, page)
 
     def _settings(
         self, session: Session, message: str = "", ok: bool = True, status: int = 200

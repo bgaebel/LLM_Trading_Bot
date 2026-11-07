@@ -405,7 +405,8 @@ def test_resume_request_is_applied_at_the_start_of_the_round(con: sqlite3.Connec
     report = paper_cycle(
         con, ScenarioClient(), TREND, costs=Costs(), clock=lambda: NOW, controls=request
     )
-    assert report.released == ["trend"] and report.refused == []
+    assert report.released == ["trend"]
+    assert report.refused == [("gpt-sol", "unknown depot")]  # not in this database
     assert all(m.status == "OK" for m in report.markets)  # trades again in the same round
     old = Controls(resumes={"trend": NOW - 2 * 86_400})
     con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
@@ -414,3 +415,69 @@ def test_resume_request_is_applied_at_the_start_of_the_round(con: sqlite3.Connec
     )
     assert again.released == [] and again.refused == [("trend", "the depot still holds coins")]
     assert epoch(iso(NOW)) == NOW
+
+
+def test_stop_in_the_final_valuation_sells_with_the_configured_costs(
+    con: sqlite3.Connection,
+) -> None:
+    """Review of Spec 011: the per-minute stop must use TAKER_FEE/SLIPPAGE, not the defaults."""
+    client = ScenarioClient()
+    costs = Costs(0.004, 0.001)
+    paper_cycle(con, client, TREND, costs=costs, clock=lambda: NOW)
+    con.execute("UPDATE portfolios SET peak=20000 WHERE agent='trend'")
+    report = paper_cycle(con, client, TREND, costs=costs, clock=lambda: NOW + 5)
+    assert [s.agent for s in report.risk_stops] == ["trend"]
+    rows = con.execute(
+        "SELECT symbol, fill, notional, fee, slip_rate FROM trades"
+        " WHERE agent='trend' AND side='RISK_SELL' ORDER BY id"
+    ).fetchall()
+    stored = {r[0]: (r[1], r[2]) for r in con.execute("SELECT symbol, bid, ask FROM market")}
+    assert len(rows) == 2
+    for symbol, fill, notional, fee, slip in rows:
+        assert slip == 0.001 and fill == stored[symbol][0] * (1 - 0.001)
+        assert fee == notional * 0.004
+
+
+@pytest.mark.parametrize(("start", "step"), [(0.9, 2.45), (0.0, 2.6)])
+def test_quote_age_counts_from_the_stored_second(
+    con: sqlite3.Connection, start: float, step: float
+) -> None:
+    """Review of Spec 011: stored stamps are whole seconds. A quote fetched at x.9 is already
+    one second older in the database; the feed must fetch again instead of dropping it."""
+    clock = Ticking(step)
+    clock.now = NOW + start
+    client = SlowCandles(clock)
+    report = paper_cycle(con, client, TREND, costs=Costs(), clock=clock)
+    assert report.complete and all(m.traded for m in report.markets)
+    assert client.quote_calls == 3
+
+
+def test_final_valuation_fetches_again_when_nothing_else_did(
+    gpt_con: sqlite3.Connection,
+) -> None:
+    """Review of Spec 011 (AK8): no classic depot, GPT not asked (paused), slow candles - only
+    the final valuation can fetch again, and it must, or no depot gets an equity point."""
+    clock = Ticking(3.0)
+    client = SlowCandles(clock)
+    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna"})
+    paper_cycle(gpt_con, client, config, costs=Costs(), model=FakeModel(), clock=clock)
+    clock.now += 60
+    before = client.quote_calls
+    report = paper_cycle(
+        gpt_con, client, config, costs=Costs(), model=FakeModel(), clock=clock, controls=PAUSED
+    )
+    assert client.quote_calls - before == 3  # start, snapshot, final valuation
+    assert {e.agent for e in report.equity} == {"gpt-luna", BUYHOLD} and not report.unvalued
+
+
+def test_release_of_a_depot_switched_off_meanwhile_is_applied(tmp_path: Path) -> None:
+    """Review of Spec 011: the web offers the release for every stopped depot."""
+    db = open_db(tmp_path / "off.db", agents=("trend", "breakout", BUYHOLD))
+    db.execute("UPDATE portfolios SET halted=1 WHERE agent='breakout'")
+    request = Controls(resumes={"breakout": NOW - 60, "nobody": NOW - 60})
+    report = paper_cycle(
+        db, ScenarioClient(), TREND, costs=Costs(), clock=lambda: NOW, controls=request
+    )
+    assert report.released == ["breakout"] and report.refused == [("nobody", "unknown depot")]
+    assert db.execute("SELECT halted FROM portfolios WHERE agent='breakout'").fetchone()[0] == 0
+    db.close()

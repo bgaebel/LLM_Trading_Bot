@@ -51,20 +51,15 @@ def parse_resumes(text: str) -> tuple[dict[str, float], list[str]]:
             continue
         agent, sep, ts = item.partition("@")
         try:
-            if not sep or not agent:
+            if not sep or not agent or datetime.fromisoformat(ts).tzinfo is None:
                 raise ValueError(item)
             at = epoch(ts)
-            if datetime.fromisoformat(ts).tzinfo is None:
-                raise ValueError(item)
-        except ValueError:
+        except (ValueError, OSError, OverflowError):
+            # OSError/OverflowError: out-of-range times on some platforms (e.g. Windows)
             bad.append(item[:80])
             continue
         out[agent] = max(at, out.get(agent, at))
     return out, bad
-
-
-def format_resumes(resumes: Mapping[str, str]) -> str:
-    return ",".join(f"{agent}@{ts}" for agent, ts in sorted(resumes.items()))
 
 
 def _paused(value: str) -> bool | None:
@@ -79,7 +74,9 @@ def read_controls(env: Mapping[str, str], secrets: Path) -> Controls:
         stored = load_env_file(secrets)
     except (OSError, UnicodeError, ValueError) as exc:
         stored = None
-        warnings.append(f"{secrets.name} unreadable ({type(exc).__name__}): trading paused")
+        # Say what follows from it: with BOT_PAUSED in the environment only releases are lost.
+        effect = "release requests ignored" if PAUSE_FIELD in env else "trading paused"
+        warnings.append(f"{secrets.name} unreadable ({type(exc).__name__}): {effect}")
     resumes: dict[str, float] = {}
     if stored is not None:
         resumes, bad = parse_resumes(stored.get(RESUME_FIELD, ""))
@@ -93,7 +90,11 @@ def read_controls(env: Mapping[str, str], secrets: Path) -> Controls:
     paused = _paused(raw)
     if paused is None:
         warnings.append(f"{PAUSE_FIELD}={raw[:20]!r} is not 1 or 0: trading paused")
-        return Controls(True, INVALID, resumes, tuple(warnings))
+        # From the environment it is still the environment that decides: the web switch
+        # cannot change it, and the page must say so.
+        return Controls(
+            True, ENVIRONMENT if source == ENVIRONMENT else INVALID, resumes, tuple(warnings)
+        )
     if not paused and source == FILE:
         source = ""  # trading as by default
     return Controls(paused, source, resumes, tuple(warnings))

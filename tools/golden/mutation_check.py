@@ -519,8 +519,39 @@ M += [
 
 
 # Spec 011 (ADR-0021): trading pause and release of stopped depots.
-PC, PR = "paper/cycle.py", "paper/risk.py"
+PC, PR, SR = "paper/cycle.py", "paper/risk.py", "service/run.py"
 M += [
+    (
+        PC,
+        "mark(con, name, latest, now, costs)",
+        "mark(con, name, latest, now, Costs())",
+        "cycle stop costs",
+    ),
+    (
+        PC,
+        "    latest = feed.current()\n",
+        "    latest = fresh_quotes(con, now_epoch=clock())\n",
+        "cycle final refetch",
+    ),
+    (
+        PC,
+        "self.fetched_at = float(int(self.clock()))",
+        "self.fetched_at = self.clock()",
+        "cycle quote age floor",
+    ),
+    (
+        SR,
+        "ran = report.equity or report.unvalued",
+        "ran = report.equity",
+        "service unvalued incomplete",
+    ),
+    (SR, "if (agent, why) not in self.refusals:", "if True:", "service refusal once"),
+    (
+        SR,
+        "self.refusals = {r for r in self.refusals if r[0] != agent}",
+        "pass",
+        "service refusal reset",
+    ),
     (PC, 'status="PAUSED" if paused else "OK"', 'status="OK"', "pause classic trades"),
     (PC, "== set(SYMBOLS) and not controls.paused:", "== set(SYMBOLS):", "pause buyhold buys"),
     (PC, "paused=controls.paused,\n        ):", "paused=False,\n        ):", "pause gpt asked"),

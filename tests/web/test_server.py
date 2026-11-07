@@ -725,3 +725,21 @@ def test_an_expired_or_used_request_shows_the_button_again(running: Running) -> 
     (running.data / "secrets.env").write_text(f"BOT_RESUME=trend@{old}\n", encoding="utf-8")
     page = running.browser.request("GET", "/settings")[2]
     assert "Wieder freigeben" in page and "Freigabe angefordert" not in page
+
+
+def test_pause_banner_shows_even_without_a_database(running: Running) -> None:
+    setup(running)
+    _status(running, trading_paused=True, pause_source="file")
+    (running.data / "secrets.env").write_text("BOT_PAUSED=1\n", encoding="utf-8")
+    page = running.browser.request("GET", "/")[2]
+    assert "Noch keine Daten" in page
+    assert "Handel pausiert – nur der Risikostopp verkauft noch" in page
+
+
+def test_an_invalid_pause_in_the_environment_shows_no_switch(running: Running) -> None:
+    _bot_db(running.data / "bot.db")
+    setup(running)
+    _status(running, trading_paused=True, pause_source="environment")
+    page = running.browser.request("GET", "/settings")[2]
+    assert "durch die Umgebung des Dienstes festgelegt" in page
+    assert 'action="/settings/pause"' not in page

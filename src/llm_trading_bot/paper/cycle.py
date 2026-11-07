@@ -136,7 +136,9 @@ class _Feed:
 
     def fetch(self) -> set[Symbol]:
         """Fetch and store; the markets stored by THIS fetch (a failed one stores none)."""
-        self.fetched_at = self.clock()
+        # Whole seconds, like the stored stamps (iso): the stored age is never above
+        # clock() - fetched_at, so current() fetches again before fresh_quotes drops a quote.
+        self.fetched_at = float(int(self.clock()))
         try:
             book = self.client.quotes()
         except DATA_ERRORS as exc:
@@ -148,9 +150,11 @@ class _Feed:
         return stored
 
     def current(self) -> dict[Symbol, Quote]:
-        if self.clock() - self.fetched_at > QUOTE_MAX_AGE:
+        now = self.clock()
+        if now - self.fetched_at > QUOTE_MAX_AGE:
             self.fetch()
-        return fresh_quotes(self.con, now_epoch=self.clock())
+            now = self.clock()
+        return fresh_quotes(self.con, now_epoch=now)
 
 
 def paper_cycle(
@@ -182,9 +186,9 @@ def paper_cycle(
     controls = controls or Controls()
     report = CycleReport(at, config.agents, paused=controls.paused)
     feed = _Feed(con, client, clock)
+    # Also depots switched off meanwhile: the web offers the release for every stopped depot,
+    # and a refusal must be reported, not skipped (Spec 011 AK5).
     for agent, requested_at in controls.resumes.items():
-        if agent not in config.agents:
-            continue
         why = release(con, agent, requested_at, clock())
         if not why:
             report.released.append(agent)

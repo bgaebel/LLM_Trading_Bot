@@ -360,3 +360,20 @@ def test_paper_cycle_reads_the_pause_from_secrets(tmp_path: Path) -> None:
     code, text = run_cycle(tmp_path / "bot.db", ScenarioClient())
     assert code == EXIT_OK and text.count("[PAUSED]") == 2
     assert "buy & hold: already invested" in text  # nothing bought while paused
+
+
+def test_paper_cycle_reports_controls_releases_and_stops(tmp_path: Path) -> None:
+    from llm_trading_bot.paper.db import open_db
+
+    db = tmp_path / "bot.db"
+    con = open_db(db, agents=("trend", "buyhold"))
+    con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
+    con.commit()
+    con.close()
+    (tmp_path / "secrets.env").write_text(
+        "BOT_PAUSED=yes\nBOT_RESUME=trend@2027-01-15T07:59:00+00:00\n", encoding="utf-8"
+    )
+    _code, text = run_cycle(db, ScenarioClient())
+    assert "trading controls: BOT_PAUSED='yes' is not 1 or 0: trading paused" in text
+    assert "trading paused: no trades except forced sales" in text
+    assert "risk stop trend released on request" in text

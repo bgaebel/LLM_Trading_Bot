@@ -194,6 +194,18 @@ def print_cycle(report: CycleReport, costs: Costs, *, out: TextIO) -> None:
     )
     if report.quotes_error:
         print(f"quotes: {report.quotes_error}", file=out)
+    if report.paused:
+        print("trading paused: no trades except forced sales of the drawdown stop", file=out)
+    for agent in report.released:
+        print(f"risk stop {agent} released on request", file=out)
+    for agent, why in report.refused:
+        print(f"release of {agent} not applied: {why}", file=out)
+    for stop in report.risk_stops:
+        print(
+            f"risk stop {stop.agent}: equity {stop.equity:.2f} EUR below 90 % of its peak "
+            f"{stop.peak:.2f} EUR - sold out and halted",
+            file=out,
+        )
     if not report.equity and not report.unvalued:
         print("no fresh quotes - no decisions, nothing traded", file=out)
         return
@@ -229,7 +241,10 @@ def run_paper_cycle(
     environment does not set; the environment always wins.
     """
     secrets_path = secrets or db.parent / "secrets.env"
-    process_env = env  # read_controls tells a pause set in the environment from one in the file
+    # read_controls tells a pause set in the environment from one in the file.
+    controls = read_controls(env, secrets_path)
+    for warning in controls.warnings:
+        print(f"trading controls: {warning}", file=out)
     try:
         env = {**load_env_file(secrets_path), **env}
         config = load_config(env)
@@ -249,7 +264,7 @@ def run_paper_cycle(
                     costs=costs,
                     model=model,
                     clock=clock,
-                    controls=read_controls(process_env, secrets_path),
+                    controls=controls,
                 )
             finally:
                 con.close()

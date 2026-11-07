@@ -53,7 +53,9 @@ def test_pause_from_the_environment_wins(tmp_path: Path) -> None:
     c = controls(tmp_path, "", {"BOT_PAUSED": "1"})
     assert (c.paused, c.source) == (True, "environment")
     c = controls(tmp_path, "", {"BOT_PAUSED": "maybe"})
-    assert (c.paused, c.source) == (True, "invalid")
+    # Still the environment decides: the web switch cannot change it (review of Spec 011).
+    assert (c.paused, c.source) == (True, "environment")
+    assert "is not 1 or 0: trading paused" in c.warnings[0]
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
@@ -78,3 +80,20 @@ def test_resume_requests_are_parsed_per_depot(tmp_path: Path) -> None:
     }
     assert len(c.warnings) == 4 and not c.paused
     assert parse_resumes("") == ({}, [])
+
+
+def test_unreadable_file_with_the_pause_in_the_environment_says_what_follows(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "secrets.env").write_bytes(b"\xff\xfe")
+    c = read_controls({"BOT_PAUSED": "0"}, tmp_path / "secrets.env")
+    assert (c.paused, c.source) == (False, "environment")
+    assert c.warnings == ("secrets.env unreadable (UnicodeDecodeError): release requests ignored",)
+
+
+@pytest.mark.parametrize(
+    "ts", ["1969-01-01T00:00:00", "0001-01-01T00:00:00", "9999-12-31T23:59:59", "2026-11-07"]
+)
+def test_naive_or_odd_resume_times_are_skipped_not_raised(ts: str) -> None:
+    resumes, bad = parse_resumes(f"trend@{ts},gpt-luna@2026-11-07T08:00:00+00:00")
+    assert list(resumes) == ["gpt-luna"] and bad == [f"trend@{ts}"]
