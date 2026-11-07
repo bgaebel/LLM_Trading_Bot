@@ -177,7 +177,10 @@ def test_caddyfile_sends_hsts_and_no_server_header(site: str) -> None:
 def test_caddyfile_keeps_no_access_log_and_changes_no_request_headers() -> None:
     for name, lines in caddy_blocks().items():
         for line in lines:
-            assert not re.match(r"(log|header_up|header_down)\b", line), (name, line)
+            assert not re.match(r"(log|header_up)\b", line), (name, line)
+            # Only removing the app's Server header on the way out is allowed.
+            if line.startswith("header_down"):
+                assert line == "header_down -Server", (name, line)
             assert "trusted_proxies" not in line  # X-Forwarded-For only from Caddy itself
 
 
