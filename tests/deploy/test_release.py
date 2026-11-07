@@ -523,18 +523,11 @@ def test_a_failed_unit_install_never_switches_or_starts_the_release(box: Sandbox
     box.run("deploy", sha(1), "botsvc")
     units = box.root / "etc/systemd/system"
     box.upload(sha(2))
-    # Neither replace nor overwrite: read-only files in a read-only directory (tests do not run
-    # as root, so `install -m 644` really fails).
-    files = [p for p in units.iterdir() if p.is_file()]
-    for p in files:
-        p.chmod(0o444)
-    units.chmod(0o555)
-    try:
-        result = box.run("deploy", sha(2), "botsvc", check=False)
-    finally:
-        units.chmod(0o755)
-        for p in files:
-            p.chmod(0o644)
+    # A file where the unit directory belongs: `install -d` fails, even for root (CI may be root,
+    # so permissions alone do not make it fail).
+    units.rename(units.with_name("system.moved"))
+    units.write_text("not a directory", encoding="utf-8")
+    result = box.run("deploy", sha(2), "botsvc", check=False)
     assert result.returncode != 0, result.stdout + result.stderr
     assert box.current() == sha(1)  # never switched to the half-installed release
 
