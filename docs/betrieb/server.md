@@ -255,10 +255,12 @@ ssh <alias> 'sudo ss -ltnp | grep -E ":(80|443|2019|8787|8788) "'
 bash scripts/deploy.sh <alias> <dienst> status
 ```
 `status` nennt zusätzlich `public host: <domain>` (oder `off`) und `caddy: <version>, active`. Logs von Caddy (es
-gibt bewusst kein Zugriffslog, nur Start- und Zertifikatsmeldungen):
+gibt bewusst kein Zugriffslog, nur Start-, Zertifikats- und Fehlermeldungen). Seit Spec 014 schreibt Caddy in den
+Journal-Namensraum des Bots:
 ```bash
-ssh <alias> 'sudo journalctl -u caddy -n 50 --no-pager'
+ssh <alias> 'sudo journalctl --namespace=llm-trading-bot -u caddy -n 50 --no-pager'
 ```
+Was systemd über die Unit meldet (Start, Stopp, Absturz), steht im System-Journal: `sudo journalctl -u caddy -n 20`.
 
 ### Abschalten
 ```bash
@@ -266,7 +268,92 @@ bash scripts/deploy.sh <alias> <dienst> public off
 ```
 Entfernt die Domain-Datei, stoppt und deaktiviert Caddy, löscht die ufw-Regeln für 80/443, erzeugt die Units ohne
 öffentlichen Listener neu und startet die Web-Unit neu. Das Caddy-Paket bleibt installiert. Der Tunnel geht weiter.
+Die Protokoll-Grenzen aus Spec 014 (Drop-ins, `ufw logging off`) bleiben stehen.
 
 ### Passwort zurücksetzen
 Nur per Tunnel, wie oben unter „Passwort vergessen“: Öffentlich gibt es keine Einrichtung – ohne Passwort zeigt
 `https://<domain>/` nur „Einrichtung nur per SSH-Tunnel“ (503). Der Einrichtungscode steht im Journal.
+
+## Impressum und Datenschutz (Spec 014, ADR-0025)
+Jede Seite verlinkt `/impressum` und `/datenschutz`, beide ohne Login (öffentlich und per Tunnel). Die
+Datenschutzerklärung kommt aus dem Repo; das **Impressum** (Name, Anschrift, Kontakt) liegt nur auf dem Server und
+lokal außerhalb des Repos – nie im Repo, nie in einem Commit.
+
+| Was | Wo | Wer |
+|---|---|---|
+| Impressum | `/etc/llm-trading-bot/impressum.md`; die Web-Unit übergibt den Pfad fest mit `--impressum` | root, 644 |
+| Vorlage | `deploy/impressum.example.md` (nur Platzhalter) | Repo |
+| Caddy-Log | Drop-in `caddy.service.d/10-llm-trading-bot.conf` mit `LogNamespace=llm-trading-bot` | root, 644 |
+| Namensraum-Journal | `/etc/systemd/journald@llm-trading-bot.conf` (aus jedem Release): 200 MB, `MaxRetentionSec=14day`, `MaxFileSec=1day`, `ForwardToSyslog=no` | root, 644 |
+| System-Journal | Drop-in `/etc/systemd/journald.conf.d/50-llm-trading-bot.conf`: `MaxRetentionSec=14day`, `MaxFileSec=1day` | root, 644 |
+| Firewall-Log | `ufw logging off` | – |
+
+### Impressum hochladen und ändern
+1. Vorlage kopieren – **außerhalb** des Repo-Ordners, z. B. nach `~/llm-trading-bot/impressum.md` – und die
+   Platzhalter (`__OPERATOR_NAME__`, `__CO_ADDRESS__`, `__CO_STREET__`, `__CO_POSTCODE_CITY__`, `kontakt@<domain>`)
+   ausfüllen. Auszeichnung: `# `/`## ` Überschriften, `- ` Listen, Leerzeile trennt Absätze, E-Mail-Adressen werden
+   zu Links.
+2. Hochladen (mit Zustimmung):
+   ```bash
+   bash scripts/deploy.sh <alias> <dienst> impressum <datei>
+   ```
+   Lokal geprüft: UTF-8, nicht leer, kein NUL-Byte, höchstens 16384 Byte, keine Platzhalter mehr; BOM und CRLF
+   werden vorher entfernt bzw. zu LF. Verbindung 1 lädt die Datei nach `incoming/impressum-<sha256>.md`,
+   Verbindung 2 führt `release.sh impressum <sha256>` des neuesten grünen Commits unter der Deploy-Sperre aus:
+   Hash prüfen, erneut prüfen, `/etc/llm-trading-bot` anlegen (755), Datei per Umbenennen austauschen, eingehende
+   Kopie löschen. Gleicher Inhalt → `changes: 0`. Der Inhalt steht nie in der Ausgabe oder in `deploy.log`.
+3. Wirkt ab dem nächsten Abruf, kein Neustart. Ändern = Datei lokal ändern, Schritt 2 wiederholen.
+
+`status` meldet `impressum: ok (<Bytes> B, sha256 <12 Zeichen>)`, `missing` oder `INVALID (<Grund>)` und mit
+`web unit:`, ob die aktive Web-Unit `--impressum` übergibt. Fehlt die Datei oder ist sie ungültig, antwortet
+`/impressum` mit 503 „Impressum nicht hinterlegt“, alles andere läuft weiter. Ein Rückfall auf ein Release vor
+Spec 014 nimmt die Rechtstexte offline (die Datei bleibt liegen) und setzt das Namensraum-Journal auf dessen alte
+Datei zurück – dann zügig wieder vorwärts deployen oder `public off`.
+
+### Protokolle und Fristen
+Besucherdaten (IP-Adresse, aufgerufene Adresse, Browserkennung) stehen nur in Warnungen von Caddy; es gibt kein
+Zugriffslog. `public <domain>` richtet die Grenzen ein (idempotent, beim zweiten Lauf `changes: 0`):
+- Caddy loggt in den Namensraum `llm-trading-bot` (eigene Meldungen:
+  `journalctl --namespace=llm-trading-bot -u caddy`), nicht mehr ins System-Journal und nicht nach `/var/log/syslog`.
+- Namensraum und System-Journal löschen ganze Dateien nach 14 Tagen, jede Datei umfasst höchstens einen Tag:
+  Einträge sind höchstens 15 Tage alt. Das gilt auch für SSH- und Kernel-Meldungen im System-Journal.
+- systemd-journald startet nur neu, wenn sich sein Drop-in geändert hat; Caddy nur, wenn sich etwas geändert hat.
+- `ufw logging off`: Die Firewall schreibt keine abgewiesenen Verbindungen mehr (`kern.log`, `ufw.log`, `syslog`).
+
+Prüfen:
+```bash
+ssh <alias> 'systemctl show caddy -p LogNamespace; sudo ufw status verbose | grep Logging'
+```
+```bash
+ssh <alias> 'sudo journalctl --namespace=llm-trading-bot --disk-usage; sudo journalctl --disk-usage'
+```
+
+### Einmalig aufräumen (nur mit Zustimmung)
+Vor Spec 014 standen Caddy-Warnungen und Firewall-Meldungen ohne passende Frist im System-Journal und in
+`/var/log`. Einmalig nach `public <domain>` mit 014 – **nur mit ausdrücklicher Zustimmung**, gelöscht ist gelöscht:
+```bash
+ssh <alias> 'sudo journalctl --rotate && sudo journalctl --vacuum-time=1s'
+```
+Leert das System-Journal (auch alte SSH- und Systemmeldungen), der Namensraum des Bots bleibt.
+```bash
+ssh <alias> 'ls /var/log/ufw.log* /var/log/kern.log* /var/log/syslog*'
+```
+```bash
+ssh <alias> 'sudo truncate -s 0 /var/log/ufw.log* /var/log/kern.log* /var/log/syslog*'
+```
+Erst ansehen, dann leeren: Firewall-, Kernel- und Syslog-Dateien samt Rotationen (`/var/log` ist lesbar, die
+Muster löst schon die Shell des Admins auf). Die Dateien bleiben bestehen, logrotate rotiert weiter.
+
+### Reihenfolge beim ersten Einrichten (Spec 014 AK12, alles mit Zustimmung)
+1. Nutzer: Postfach `kontakt@<domain>` bei Migadu eingerichtet und erreichbar, AVV mit Hetzner und Migadu
+   geprüft, Impressum und Datenschutzerklärung gelesen und freigegeben.
+2. `bash scripts/deploy.sh <alias> <dienst> impressum <datei>`, danach `status`.
+3. Deploy des Release mit Spec 014 (`deploy`).
+4. `bash scripts/deploy.sh <alias> <dienst> public <domain>` erneut (Caddy-Drop-in, Journal-Grenzen, Logging aus).
+5. Einmalig aufräumen (oben), nur mit Zustimmung.
+6. Prüfen:
+   - Von außen `/impressum` und `/datenschutz` mit 200 ohne Login, Links im Fuß der Login-Seite:
+     `curl -s -o /dev/null -w '%{http_code}\n' https://<domain>/impressum`
+   - `systemctl show caddy -p LogNamespace` zeigt `LogNamespace=llm-trading-bot`.
+   - Eine neue Caddy-Meldung steht nur im Namensraum, ein Cookie darin geschwärzt.
+   - `ufw status verbose` zeigt `Logging: off`.
