@@ -91,10 +91,21 @@ def test_units_are_hardened_and_write_only_the_data_directory(path: Path) -> Non
     assert options(path)["Install"]["WantedBy"] == "multi-user.target"
 
 
+def exec_starts(path: Path) -> list[str]:
+    """The ExecStart lines in order: a oneshot unit may have several, which configparser refuses."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return [line.removeprefix("ExecStart=") for line in lines if line.startswith("ExecStart=")]
+
+
+def options_besides_exec_start(path: Path) -> dict[str, dict[str, str]]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return parse_options("\n".join(ln for ln in lines if not ln.startswith("ExecStart=")))
+
+
 def test_backup_unit_copies_read_only_into_the_backup_directory() -> None:
-    s = options(BACKUP)["Service"]
+    s = options_besides_exec_start(BACKUP)["Service"]
     assert s["Type"] == "oneshot" and s["User"] == "__SERVICE_USER__"
-    assert s["ExecStart"] == (
+    assert exec_starts(BACKUP)[0] == (
         "__APP_DIR__/.venv/bin/trading-bot backup --db __DATA_DIR__/bot.db"
         f" --dir __BACKUP_DIR__/daily --keep {KEEP}"
     )
@@ -102,7 +113,25 @@ def test_backup_unit_copies_read_only_into_the_backup_directory() -> None:
     assert s["ProtectSystem"] == "strict" and s["NoNewPrivileges"] == "yes"
     assert s["UMask"] == "0077" and s["CapabilityBoundingSet"] == ""
     assert s["RestrictAddressFamilies"] == "AF_UNIX"  # a backup never needs the network
-    assert "Install" not in options(BACKUP)  # started by the timer only
+    assert "Install" not in options_besides_exec_start(BACKUP)  # started by the timer only
+
+
+def test_backup_unit_copies_observations_in_its_own_invocation_after_bot_db() -> None:
+    # Spec 015 AK6: "-" so its failure never fails the unit; second, so it never delays or
+    # skips the copy of the trade history; its own directory, so rotations never meet.
+    bot, observations = exec_starts(BACKUP)
+    assert not bot.startswith("-")
+    assert observations == (
+        "-__APP_DIR__/.venv/bin/trading-bot backup --profile observations --if-exists"
+        f" --db __DATA_DIR__/observations.db --dir __BACKUP_DIR__/observations/daily --keep {KEEP}"
+    )
+    release = RELEASE.read_text(encoding="utf-8")
+    # release.sh tells a release from Spec 015 on by this line (knows_observations).
+    pattern = re.search(r"grep -qsE '([^']+)'", release[release.index("knows_observations() {") :])
+    assert pattern and re.search(pattern.group(1), f"ExecStart={observations}")
+    assert not re.search(pattern.group(1), f"ExecStart={bot}")
+    comments = [ln for ln in BACKUP.read_text(encoding="utf-8").splitlines() if ln.startswith("#")]
+    assert not any(re.search(pattern.group(1), ln) for ln in comments)
 
 
 def test_backup_timer_runs_daily_before_the_reboot_window() -> None:

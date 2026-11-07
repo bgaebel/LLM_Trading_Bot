@@ -1,12 +1,14 @@
-"""Spec 009 AK5, Spec 013 AK7/AK8, Spec 014 AK8-AK10: deploy/release.sh in a sandbox - real bash,
-tar, flock, curl and python3; systemctl, systemd-analyze, uv, caddy, ufw, apt-get, apt-cache, gpg
-and journalctl are stand-ins that record what they are asked and play the service.
+"""Spec 009 AK5, Spec 013 AK7/AK8, Spec 014 AK8-AK10, Spec 015 AK5-AK7: deploy/release.sh in a
+sandbox - real bash, tar, flock, curl and python3; systemctl, systemd-analyze, uv, caddy, ufw,
+apt-get, apt-cache, gpg and journalctl are stand-ins that record what they are asked and play the
+service.
 
 Linux only (the CI): the script targets Ubuntu and needs GNU tools and flock.
 """
 
 import hashlib
 import io
+import json
 import os
 import re
 import shutil
@@ -34,6 +36,7 @@ UNITS = [
 ]
 CADDYFILE = (REPO / "deploy" / "Caddyfile").read_text(encoding="utf-8")
 WEB_UNIT = "llm-trading-bot-web.service"
+BACKUP_UNIT = "llm-trading-bot-backup.service"
 # Spec 014: fixed in the web unit; the sandbox keeps it as it is (not below LTB_ROOT).
 IMPRESSUM_ARG = "--impressum /etc/llm-trading-bot/impressum.md"
 TUNNEL_END = f"--host 127.0.0.1 --port 8787 {IMPRESSUM_ARG}"
@@ -128,8 +131,20 @@ case "$1" in
   --help) exit 0 ;;
   verify-db) [ ! -e "$FAKE_STATE/bad-verify" ] ;;
   backup)
-    [ -e "$FAKE_STATE/bad-backup" ] && exit 1
-    mkdir -p "$5" && cp "$3" "$5/bot-$(date -u +%Y%m%dT%H%M%S%NZ).db" ;;
+    shift
+    profile=bot db="" dir=""
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --profile) profile="$2"; shift ;;
+        --db) db="$2"; shift ;;
+        --dir) dir="$2"; shift ;;
+      esac
+      shift
+    done
+    # bad-backup: bot.db cannot be copied; bad-backup-observations: only observations.db.
+    [ "$profile" = bot ] && [ -e "$FAKE_STATE/bad-backup" ] && exit 1
+    [ -e "$FAKE_STATE/bad-backup-$profile" ] && { echo "backup failed: $profile broken"; exit 1; }
+    mkdir -p "$dir" && cp "$db" "$dir/$profile-$(date -u +%Y%m%dT%H%M%S%NZ).db" ;;
   *) exit 1 ;;
 esac
 BOT
@@ -287,16 +302,27 @@ class Sandbox:
         extra: dict[str, str] | None = None,
         pre013: bool = False,
         pre014: bool = False,
+        pre015: bool = False,
     ) -> None:
         """What scripts/deploy.sh streams: a tar.gz of the commit with deploy/ inside. pre013: a
         release from before Spec 013 - no Caddyfile, no public host in the web unit (and no
-        imprint). pre014: a release from Spec 013 - no --impressum in the web unit."""
+        imprint). pre014: a release from Spec 013 - no --impressum in the web unit. pre015: a
+        release from Spec 014 - its backup unit copies bot.db only (and so do the older ones)."""
         incoming = self.app / "incoming"
         incoming.mkdir(parents=True, exist_ok=True)
         with tarfile.open(incoming / f"{sha}.tar.gz", "w:gz") as tar:
             files = {
                 f"deploy/{u}": (REPO / "deploy" / u).read_text(encoding="utf-8") for u in UNITS
             }
+            if pre013 or pre014 or pre015:
+                backup = f"deploy/{BACKUP_UNIT}"
+                files[backup] = "".join(
+                    line
+                    for line in files[backup].splitlines(keepends=True)
+                    if "--profile observations" not in line
+                )
+                starts = [ln for ln in files[backup].splitlines() if ln.startswith("ExecStart=")]
+                assert len(starts) == 1 and "observations" not in starts[0]
             web = f"deploy/{WEB_UNIT}"
             if pre013 or pre014:
                 files[web] = files[web].replace(f" {IMPRESSUM_ARG}", "")
@@ -427,6 +453,9 @@ def test_install_creates_the_layout_and_uv_and_is_idempotent(box: Sandbox) -> No
         (box.data, 0o700),
         (box.root / "var/backups/llm-trading-bot/daily", 0o700),
         (box.root / "var/backups/llm-trading-bot/pre-update", 0o700),
+        (box.root / "var/backups/llm-trading-bot/observations", 0o700),
+        (box.root / "var/backups/llm-trading-bot/observations/daily", 0o700),
+        (box.root / "var/backups/llm-trading-bot/observations/pre-update", 0o700),
     ]:
         assert path.is_dir() and path.stat().st_mode & 0o777 == mode, path
     assert (box.root / "usr/local/bin/uv").is_file()
@@ -1363,3 +1392,181 @@ def test_impressum_status_lines(box: Sandbox) -> None:
     box.impressum.unlink()
     box.impressum.symlink_to(box.data / "secrets.env")
     assert "\nimpressum: INVALID (a symlink)" in box.run("status").stdout
+
+
+# ------------------------------------------------------------------ Spec 015: observations.db
+
+# Stands for the recording the 015 service writes next to bot.db.
+OBSERVED = b"what the bot saw"
+
+
+def obs_dir(box: Sandbox, kind: str = "") -> Path:
+    path = box.root / "var/backups/llm-trading-bot/observations"
+    return path / kind if kind else path
+
+
+def obs_copies(box: Sandbox, kind: str) -> list[str]:
+    directory = obs_dir(box, kind)
+    return sorted(p.name for p in directory.iterdir()) if directory.is_dir() else []
+
+
+def recorded(box: Sandbox) -> Path:
+    path = box.data / "observations.db"
+    path.write_bytes(OBSERVED)
+    return path
+
+
+def files_below(path: Path) -> dict[str, tuple[bytes, int, int]]:
+    """Content, mtime and inode of every file: "untouched" means none of them changed."""
+    return {
+        str(p.relative_to(path)): (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino)
+        for p in sorted(path.rglob("*"))
+        if p.is_file()
+    }
+
+
+def test_observations_backup_before_the_update_follows_the_bot_db(box: Sandbox) -> None:
+    deployed(box)
+    recorded(box)
+    box.upload(sha(2))
+    start = len(box.calls())
+    box.run("deploy", sha(2), "botsvc")
+    assert box.current() == sha(2)
+    (copy,) = obs_copies(box, "pre-update")
+    assert copy.startswith("observations-")
+    assert (obs_dir(box, "pre-update") / copy).read_bytes() == OBSERVED
+    calls = box.calls()
+    stopped = index(calls, "stop ", start)
+    bot = index(calls, "trading-bot backup --db", start)
+    obs = index(calls, "trading-bot backup --profile observations", start)
+    started = index(calls, "restart llm-trading-bot.service", start)
+    # The trade history first, both while nothing writes.
+    assert stopped < bot < obs < started
+    assert calls[obs].endswith(f"--dir {obs_dir(box, 'pre-update')} --keep 3"), calls[obs]
+    pre = box.root / "var/backups/llm-trading-bot/pre-update"
+    assert all(p.name.startswith("bot-") for p in pre.iterdir())
+    assert (box.data / "observations.db").read_bytes() == OBSERVED
+
+
+def test_observations_backup_that_fails_only_warns(box: Sandbox) -> None:
+    deployed(box)
+    recorded(box)
+    (box.state / "bad-backup-observations").touch()
+    box.upload(sha(2))
+    out = box.run("deploy", sha(2), "botsvc").stdout  # exit 0: the deploy went through
+    warning = "WARNING: the backup of observations.db before the update failed - the deploy goes on"
+    assert warning in out and "backup failed: observations broken" in out
+    assert box.current() == sha(2) and (box.state / "active-llm-trading-bot.service").exists()
+    assert "rolling back" not in out
+    assert obs_copies(box, "pre-update") == []
+    pre = box.root / "var/backups/llm-trading-bot/pre-update"
+    assert len(list(pre.iterdir())) == 2  # bot.db's copies of both deploys
+    assert (box.data / "observations.db").read_bytes() == OBSERVED
+
+
+def test_observations_backup_of_a_missing_file_is_skipped(box: Sandbox) -> None:
+    # A server before its first 015 round: nothing to copy, nothing to complain about.
+    deployed(box)
+    box.upload(sha(2))
+    start = len(box.calls())
+    out = box.run("deploy", sha(2), "botsvc").stdout
+    assert "no observations.db yet - nothing to back up besides bot.db" in out
+    assert not any("--profile observations" in c for c in box.calls()[start:])
+    assert not (box.data / "observations.db").exists() and obs_copies(box, "pre-update") == []
+
+
+def test_observations_backup_daily_is_its_own_invocation(box: Sandbox) -> None:
+    deployed(box)
+    starts = [ln for ln in box.unit(BACKUP_UNIT).splitlines() if ln.startswith("ExecStart=")]
+    trading_bot = f"{box.app}/current/.venv/bin/trading-bot"
+    assert starts == [
+        f"ExecStart={trading_bot} backup --db {box.data}/bot.db"
+        f" --dir {box.root}/var/backups/llm-trading-bot/daily --keep 14",
+        f"ExecStart=-{trading_bot} backup --profile observations --if-exists"
+        f" --db {box.data}/observations.db --dir {obs_dir(box, 'daily')} --keep 14",
+    ]
+
+
+def test_status_observations(box: Sandbox) -> None:
+    deployed(box)
+    out = box.run("status").stdout
+    # The fake service writes the status file of a release before 015: no counters.
+    assert "\nobservations: no counters in the status file (release before Spec 015)" in out, out
+    assert "\nobservations.db: missing" in out
+    assert "\nlatest observations backup: none\n" in out
+    status_file = box.data / "service-status.json"
+    status = json.loads(status_file.read_text(encoding="utf-8"))
+    status.update(observations_written=1234, observations_failed=0, observations_last_error=None)
+    status_file.write_text(json.dumps(status), encoding="utf-8")
+    recorded(box)
+    for kind, name, data in [
+        ("daily", "observations-20261107T033000Z.db", b"older"),
+        ("daily", "observations-20261108T033000Z.db", b"newest"),
+        ("pre-update", "observations-20261101T120000Z.db", b"old"),
+    ]:
+        (obs_dir(box, kind) / name).write_bytes(data)
+    out = box.run("status").stdout
+    assert "\nobservations: written 1234, failed 0, last error: none\n" in out, out
+    assert f"\nobservations.db: {len(OBSERVED)} B\n" in out
+    newest = "observations/daily/observations-20261108T033000Z.db (6 B)"
+    assert f"\nlatest observations backup: {newest}\n" in out
+    assert "\nlatest backups: " in out  # bot.db's line stays as it was
+    status.update(
+        observations_failed=3, observations_last_error="OperationalError: database is locked\nx"
+    )
+    status_file.write_text(json.dumps(status), encoding="utf-8")
+    out = box.run("status").stdout
+    assert "\nobservations: written 1234, failed 3, last error: OperationalError: database" in out
+    assert "is locked x\n" in out  # one line, whatever the message holds
+    status_file.write_text("{half a file", encoding="utf-8")
+    assert "\nobservations: status file unreadable\n" in box.run("status").stdout
+
+
+def rolled_back_before_015(box: Sandbox) -> tuple[dict[str, tuple[bytes, int, int]], str]:
+    """A release from 014, then one from 015 that recorded and was backed up, then the rollback.
+    Returns the files of the recording as they were before the rollback, and its output."""
+    installed(box).secrets()
+    box.upload(sha(1), pre015=True)
+    box.run("deploy", sha(1), "botsvc")
+    box.upload(sha(2))
+    box.run("deploy", sha(2), "botsvc")
+    recorded(box)
+    (obs_dir(box, "daily") / "observations-20261108T033000Z.db").write_bytes(b"daily copy")
+    (obs_dir(box, "pre-update") / "observations-20261108T120000Z.db").write_bytes(b"pre copy")
+    before = {
+        "data": files_below(box.data)["observations.db"],
+        **{f"backup/{k}": v for k, v in files_below(obs_dir(box)).items()},
+    }
+    start = len(box.calls())
+    out = box.run("rollback", "botsvc").stdout
+    assert box.current() == sha(1)
+    touched = [c for c in box.calls()[start:] if "observations" in c.replace(str(box.root), "")]
+    assert touched == []
+    return before, out
+
+
+def test_rollback_before_015_leaves_observations_and_backups_untouched(box: Sandbox) -> None:
+    before, out = rolled_back_before_015(box)
+    assert f"release {sha(1)} is from before Spec 015: it neither backs up nor reads" in out
+    after = {
+        "data": files_below(box.data)["observations.db"],
+        **{f"backup/{k}": v for k, v in files_below(obs_dir(box)).items()},
+    }
+    assert after == before and len(after) == 3
+
+
+def test_rollback_before_015_units_ignore_observations_until_the_next_deploy(
+    box: Sandbox,
+) -> None:
+    rolled_back_before_015(box)
+    starts = [ln for ln in box.unit(BACKUP_UNIT).splitlines() if ln.startswith("ExecStart=")]
+    assert len(starts) == 1 and "observations" not in starts[0]  # the old release's daily unit
+    out = box.run("status").stdout
+    assert "\nobservations: no counters in the status file (release before Spec 015)" in out
+    assert "observations/pre-update/observations-20261108T120000Z.db" in out  # still listed
+    # Forward again: the 015 release backs the recording up before its start once more.
+    box.upload(sha(2))
+    box.run("deploy", sha(2), "botsvc")
+    assert box.current() == sha(2) and len(obs_copies(box, "pre-update")) == 2
+    starts = [ln for ln in box.unit(BACKUP_UNIT).splitlines() if ln.startswith("ExecStart=")]
+    assert len(starts) == 2 and "--profile observations" in starts[1]
