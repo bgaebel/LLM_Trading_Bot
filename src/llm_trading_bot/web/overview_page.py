@@ -334,10 +334,15 @@ def _readouts(view: Overview) -> str:
 
 
 def overview_page(
-    view: Overview | None, *, csrf: str, problem: str = "", now: float | None = None
+    view: Overview | None,
+    *,
+    csrf: str,
+    problem: str = "",
+    now: float | None = None,
+    trading: str = "",
 ) -> str:
     """``view`` is None when the database cannot be shown; ``problem`` then says why. ``now``
-    keeps the ticker running across reloads."""
+    keeps the ticker running across reloads. ``trading`` is the pause note (Spec 011 AK6)."""
     if view is None:
         body = (
             '<section class="panel">'
@@ -349,7 +354,8 @@ def overview_page(
         )
     else:
         body = (
-            _readouts(view)
+            (f'<div class="msg bad" role="status">{escape(trading)}</div>' if trading else "")
+            + _readouts(view)
             + '<div class="grid">'
             + '<section class="panel span-5">'
             + pages._head("01", "Lebenszeichen")

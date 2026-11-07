@@ -265,7 +265,7 @@ def data_gap(status: ServiceStatus) -> str:
     if not sep or not rest.startswith("MarketDataError:"):
         return ""
     if head == "quotes":
-        return "Kursabruf bei Bitvavo gescheitert, gespeicherte Kurse genutzt"
+        return "Kurs von Bitvavo unbrauchbar, der Markt bleibt ohne Entscheidung"
     market = head.rpartition(" ")[2]
     if "gap in recent" in rest:
         return f"{market} ohne Entscheidung: Marktdaten-Lücke bei Bitvavo"

@@ -28,6 +28,7 @@ from llm_trading_bot.paper.db import SchemaError, ensure_portfolios, open_db
 from llm_trading_bot.paper.execution import BUYHOLD, DRAWDOWN_KILL, Costs
 from llm_trading_bot.paper.lock import WriterLock, WriterLockBusy
 from llm_trading_bot.paper.report import CycleReport
+from llm_trading_bot.paper.risk import Controls, read_controls
 from llm_trading_bot.service.logs import redact
 from llm_trading_bot.service.notify import Notifier
 from llm_trading_bot.service.schedule import OFFSET, PERIOD, next_slot, skipped
@@ -156,6 +157,9 @@ class Service:
         self.key: str | None = None
         self.warning = ""
         self.stopping = False
+        self.controls = Controls()
+        self.control_warnings: tuple[str, ...] = ()
+        self.refusals: set[tuple[str, str]] = set()
 
     # ------------------------------------------------------------------ start and end
 
@@ -301,6 +305,7 @@ class Service:
                 model=self.model,
                 clock=self.timer.now,
                 stop_requested=self.stop.is_set,
+                controls=self._read_controls(),
             )
         except BaseException as exc:  # reported by the main thread; never kills the service
             job.error = exc
@@ -332,6 +337,23 @@ class Service:
             self.log.info("new OpenAI key: new client")
         self.config, self.costs = config, costs
 
+    def _read_controls(self) -> Controls:
+        """Pause and release requests, every round and fail closed (ADR-0021)."""
+        controls = read_controls(self.env, self.secrets)
+        if controls.warnings != self.control_warnings:
+            for warning in controls.warnings:
+                self.log.warning("trading controls: %s", redact(warning))
+        self.control_warnings = controls.warnings
+        if controls.paused != self.controls.paused:
+            if controls.paused:
+                self.log.warning(
+                    "trading paused (%s): no trades except forced sales", controls.source
+                )
+            else:
+                self.log.info("trading resumed")
+        self.controls = controls
+        return controls
+
     def _use_key(self, config: BotConfig) -> bool:
         """A client per key; True if the key changed while the service was running."""
         key = config.llm.api_key if config.llm else None
@@ -352,7 +374,9 @@ class Service:
             self.log.error("round failed after %.1f s: %s", seconds, error, exc_info=exc)
         else:
             report = job.report
-            result = "ok" if report.complete else "incomplete" if report.equity else "no_quotes"
+            # A round that valued no depot only because their markets lacked quotes still ran.
+            ran = report.equity or report.unvalued
+            result = "ok" if report.complete else "incomplete" if ran else "no_quotes"
             error = _first_problem(report)
             self._log_round(report, result, seconds)
         failures = 0 if result == "ok" else self.status.failures + 1
@@ -365,6 +389,8 @@ class Service:
             last_error=error,
             failures=failures,
             config_warning=self.warning,
+            trading_paused=self.controls.paused,
+            pause_source=self.controls.source,
         )
         self.notifier.status(
             f"{state}, last round {result} at {iso(started_at)[11:19]} UTC"
@@ -384,6 +410,15 @@ class Service:
                 )
             elif m.error:
                 self.log.warning("%s %s: no decision - %s", m.agent, m.symbol.market, m.error)
+        for m in report.unvalued:
+            self.log.warning("%s %s: no equity point - %s", m.agent, m.symbol.market, m.error)
+        for agent in report.released:
+            self.log.info("risk stop %s released on request: trading again from its cash", agent)
+        for agent, why in report.refused:
+            # A refused request stays in secrets.env; say so once, not every minute.
+            if (agent, why) not in self.refusals:
+                self.log.warning("release of %s not applied: %s", agent, why)
+                self.refusals.add((agent, why))
         for stop in report.risk_stops:
             # ADR-0021: the Arena writes an ALERT log row; here the journal is the log. A stopped
             # depot stays halted, so this appears once per stop.
@@ -433,7 +468,7 @@ class Service:
 def _first_problem(report: CycleReport) -> str:
     if report.quotes_error:
         return f"quotes: {report.quotes_error}"
-    for m in report.markets:
+    for m in (*report.markets, *report.unvalued):
         if m.error:
             return f"{m.agent} {m.symbol.market}: {m.error}"
     for o in report.llm:

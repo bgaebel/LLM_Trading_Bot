@@ -122,3 +122,40 @@ def test_gpt_settings_are_checked_even_with_classic_depots_only(
     with pytest.raises(ValueError, match=field):
         secrets_file.update({field: value}, agents=["trend"])
     assert not secrets_file.path.exists()
+
+
+# ------------------------------------------------------------------ Spec 011: pause and release
+
+
+def test_pause_switch_writes_and_removes_the_field(secrets_file: SecretsFile) -> None:
+    secrets_file.update({"OPENAI_API_KEY": KEY})
+    secrets_file.set_paused(True)
+    assert secrets_file.read() == {"OPENAI_API_KEY": KEY, "BOT_PAUSED": "1"}
+    secrets_file.update({"LLM_EFFORT": "medium"})  # saving settings keeps the pause
+    assert secrets_file.read()["BOT_PAUSED"] == "1"
+    secrets_file.set_paused(False)
+    assert "BOT_PAUSED" not in secrets_file.read()
+
+
+def test_pause_works_even_while_other_settings_are_broken(secrets_file: SecretsFile) -> None:
+    secrets_file.path.parent.mkdir(parents=True)
+    secrets_file.path.write_text("LLM_DAILY_BUDGET_EUR=lots\n", encoding="utf-8")
+    secrets_file.set_paused(True)
+    assert secrets_file.read() == {"LLM_DAILY_BUDGET_EUR": "lots", "BOT_PAUSED": "1"}
+
+
+def test_resume_request_is_stored_per_depot(secrets_file: SecretsFile) -> None:
+    secrets_file.request_resume("trend", "2026-11-07T08:00:00+00:00")
+    secrets_file.request_resume("gpt-luna", "2026-11-07T08:05:00+00:00")
+    secrets_file.request_resume("trend", "2026-11-07T09:00:00+00:00")
+    assert secrets_file.read()["BOT_RESUME"] == (
+        "gpt-luna@2026-11-07T08:05:00+00:00,trend@2026-11-07T09:00:00+00:00"
+    )
+
+
+def test_resume_request_refuses_unknown_depots_and_line_breaks(secrets_file: SecretsFile) -> None:
+    with pytest.raises(ValueError, match="unknown depot"):
+        secrets_file.request_resume("buyhold", "2026-11-07T08:00:00+00:00")
+    with pytest.raises(ValueError, match="line breaks"):
+        secrets_file.request_resume("trend", "2026-11-07T08:00:00+00:00\nBOT_PAUSED=0")
+    assert not secrets_file.path.exists()

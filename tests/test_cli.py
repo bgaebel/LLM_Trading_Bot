@@ -53,6 +53,15 @@ def test_market_report_exit_2_when_quotes_fail() -> None:
     assert "quotes FAILED: HTTPFailure: HTTP 503" in text
 
 
+def test_market_report_shows_a_bad_quote_and_still_the_other_market() -> None:
+    """Spec 011 AK7: one broken quote is reported per market instead of a crash."""
+    code, text = run(eth_quote_bad=True)
+    assert code == EXIT_INVALID
+    assert "bid 66000.00  ask 66005.00" in text
+    assert "quote  INVALID - ticker/book: unusable quote" in text
+    assert text.count("snapshot: OK") == 1
+
+
 def test_default_command_prints_mode(capsys: pytest.CaptureFixture[str]) -> None:
     assert main([]) == EXIT_OK
     assert capsys.readouterr().out.strip() == "llm-trading-bot: mode=paper"
@@ -148,7 +157,7 @@ def test_paper_cycle_exit_2_without_quotes(tmp_path: Path) -> None:
     client.fail_quotes = True
     code, text = run_cycle(tmp_path / "bot.db", client)
     assert code == EXIT_FETCH_FAILED
-    assert "no fresh quotes of both markets - no decisions, nothing traded" in text
+    assert "no fresh quotes - no decisions, nothing traded" in text
 
 
 def test_paper_cycle_exit_1_when_one_market_fails(tmp_path: Path) -> None:

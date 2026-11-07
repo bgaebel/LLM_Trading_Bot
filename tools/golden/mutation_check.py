@@ -264,7 +264,21 @@ M += [
         "if agent == BUYHOLD and p[_COLUMN[symbol]] > 1:",
         "exec buyhold holds once",
     ),
-    (E, "if qs is None or set(qs) != set(SYMBOLS):", "if qs is None:", "exec stale on partial"),
+    (
+        E,
+        "if qs is None or (set(qs) != set(SYMBOLS) and not (",
+        "if qs is None or (False and not (",
+        "exec stale on partial",
+    ),
+    (E, "and not (partial and covers(", "and not (covers(", "exec partial only when asked"),
+    (
+        E,
+        "return (symbol is None or symbol in qs) and not",
+        "return not",
+        "exec partial needs market",
+    ),
+    (E, "and not unquoted_holdings(p, qs)", "", "exec partial needs held markets"),
+    (E, "    if p[_COLUMN[symbol]] == 0:\n        return 0.0\n", "", "exec worth needs quote"),
     (E, "sig.reason.strip()[:REASON_MAX]", "sig.reason[:REASON_MAX]", "exec reason strip"),
     (E, "REASON_MAX = 550", "REASON_MAX = 549", "exec reason length"),
     (E, "json.dumps(data, ensure_ascii=False)", "json.dumps(data)", "exec inputs ascii"),
@@ -501,6 +515,49 @@ M += [
     ),
     (A, 'env.get("LLM_EFFORT", "low")', 'env.get("LLM_EFFORT", "medium")', "llm effort default"),
     (A, "MAX_OUTPUT_TOKENS = 8000", "MAX_OUTPUT_TOKENS = 7999", "llm output tokens"),
+]
+
+
+# Spec 011 (ADR-0021): trading pause and release of stopped depots.
+PC, PR = "paper/cycle.py", "paper/risk.py"
+M += [
+    (PC, 'status="PAUSED" if paused else "OK"', 'status="OK"', "pause classic trades"),
+    (PC, "== set(SYMBOLS) and not controls.paused:", "== set(SYMBOLS):", "pause buyhold buys"),
+    (PC, "paused=controls.paused,\n        ):", "paused=False,\n        ):", "pause gpt asked"),
+    (
+        Y,
+        "    if paused:\n        # ADR-0021",
+        "    if False:\n        # ADR-0021",
+        "llm pause skips",
+    ),
+    (PR, "RESUME_MAX_AGE = 24 * 3600", "RESUME_MAX_AGE = 25 * 3600", "resume max age"),
+    (PR, "requested_at > RESUME_MAX_AGE", "requested_at >= RESUME_MAX_AGE", "resume age > -> >="),
+    (PR, "requested_at <= epoch(stopped)", "requested_at < epoch(stopped)", "resume after stop"),
+    (PR, "stopped is not None and requested_at", "False and requested_at", "resume older stop"),
+    (PR, 'if p["btc"] != 0 or p["eth"] != 0:', "if False:", "resume needs no coins"),
+    (PR, "halted=0, peak=cash WHERE", "halted=0 WHERE", "resume peak from cash"),
+    (PR, "> now_epoch + MAX_FUTURE_SKEW", "> now_epoch + 10 * MAX_FUTURE_SKEW", "resume future"),
+    (
+        PR,
+        '{"1": True, "0": False, "": False}',
+        '{"1": True, "0": False, "": False, "yes": True}',
+        "pause values",
+    ),
+    (
+        PR,
+        "        stored = None\n        warnings.append(",
+        "        stored = {}\n        warnings.append(",
+        "pause unreadable file",
+    ),
+    (PR, "if PAUSE_FIELD in env:", "if False:", "pause environment wins"),
+    (
+        PR,
+        'warnings.append(f"{PAUSE_FIELD}={raw[:20]!r} is not 1 or 0: trading paused")\n'
+        "        return Controls(True,",
+        'warnings.append(f"{PAUSE_FIELD}={raw[:20]!r} is not 1 or 0: trading paused")\n'
+        "        return Controls(False,",
+        "pause invalid fails closed",
+    ),
 ]
 
 

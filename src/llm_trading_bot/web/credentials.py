@@ -21,7 +21,9 @@ SETTING_FIELDS = (
     "LLM_DAILY_BUDGET_EUR_GPT_LUNA",
     "LLM_DAILY_BUDGET_EUR_GPT_SOL",
 )
-FIELDS = SECRET_FIELDS + SETTING_FIELDS
+CONTROL_FIELDS = ("BOT_PAUSED", "BOT_RESUME")
+"""Trading pause and release requests (Spec 011, ADR-0021); read by the service every round."""
+FIELDS = SECRET_FIELDS + SETTING_FIELDS + CONTROL_FIELDS
 AGENT_CHOICES = (*LLM_DEFAULTS, *CLASSIC_AGENTS)
 _KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]{16,200}")
 _HEADER = "# llm-trading-bot credentials - written by `trading-bot web`; never commit this file\n"
@@ -106,6 +108,31 @@ class SecretsFile:
                 values.pop(name, None)
         _check_settings(values)
         load_config(values)  # same rules as the bot; raises ValueError with the reason
+        self._write(values)
+        return values
+
+    def _write(self, values: Mapping[str, str]) -> None:
         body = "".join(f"{name}={values[name]}\n" for name in FIELDS if name in values)
         write_private(self.path, _HEADER + body)
-        return values
+
+    def set_paused(self, paused: bool) -> None:
+        """The emergency stop: written without checking the other settings, so it works even
+        while they are broken (the service reads it on its own, ADR-0021)."""
+        values = self.read()
+        if paused:
+            values["BOT_PAUSED"] = "1"
+        else:
+            values.pop("BOT_PAUSED", None)
+        self._write(values)
+
+    def request_resume(self, agent: str, at: str) -> None:
+        """Ask the service to release ``agent`` from its drawdown stop (once, see paper.risk)."""
+        if agent not in AGENT_CHOICES:
+            raise ValueError(f"unknown depot: {agent!r}")
+        values = self.read()
+        requests = dict(
+            item.split("@", 1) for item in values.get("BOT_RESUME", "").split(",") if "@" in item
+        )
+        requests[agent] = _clean("BOT_RESUME", at)
+        values["BOT_RESUME"] = ",".join(f"{a}@{t}" for a, t in sorted(requests.items()))
+        self._write(values)

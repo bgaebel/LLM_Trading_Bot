@@ -16,7 +16,7 @@ from llm_trading_bot.core import parse_mode
 from llm_trading_bot.llm.agents import load_config
 from llm_trading_bot.llm.openai_client import OpenAIResponses, SignalModel
 from llm_trading_bot.market.bitvavo import BitvavoClient, fill_tiny_gaps
-from llm_trading_bot.market.models import SYMBOLS, Candle, Quote, Symbol
+from llm_trading_bot.market.models import SYMBOLS, Candle, QuoteBook, Symbol
 from llm_trading_bot.market.snapshot import (
     DATA_ERRORS,
     INTERVALS,
@@ -30,6 +30,7 @@ from llm_trading_bot.paper.db import SchemaError, open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
 from llm_trading_bot.paper.lock import WriterLock, WriterLockBusy
 from llm_trading_bot.paper.report import CycleReport, LlmOutcome, MarketResult
+from llm_trading_bot.paper.risk import read_controls
 from llm_trading_bot.service.logs import setup_logging
 from llm_trading_bot.service.notify import Notifier
 from llm_trading_bot.service.run import Service, install_stop_signals
@@ -67,7 +68,7 @@ def run_market(client: MarketClient, *, out: TextIO, clock: Callable[[], float] 
         except DATA_ERRORS as exc:
             errors[symbol] = f"candles: {type(exc).__name__}: {exc}"
     try:
-        quotes: dict[Symbol, Quote] = client.quotes()
+        quotes: QuoteBook = client.quotes()
     except DATA_ERRORS as exc:
         print(f"quotes FAILED: {type(exc).__name__}: {exc}", file=out)
         return EXIT_FETCH_FAILED
@@ -76,7 +77,12 @@ def run_market(client: MarketClient, *, out: TextIO, clock: Callable[[], float] 
     result = EXIT_OK
     for symbol in SYMBOLS:
         print(f"\n{symbol.market}", file=out)
-        quote = quotes[symbol]
+        quote = quotes.get(symbol)
+        if quote is None:
+            # Spec 011 AK7: one market's broken quote is reported, the other market still shown.
+            print(f"  quote  INVALID - {quotes.errors.get(symbol, 'missing')}", file=out)
+            result = EXIT_INVALID
+            continue
         print(
             f"  quote  bid {quote.bid:.2f}  ask {quote.ask:.2f}  spread {quote.spread_bps:.2f} bp",
             file=out,
@@ -188,8 +194,8 @@ def print_cycle(report: CycleReport, costs: Costs, *, out: TextIO) -> None:
     )
     if report.quotes_error:
         print(f"quotes: {report.quotes_error}", file=out)
-    if not report.equity:
-        print("no fresh quotes of both markets - no decisions, nothing traded", file=out)
+    if not report.equity and not report.unvalued:
+        print("no fresh quotes - no decisions, nothing traded", file=out)
         return
     bought = report.buyhold_bought
     print(f"buy & hold: {f'bought {bought} market(s)' if bought else 'already invested'}", file=out)
@@ -203,6 +209,8 @@ def print_cycle(report: CycleReport, costs: Costs, *, out: TextIO) -> None:
             f"BTC {e.btc:.8f}  ETH {e.eth:.8f}",
             file=out,
         )
+    for m in report.unvalued:
+        print(f"equity {m.agent:<9} not valued: {m.error}", file=out)
 
 
 def run_paper_cycle(
@@ -220,8 +228,9 @@ def run_paper_cycle(
     Values saved with `trading-bot web` (``secrets.env``, default next to the DB) fill in what the
     environment does not set; the environment always wins.
     """
+    secrets_path = secrets or db.parent / "secrets.env"
     try:
-        env = {**load_env_file(secrets or db.parent / "secrets.env"), **env}
+        env = {**load_env_file(secrets_path), **env}
         config = load_config(env)
         costs = Costs.from_env(env)
     except ValueError as exc:
@@ -232,7 +241,15 @@ def run_paper_cycle(
         with WriterLock(db):
             con = open_db(db, agents=(*config.agents, BUYHOLD))
             try:
-                report = paper_cycle(con, client, config, costs=costs, model=model, clock=clock)
+                report = paper_cycle(
+                    con,
+                    client,
+                    config,
+                    costs=costs,
+                    model=model,
+                    clock=clock,
+                    controls=read_controls(env, secrets_path),
+                )
             finally:
                 con.close()
     except WriterLockBusy as exc:
@@ -243,7 +260,7 @@ def run_paper_cycle(
         print(f"paper-cycle refused, database error: {type(exc).__name__}: {exc}", file=out)
         return EXIT_INVALID
     print_cycle(report, costs, out=out)
-    if not report.equity:
+    if not report.equity and not report.unvalued:
         return EXIT_FETCH_FAILED
     return EXIT_OK if report.complete else EXIT_INVALID
 

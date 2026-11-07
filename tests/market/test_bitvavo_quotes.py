@@ -1,4 +1,6 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/tests/test_v03.py (adapted)
+"""Bitvavo ticker/book. Spec 011 AK7: unlike the Arena, a bad quote costs only its own market."""
+
 from typing import Any
 
 import pytest
@@ -17,20 +19,31 @@ def test_both_markets_from_one_ticker_book_request() -> None:
     client, transport = client_for(VALID_BOOK)
     quotes = client.quotes()
     assert quotes == {Symbol.BTCEUR: Quote(66000, 66005), Symbol.ETHEUR: Quote(3200, 3200.2)}
+    assert quotes.errors == {} and quotes.problem() == ""
     assert transport.urls == ["https://api.bitvavo.com/v2/ticker/book"]
 
 
-def test_missing_market_rejected() -> None:
+def test_missing_market_is_named_and_the_other_kept() -> None:
     client, _ = client_for([{"market": "BTC-EUR", "bid": "10", "ask": "10.001"}])
-    with pytest.raises(MarketDataError, match="ETH-EUR"):
-        client.quotes()
+    quotes = client.quotes()
+    assert quotes == {Symbol.BTCEUR: Quote(10, 10.001)}
+    assert quotes.errors == {Symbol.ETHEUR: "ticker/book: missing"}
+    assert quotes.problem() == "ETH-EUR: ticker/book: missing"
 
 
-def test_conflicting_duplicate_rejected() -> None:
+def test_conflicting_duplicate_drops_only_that_market() -> None:
     book = [*VALID_BOOK, {"market": "BTC-EUR", "bid": "67000", "ask": "67005"}]
     client, _ = client_for(book)
-    with pytest.raises(MarketDataError, match="duplicate"):
-        client.quotes()
+    quotes = client.quotes()
+    assert set(quotes) == {Symbol.ETHEUR}
+    assert "duplicate" in quotes.errors[Symbol.BTCEUR]
+
+
+def test_a_bad_entry_is_not_rescued_by_a_later_good_one() -> None:
+    bad = {"market": "BTC-EUR", "bid": "nan", "ask": "100"}
+    client, _ = client_for([bad, *VALID_BOOK])
+    quotes = client.quotes()
+    assert set(quotes) == {Symbol.ETHEUR} and Symbol.BTCEUR in quotes.errors
 
 
 def test_identical_duplicate_accepted() -> None:
@@ -49,10 +62,11 @@ def test_identical_duplicate_accepted() -> None:
         {"market": "BTC-EUR", "ask": "100"},
     ],
 )
-def test_invalid_quote_rejected(btc: dict[str, Any]) -> None:
+def test_invalid_quote_costs_only_its_market(btc: dict[str, Any]) -> None:
     client, _ = client_for([btc, VALID_BOOK[1]])
-    with pytest.raises(MarketDataError):
-        client.quotes()
+    quotes = client.quotes()
+    assert quotes == {Symbol.ETHEUR: Quote(3200, 3200.2)}
+    assert quotes.errors[Symbol.BTCEUR].startswith("ticker/book: unusable quote")
 
 
 @pytest.mark.parametrize("payload", [{}, "text", None, 42])

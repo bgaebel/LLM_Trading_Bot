@@ -483,7 +483,7 @@ def test_service_pulse_names_failures_and_configuration_problems() -> None:
             "incomplete",
             60,
             overview.RUNNING,
-            "Kursabruf bei Bitvavo gescheitert, gespeicherte Kurse genutzt",
+            "Kurs von Bitvavo unbrauchbar, der Markt bleibt ohne Entscheidung",
         ),
     ],
     ids=[

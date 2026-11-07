@@ -641,3 +641,67 @@ def test_the_overview_loads_the_script_after_login(running: Running) -> None:
     setup(running)
     page = running.browser.request("GET", "/")[2]
     assert page.count("<script") == 1 and '<script src="/app.js" defer></script>' in page
+
+
+# ------------------------------------------------------------------ Spec 011: pause and release
+
+
+def _status(r: Running, **changes: object) -> None:
+    now = time.time()
+    status = ServiceStatus("running", 1, iso(now), iso(now), 60, 5, last_round_at=iso(now - 30))
+    write_status(r.data / "service-status.json", status.but(**changes))
+
+
+def test_pause_switch_needs_csrf_and_is_stored(running: Running) -> None:
+    _bot_db(running.data / "bot.db")
+    setup(running)
+    status, _, _ = running.browser.request("POST", "/settings/pause", {"paused": "1"})
+    assert status == 403 and "BOT_PAUSED" not in load_env_file(running.data / "secrets.env")
+    status, _, page = running.browser.submit("/settings/pause", {"paused": "1"})
+    assert status == 200 and "Pause gespeichert – greift in der nächsten Runde." in page
+    assert load_env_file(running.data / "secrets.env")["BOT_PAUSED"] == "1"
+    assert "Pause angefordert, greift in der nächsten Runde" in page
+    assert (
+        "Pause angefordert, greift in der nächsten Runde" in running.browser.request("GET", "/")[2]
+    )
+    _status(running, trading_paused=True, pause_source="file")
+    page = running.browser.request("GET", "/")[2]
+    assert "Handel pausiert – nur der Risikostopp verkauft noch" in page
+    status, _, page = running.browser.submit("/settings/pause", {"paused": "0"})
+    assert "Fortsetzen gespeichert" in page
+    assert "BOT_PAUSED" not in load_env_file(running.data / "secrets.env")
+    assert "Fortsetzen angefordert, greift in der nächsten Runde" in page
+    status, _, _ = running.browser.submit("/settings/pause", {"paused": "maybe"})
+    assert status == 400
+
+
+def test_pause_set_by_the_environment_is_shown_without_a_switch(running: Running) -> None:
+    _bot_db(running.data / "bot.db")
+    setup(running)
+    _status(running, trading_paused=True, pause_source="environment")
+    page = running.browser.request("GET", "/settings")[2]
+    assert "durch die Umgebung des Dienstes festgelegt" in page
+    assert 'action="/settings/pause"' not in page
+
+
+def test_resume_button_only_for_stopped_depots(running: Running) -> None:
+    from llm_trading_bot.paper.db import open_db, write_tx
+
+    _bot_db(running.data / "bot.db")
+    setup(running)
+    page = running.browser.request("GET", "/settings")[2]
+    assert "Kein Depot im Risikostopp." in page and "Wieder freigeben" not in page
+    status, _, _ = running.browser.submit("/settings/resume", {"agent": "trend"})
+    assert status == 400
+    con = open_db(running.data / "bot.db", agents=())
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
+    con.close()
+    page = running.browser.request("GET", "/settings")[2]
+    assert "Wieder freigeben" in page and "<b>trend</b>" in page
+    status, _, page = running.browser.submit("/settings/resume", {"agent": "trend"})
+    assert status == 200 and "Freigabe für trend gespeichert" in page
+    stored = load_env_file(running.data / "secrets.env")["BOT_RESUME"]
+    assert re.fullmatch(r"trend@\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\+00:00", stored)
+    assert "Freigabe angefordert – greift in der nächsten Runde" in page
+    assert "Wieder freigeben" not in page

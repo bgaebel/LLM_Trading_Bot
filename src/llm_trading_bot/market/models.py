@@ -27,6 +27,27 @@ class Symbol(Enum):
 SYMBOLS: tuple[Symbol, ...] = tuple(Symbol)
 
 
+class QuoteBook(dict[Symbol, "Quote"]):
+    """The valid quotes of one fetch, per market; ``errors`` says why a market is missing.
+
+    Spec 011 AK7: one broken quote costs only its own market, never the other one.
+    """
+
+    def __init__(
+        self,
+        quotes: "dict[Symbol, Quote] | None" = None,
+        errors: dict[Symbol, str] | None = None,
+    ) -> None:
+        super().__init__(quotes or {})
+        self.errors: dict[Symbol, str] = dict(errors or {})
+
+    def problem(self) -> str:
+        """The missing markets and why, for reports; "" when every market is there."""
+        return "; ".join(
+            f"{s.market}: {self.errors.get(s, 'missing')}" for s in SYMBOLS if s not in self
+        )
+
+
 @dataclass(frozen=True)
 class Quote:
     bid: float

@@ -64,3 +64,24 @@ def test_file_is_private(tmp_path: Path) -> None:
 def test_unknown_state_is_refused() -> None:
     with pytest.raises(ValueError):
         BASE.but(state="zombie")
+
+
+def test_older_status_without_the_pause_fields_is_readable() -> None:
+    """Spec 011 AK6: right after an update the file still comes from the previous version."""
+    import json
+
+    from llm_trading_bot.service.status import ADDED, ServiceStatus
+
+    new = ServiceStatus(
+        "running", 7, "2026-11-07T08:00:00+00:00", "2026-11-07T08:00:00+00:00", 60, 5
+    )
+    data = json.loads(new.to_json())
+    for name in ADDED:
+        del data[name]
+    old = ServiceStatus.from_json(json.dumps(data))
+    assert (old.trading_paused, old.pause_source) == (False, "")
+    with pytest.raises(ValueError, match="this version"):
+        ServiceStatus.from_json(json.dumps({**data, "surprise": 1}))
+    del data["state"]
+    with pytest.raises(ValueError, match="this version"):
+        ServiceStatus.from_json(json.dumps(data))

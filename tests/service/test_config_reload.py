@@ -138,3 +138,68 @@ def test_the_environment_still_wins_over_saved_values(tmp_path: Path) -> None:
         env={"BOT_AGENTS": "trend"},
     )
     assert [c.agents for c in h.rounds.configs] == [("trend",), ("trend",)]
+
+
+# ------------------------------------------------------------------ Spec 011 AK5/AK6
+
+
+def test_pause_applies_next_round_is_logged_once_and_shown_in_the_status(tmp_path: Path) -> None:
+    states: list[tuple[bool, str]] = []
+
+    def watch(con: sqlite3.Connection, client: Any, config: Any, **kwargs: Any) -> CycleReport:
+        status = read_status(status_path(tmp_path / "bot.db"))
+        if status is not None and status.last_round_at:
+            states.append((status.trading_paused, status.pause_source))
+        report = paper_cycle(con, client, config, **kwargs)
+        rounds.append(report)
+        if len(rounds) == 1:
+            (tmp_path / "secrets.env").write_text(
+                "BOT_AGENTS=trend\nBOT_PAUSED=1\n", encoding="utf-8"
+            )
+        if len(rounds) == 3:
+            (tmp_path / "secrets.env").write_text("BOT_AGENTS=trend\n", encoding="utf-8")
+        return report
+
+    rounds: list[CycleReport] = []
+
+    h = harness(tmp_path, limit=4, action=watch, secrets_text="BOT_AGENTS=trend\n")
+    assert h.service.run() == EXIT_OK
+    assert [r.paused for r in rounds] == [False, True, True, False]
+    assert states == [(False, ""), (True, "file"), (True, "file")]
+    lines = h.log().splitlines()
+    assert lines.count("WARNING trading paused (file): no trades except forced sales") == 1
+    assert lines.count("INFO trading resumed") == 1
+    # A pause is no failure: the rounds stay ok.
+    status = read_status(status_path(tmp_path / "bot.db"))
+    assert status is not None and (status.last_result, status.failures) == ("ok", 0)
+
+
+def test_pause_with_a_broken_value_fails_closed_and_warns_once(tmp_path: Path) -> None:
+    h = _run(tmp_path, {}, limit=2, secrets="BOT_AGENTS=trend\nBOT_PAUSED=yes\n")
+    status = read_status(status_path(h.db))
+    assert status is not None and (status.trading_paused, status.pause_source) == (True, "invalid")
+    assert h.log().count("is not 1 or 0: trading paused") == 1
+    con = sqlite3.connect(h.db)
+    try:
+        assert con.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+    finally:
+        con.close()
+
+
+def test_resume_request_is_applied_and_logged(tmp_path: Path) -> None:
+    from llm_trading_bot.llm.due import iso
+    from service_fakes import MINUTE
+
+    def stop_first(con: sqlite3.Connection, client: Any, config: Any, **kwargs: Any) -> CycleReport:
+        if not done:
+            con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
+        done.append(1)
+        return paper_cycle(con, client, config, **kwargs)
+
+    done: list[int] = []
+
+    secrets = f"BOT_AGENTS=trend\nBOT_RESUME=trend@{iso(MINUTE)},gpt-sol@{iso(MINUTE)}\n"
+    h = harness(tmp_path, limit=2, action=stop_first, secrets_text=secrets)
+    assert h.service.run() == EXIT_OK
+    released = [x for x in h.log().splitlines() if "released on request" in x]
+    assert released == ["INFO risk stop trend released on request: trading again from its cash"]

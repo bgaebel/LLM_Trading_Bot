@@ -122,3 +122,79 @@ def test_a_stop_triggered_by_a_trade_is_handed_to_the_caller(tmp_path: Path) -> 
     assert [s.agent for s in stops] == ["trend"]
     sides = [r[0] for r in con.execute("SELECT side FROM trades ORDER BY id")]
     assert sides == ["BUY", "RISK_SELL"]
+
+
+# ------------------------------------------------------------------ AK5: release on request
+
+from llm_trading_bot.paper.risk import NOT_STOPPED, RESUME_MAX_AGE, epoch, release  # noqa: E402
+
+STOP_AT = "2026-11-07T08:00:00+00:00"
+
+
+def _stopped(tmp_path: Path) -> Any:
+    con = _depot(tmp_path, 2_000.0, 0.06, 0.9, 10_000.0)
+    with write_tx(con):
+        assert mark(con, "trend", QS, STOP_AT, Costs()) is not None
+    return con
+
+
+def test_resume_releases_a_stopped_depot_from_its_cash(tmp_path: Path) -> None:
+    con = _stopped(tmp_path)
+    cash = balance(con, "trend")["cash"]
+    assert release(con, "trend", epoch(STOP_AT) + 60, epoch(STOP_AT) + 120) == ""
+    p = balance(con, "trend")
+    assert (p["halted"], p["peak"], p["cash"]) == (0, cash, cash)
+    # A second round with the same request does nothing more.
+    assert release(con, "trend", epoch(STOP_AT) + 60, epoch(STOP_AT) + 180) == NOT_STOPPED
+
+
+@pytest.mark.parametrize(
+    ("requested", "now", "why"),
+    [
+        (0, 60, "the request is older than the stop"),
+        (-60, 60, "the request is older than the stop"),
+        (400, 60, "the request lies in the future"),
+        (60, 60 + RESUME_MAX_AGE + 1, "the request is older than 24 h"),
+    ],
+)
+def test_resume_refuses_requests_that_do_not_fit_the_stop(
+    tmp_path: Path, requested: float, now: float, why: str
+) -> None:
+    con = _stopped(tmp_path)
+    t = epoch(STOP_AT)
+    assert release(con, "trend", t + requested, t + now) == why
+    assert balance(con, "trend")["halted"] == 1
+
+
+def test_resume_at_the_edge_of_24_hours_is_still_applied(tmp_path: Path) -> None:
+    con = _stopped(tmp_path)
+    t = epoch(STOP_AT)
+    assert release(con, "trend", t + 60, t + 60 + RESUME_MAX_AGE) == ""
+
+
+def test_resume_refuses_a_depot_that_still_holds_coins(tmp_path: Path) -> None:
+    con = _depot(tmp_path, 2_000.0, 0.01, 0.0, 10_000.0)
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
+    assert release(con, "trend", epoch(STOP_AT), epoch(STOP_AT)) == "the depot still holds coins"
+
+
+def test_resume_of_a_running_or_unknown_depot_does_nothing(tmp_path: Path) -> None:
+    con = _depot(tmp_path, 9_000.0, 0.0, 0.0, 10_000.0)
+    assert release(con, "trend", epoch(STOP_AT), epoch(STOP_AT)) == NOT_STOPPED
+    assert release(con, "nobody", epoch(STOP_AT), epoch(STOP_AT)) == "unknown depot"
+    assert balance(con, "trend")["peak"] == 10_000.0
+
+
+def test_resume_an_old_request_does_not_release_a_later_stop(tmp_path: Path) -> None:
+    con = _stopped(tmp_path)
+    t = epoch(STOP_AT)
+    assert release(con, "trend", t + 60, t + 120) == ""
+    # Trades again, falls again: a new stop one hour later.
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET btc=0.1, cash=cash-6000 WHERE agent='trend'")
+        later = "2026-11-07T09:00:00+00:00"
+        cheap = {Symbol.BTCEUR: Quote(30_000.0, 30_010.0), Symbol.ETHEUR: QS[Symbol.ETHEUR]}
+        assert mark(con, "trend", cheap, later, Costs()) is not None
+    assert release(con, "trend", t + 60, epoch(later) + 60) == "the request is older than the stop"
+    assert balance(con, "trend")["halted"] == 1

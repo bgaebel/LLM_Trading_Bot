@@ -23,7 +23,7 @@ from llm_trading_bot.llm.cycle import market_triggers, run_llm_depots
 from llm_trading_bot.llm.due import iso, llm_due, trigger_state
 from llm_trading_bot.llm.openai_client import ModelReply
 from llm_trading_bot.market.http import HTTPFailure
-from llm_trading_bot.market.models import Quote, Symbol
+from llm_trading_bot.market.models import Quote, QuoteBook, Symbol
 from llm_trading_bot.market.snapshot import MarketSnapshot, build_snapshots
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db, write_tx
@@ -71,7 +71,7 @@ class ShiftingClient(ScenarioClient):
         super().__init__()
         self.symbol, self.factor, self.from_call = symbol, factor, from_call
 
-    def quotes(self) -> dict[Symbol, Quote]:
+    def quotes(self) -> QuoteBook:
         result = super().quotes()
         if self.quote_calls >= self.from_call:
             q = result[self.symbol]
@@ -424,7 +424,7 @@ class FailingFromClient(ScenarioClient):
         super().__init__()
         self.from_call = from_call
 
-    def quotes(self) -> dict[Symbol, Quote]:
+    def quotes(self) -> QuoteBook:
         if self.quote_calls + 1 >= self.from_call:
             self.quote_calls += 1
             raise HTTPFailure(503)
@@ -642,3 +642,74 @@ def test_immediate_rejections_cost_nothing_server_errors_keep_the_reservation(
         assert row["cost_eur"] is not None and Decimal(row["cost_eur"]) == 0
     else:
         assert row["cost_eur"] is None  # possibly billed: the reservation stays
+
+
+# ------------------------------------------------------------------ Spec 011 AK7: per market
+
+
+def test_quote_lost_after_answer_costs_only_that_market(con: sqlite3.Connection) -> None:
+    def only_btc(qs: Quotes) -> Quotes:
+        return {Symbol.BTCEUR: qs[Symbol.BTCEUR]}
+
+    out, _ = _direct(con, quotes_at=NOW, now=NOW, refreshed=only_btc)
+    for outcome, results in out:
+        assert outcome.status == "ASKED"  # billed as usual
+        by_symbol = {m.symbol: m.status for m in results}
+        assert by_symbol == {Symbol.BTCEUR: "OK", Symbol.ETHEUR: "STALE_QUOTE"}
+
+
+def test_quote_lost_after_answer_of_a_held_market_blocks_both(con: sqlite3.Connection) -> None:
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET eth=0.5")
+
+    def only_btc(qs: Quotes) -> Quotes:
+        return {Symbol.BTCEUR: qs[Symbol.BTCEUR]}
+
+    out, _ = _direct(con, quotes_at=NOW, now=NOW, refreshed=only_btc)
+    for _outcome, results in out:
+        assert {m.status for m in results} == {"STALE_QUOTE"}
+    assert con.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 0
+
+
+def test_request_covers_only_markets_with_a_fresh_quote(con: sqlite3.Connection) -> None:
+    client = ScenarioClient()
+    client.bad_quotes = {Symbol.ETHEUR}
+    model = FakeModel()
+    report = cycle(con, model, client=client)
+    assert {o.status for o in report.llm} == {"ASKED"}
+    assert {tuple(c["markets"]) for c in model.calls} == {("BTC-EUR",)}
+
+
+def test_no_request_while_a_held_market_has_no_fresh_quote(con: sqlite3.Connection) -> None:
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET eth=0.5 WHERE agent='gpt-luna'")
+    client = ScenarioClient()
+    client.bad_quotes = {Symbol.ETHEUR}
+    model = FakeModel()
+    report = cycle(con, model, client=client)
+    assert by_agent(report)["gpt-luna"].status == "NO_QUOTES"
+    assert [c["model"] for c in model.calls] == ["gpt-6.1-sol"]
+    assert [c["agent"] for c in calls(con)] == ["gpt-sol"]  # no reservation for luna
+
+
+def test_paused_depots_are_not_asked_and_reserve_nothing(con: sqlite3.Connection) -> None:
+    """Spec 011 AK6: no paid request while trading is paused."""
+    client = ScenarioClient()
+    snaps = build_snapshots(client, clock=lambda: NOW)
+    record_quotes(con, client.quotes(), now=iso(NOW))
+    settings = config().llm
+    assert settings is not None
+    model = FakeModel()
+    out = run_llm_depots(
+        con,
+        settings.agents,
+        settings,
+        model,
+        snaps,
+        Costs(),
+        refresh_quotes=lambda: None,
+        clock=lambda: NOW,
+        paused=True,
+    )
+    assert [(o.status, r) for o, r in out] == [("PAUSED", []), ("PAUSED", [])]
+    assert model.calls == [] and calls(con) == []

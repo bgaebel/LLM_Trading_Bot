@@ -9,13 +9,17 @@ import pytest
 
 from fakes import ScenarioClient
 from golden_scenarios import NOW
-from llm_trading_bot.llm.agents import BotConfig
+from llm_fakes import KEY, FakeModel, valid_reply
+from llm_trading_bot.llm.agents import BotConfig, load_config
+from llm_trading_bot.llm.due import iso
+from llm_trading_bot.llm.openai_client import ModelReply
 from llm_trading_bot.market.models import Symbol
 from llm_trading_bot.market.snapshot import MarketSnapshot
 from llm_trading_bot.paper import cycle
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
+from llm_trading_bot.paper.risk import Controls
 from llm_trading_bot.strategy.signals import Signal
 
 TREND = BotConfig(("trend",), None)
@@ -221,3 +225,192 @@ def test_stop_request_is_not_asked_without_gpt_depots(
     )
     # Classic depots only: there is no GPT step, so nothing to skip.
     assert asked == [] and report.complete and len(report.equity) == 2
+
+
+# ------------------------------------------------------------------ Spec 011 AK7/AK8: per market
+
+
+def test_bad_eth_quote_does_not_block_btc(con: sqlite3.Connection) -> None:
+    client = ScenarioClient()
+    client.bad_quotes = {Symbol.ETHEUR}
+    report = paper_cycle(con, client, TREND, costs=Costs(), clock=lambda: NOW)
+    btc, eth = report.markets
+    assert (btc.symbol, btc.new, btc.traded, btc.error) == (Symbol.BTCEUR, True, True, "")
+    # The broken quote already fails the ETH snapshot (it carries the quote).
+    assert eth.error == "MarketDataError: ETH-EUR: no quote - ticker/book: unusable quote (fake)"
+    assert report.quotes_error.startswith("MarketDataError: ETH-EUR: ticker/book")
+    assert not report.complete
+    # Buy & hold buys only with both quotes; holding nothing, it is still valued.
+    assert report.buyhold_bought == 0 and [e.agent for e in report.equity] == ["trend", BUYHOLD]
+    # The ETH bar stays open: with a good quote the next round decides it.
+    client.bad_quotes = set()
+    again = paper_cycle(con, client, TREND, costs=Costs(), clock=lambda: NOW + 5)
+    assert [(m.symbol, m.new) for m in again.markets] == [
+        (Symbol.BTCEUR, False),
+        (Symbol.ETHEUR, True),
+    ]
+    assert again.complete and again.buyhold_bought == 2
+
+
+def test_holding_the_stale_market_blocks_both(con: sqlite3.Connection) -> None:
+    con.execute("UPDATE portfolios SET eth=0.5 WHERE agent='trend'")
+    client = ScenarioClient()
+    client.bad_quotes = {Symbol.ETHEUR}
+    report = paper_cycle(con, client, TREND, costs=Costs(), clock=lambda: NOW)
+    assert [m.error for m in report.markets] == [
+        "MarketDataError: ETH-EUR: no fresh quote for the held position",
+        "MarketDataError: ETH-EUR: no quote - ticker/book: unusable quote (fake)",
+    ]
+    assert counts(con)["decisions"] == 0
+    # No equity point for a depot whose value is unknown; the round still ran (incomplete).
+    assert [e.agent for e in report.equity] == [BUYHOLD]
+    assert [(m.agent, m.symbol) for m in report.unvalued] == [("trend", Symbol.ETHEUR)]
+    assert con.execute("SELECT COUNT(*) FROM equity WHERE agent='trend'").fetchone()[0] == 0
+
+
+class Ticking:
+    """A clock that moves on with every candle request (a slow Bitvavo)."""
+
+    def __init__(self, step: float) -> None:
+        self.now, self.step = float(NOW), step
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class SlowCandles(ScenarioClient):
+    def __init__(self, clock: Ticking) -> None:
+        super().__init__()
+        self.clock = clock
+
+    def closed_candles(self, symbol: Symbol, interval: int, *, now_epoch: int) -> Any:
+        self.clock.now += self.clock.step
+        return super().closed_candles(symbol, interval, now_epoch=now_epoch)
+
+
+@pytest.mark.parametrize(("step", "fetches"), [(2.0, 2), (3.0, 3)])
+def test_slow_round_refreshes_quotes_before_the_classic_decisions(
+    con: sqlite3.Connection, step: float, fetches: int
+) -> None:
+    # 8 candle requests: 16 s keep the first quotes (<= 20 s), 24 s fetch new ones.
+    clock = Ticking(step)
+    client = SlowCandles(clock)
+    report = paper_cycle(con, client, TREND, costs=Costs(), clock=clock)
+    assert report.complete and all(m.traded for m in report.markets)
+    # One fetch at the start, one inside the snapshot, one more when the first got too old.
+    assert client.quote_calls == fetches
+    stored = con.execute("SELECT MIN(ts) FROM market").fetchone()[0]
+    assert stored == iso(NOW + (8 * step if fetches == 3 else 0))
+
+
+@pytest.fixture
+def gpt_con(tmp_path: Path) -> Iterator[sqlite3.Connection]:
+    connection = open_db(tmp_path / "gpt.db", agents=("gpt-luna", BUYHOLD))
+    yield connection
+    connection.close()
+
+
+def test_slow_round_refreshes_quotes_before_the_final_valuation(
+    gpt_con: sqlite3.Connection,
+) -> None:
+    con = gpt_con
+    clock = Ticking(0.0)
+    client = ScenarioClient()
+
+    def slow(markets: list[str]) -> ModelReply:
+        clock.now = NOW + 30  # the answer takes 30 s
+        return valid_reply(markets)
+
+    model = FakeModel({"gpt-6-luna": slow})
+    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna"})
+    calls_before = client.quote_calls
+    report = paper_cycle(con, client, config, costs=Costs(), model=model, clock=clock)
+    assert report.complete
+    # start, snapshot, after the answer; the final valuation reuses the post-answer quotes.
+    assert client.quote_calls - calls_before == 3
+
+
+def test_final_valuation_never_uses_stale_quotes(gpt_con: sqlite3.Connection) -> None:
+    con = gpt_con
+    clock = Ticking(0.0)
+    client = ScenarioClient()
+
+    def slow(markets: list[str]) -> ModelReply:
+        clock.now = NOW + 30
+        client.bad_quotes = {Symbol.ETHEUR}  # the refresh after the answer loses ETH
+        return valid_reply(markets)
+
+    model = FakeModel({"gpt-6-luna": slow})
+    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna"})
+    report = paper_cycle(con, client, config, costs=Costs(), model=model, clock=clock)
+    # Buy & hold holds ETH, but the ETH quote from the start is 30 s old: no equity point.
+    assert [(m.agent, m.symbol) for m in report.unvalued][:1] == [(BUYHOLD, Symbol.ETHEUR)]
+    assert BUYHOLD not in {e.agent for e in report.equity}
+    assert not report.complete
+    # Only the point its purchase wrote at the start, on the then fresh quotes.
+    assert con.execute("SELECT COUNT(*) FROM equity WHERE agent='buyhold'").fetchone()[0] == 1
+
+
+# ------------------------------------------------------------------ Spec 011 AK5/AK6
+
+
+PAUSED = Controls(True, "file")
+
+
+def test_pause_stores_classic_decisions_without_trading(con: sqlite3.Connection) -> None:
+    report = paper_cycle(
+        con, ScenarioClient(), TREND, costs=Costs(), clock=lambda: NOW, controls=PAUSED
+    )
+    assert report.paused and report.complete
+    assert [(m.status, m.new, m.traded) for m in report.markets] == [
+        ("PAUSED", True, False),
+        ("PAUSED", True, False),
+    ]
+    assert report.buyhold_bought == 0
+    assert counts(con) == {"decisions": 2, "trades": 0, "equity": 2}
+
+
+def test_pause_skips_gpt_without_a_request(gpt_con: sqlite3.Connection) -> None:
+    model = FakeModel()
+    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna"})
+    report = paper_cycle(
+        gpt_con,
+        ScenarioClient(),
+        config,
+        costs=Costs(),
+        model=model,
+        clock=lambda: NOW,
+        controls=PAUSED,
+    )
+    assert [(o.agent, o.status) for o in report.llm] == [("gpt-luna", "PAUSED")]
+    assert model.calls == [] and report.complete
+    assert gpt_con.execute("SELECT COUNT(*) FROM llm_calls").fetchone()[0] == 0
+
+
+def test_pause_keeps_the_drawdown_stop(con: sqlite3.Connection) -> None:
+    con.execute("UPDATE portfolios SET peak=20000, btc=0.01, cash=9000 WHERE agent='trend'")
+    report = paper_cycle(
+        con, ScenarioClient(), TREND, costs=Costs(), clock=lambda: NOW, controls=PAUSED
+    )
+    assert [s.agent for s in report.risk_stops] == ["trend"]
+    sides = [r[0] for r in con.execute("SELECT side FROM trades")]
+    assert sides == ["RISK_SELL"]
+
+
+def test_resume_request_is_applied_at_the_start_of_the_round(con: sqlite3.Connection) -> None:
+    from llm_trading_bot.paper.risk import epoch
+
+    con.execute("UPDATE portfolios SET halted=1, cash=8000, peak=12000 WHERE agent='trend'")
+    request = Controls(resumes={"trend": NOW - 60, "gpt-sol": NOW - 60})
+    report = paper_cycle(
+        con, ScenarioClient(), TREND, costs=Costs(), clock=lambda: NOW, controls=request
+    )
+    assert report.released == ["trend"] and report.refused == []
+    assert all(m.status == "OK" for m in report.markets)  # trades again in the same round
+    old = Controls(resumes={"trend": NOW - 2 * 86_400})
+    con.execute("UPDATE portfolios SET halted=1 WHERE agent='trend'")
+    again = paper_cycle(
+        con, ScenarioClient(), TREND, costs=Costs(), clock=lambda: NOW + 5, controls=old
+    )
+    assert again.released == [] and again.refused == [("trend", "the depot still holds coins")]
+    assert epoch(iso(NOW)) == NOW

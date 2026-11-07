@@ -47,8 +47,9 @@ from llm_trading_bot.paper.execution import (
     Costs,
     Quotes,
     RiskStop,
+    covers,
     current_weight,
-    latest_quotes,
+    fresh_quotes,
     record_decision,
 )
 from llm_trading_bot.paper.report import LlmOutcome, MarketResult, decision_result
@@ -124,17 +125,24 @@ def _prepare(
     snaps: Mapping[Symbol, MarketSnapshot],
     costs: Costs,
     now_epoch: float,
+    paused: bool = False,
 ) -> _Prepared | LlmOutcome:
     p = balance(con, agent.name)
     if p["halted"]:
         return _outcome(agent, "HALTED", "portfolio halted")
-    # Arena llm_cycle: no request without fresh quotes of both markets, checked per depot.
-    qs = latest_quotes(con, now_epoch=now_epoch)
-    if qs is None:
-        return _outcome(agent, "NO_QUOTES", "stored quotes missing or stale")
-    usable = _usable(snaps, now_epoch)
-    if not usable:
+    if paused:
+        # ADR-0021: no paid request while nothing may be traded.
+        return _outcome(agent, "PAUSED", "trading paused")
+    current = _usable(snaps, now_epoch)
+    if not current:
         return _outcome(agent, "NO_MARKETS", "no current snapshot")
+    # Arena llm_cycle: no request without fresh quotes, checked per depot. Spec 011 AK7: per
+    # market - the request covers the markets with a fresh quote, and a held market without
+    # one blocks the request (the depot's value and weights would be unknown).
+    qs = fresh_quotes(con, now_epoch=now_epoch)
+    usable = {s: snap for s, snap in current.items() if s in qs}
+    if not usable or not covers(p, qs):
+        return _outcome(agent, "NO_QUOTES", "stored quotes missing or stale")
     payloads: dict[Symbol, dict[str, Any]] = {}
     for s, snap in usable.items():
         roundtrip = cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage)
@@ -260,8 +268,10 @@ def _finish(
     results = []
     for s, answer in answers.items():
         snap = prepared.usable[s]
+        # Spec 011 AK7: a quote lost after the answer costs only its own market.
         stale = (
             fresh is None
+            or s not in fresh
             or decided_at - snap.fetched_at > MAX_SNAPSHOT_AGE
             or abs(fresh[s].mid / snap.quote.mid - 1) > MAX_MID_DRIFT
         )
@@ -290,6 +300,8 @@ def _finish(
             # A BTC trade may trigger the stop: the ETH decision is then stored but not traded,
             # because record_decision reads the halted flag in its own transaction (Arena).
             stops=stops,
+            # Without a quote of a held market record_decision stores STALE_QUOTE itself.
+            partial=True,
         )
         results.append(decision_result(con, agent.name, s, bar_ts, new, attempt=attempt_id))
     regimes = {s: a.regime for s, a in answers.items()}
@@ -317,6 +329,7 @@ def run_llm_depots(
     refresh_quotes: Callable[[], Quotes | None],
     clock: Callable[[], float] = time.time,
     stops: list[RiskStop] | None = None,
+    paused: bool = False,
 ) -> list[tuple[LlmOutcome, list[MarketResult]]]:
     """All GPT depots of one cycle; one depot's failure never blocks another (ADR-0012)."""
     now_epoch = clock()
@@ -324,7 +337,7 @@ def run_llm_depots(
     prepared: list[_Prepared] = []
     for agent in agents:
         try:
-            ready = _prepare(con, agent, settings, snaps, costs, now_epoch)
+            ready = _prepare(con, agent, settings, snaps, costs, now_epoch, paused)
         except Exception as exc:
             done[agent.name] = (_outcome(agent, "ERROR", type(exc).__name__), [])
             continue

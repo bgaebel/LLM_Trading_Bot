@@ -7,11 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from llm_trading_bot.market.models import MarketDataError, Quote, Symbol
+from llm_trading_bot.market.models import Quote, Symbol
 from llm_trading_bot.paper.db import START_CASH, balance, open_db, write_tx
 from llm_trading_bot.paper.execution import (
     Costs,
     Quotes,
+    fresh_quotes,
     latest_quotes,
     record_decision,
     record_quotes,
@@ -88,12 +89,26 @@ def test_missing_or_invalid_stored_quote_is_stale(con: sqlite3.Connection) -> No
     assert latest_quotes(con, now_epoch=T) is None
 
 
-def test_record_quotes_needs_both_valid_quotes(con: sqlite3.Connection) -> None:
-    with pytest.raises(MarketDataError, match="both"):
-        record_quotes(con, {Symbol.BTCEUR: QS[Symbol.BTCEUR]}, now=iso(T))
-    with pytest.raises(MarketDataError, match="spread"):
-        record_quotes(con, {**QS, Symbol.ETHEUR: Quote(3_000.0, 3_100.0)}, now=iso(T))
-    assert con.execute("SELECT COUNT(*) FROM market").fetchone()[0] == 0
+def test_record_quotes_stores_each_valid_market_alone(con: sqlite3.Connection) -> None:
+    """Spec 011 AK7: a missing or invalid quote leaves the other market's quote stored."""
+    assert record_quotes(con, {Symbol.BTCEUR: QS[Symbol.BTCEUR]}, now=iso(T)) == [Symbol.BTCEUR]
+    wide = {**QS, Symbol.ETHEUR: Quote(3_000.0, 3_100.0)}
+    assert record_quotes(con, wide, now=iso(T + 5)) == [Symbol.BTCEUR]
+    rows = {r[0]: r[1] for r in con.execute("SELECT symbol, ts FROM market")}
+    assert rows == {"BTCEUR": iso(T + 5)}
+    assert latest_quotes(con, now_epoch=T + 5) is None  # the Arena paths still need both
+    assert fresh_quotes(con, now_epoch=T + 5) == {Symbol.BTCEUR: QS[Symbol.BTCEUR]}
+
+
+def test_fresh_quotes_drops_only_the_stale_market(con: sqlite3.Connection) -> None:
+    record_quotes(con, QS, now=iso(T))
+    record_quotes(con, {Symbol.ETHEUR: QS[Symbol.ETHEUR]}, now=iso(T + 15))
+    assert fresh_quotes(con, now_epoch=T + 20) == QS
+    assert fresh_quotes(con, now_epoch=T + 21) == {Symbol.ETHEUR: QS[Symbol.ETHEUR]}
+    assert fresh_quotes(con, now_epoch=T + 36) == {}
+    with write_tx(con):
+        con.execute("UPDATE market SET bid=-1 WHERE symbol='ETHEUR'")
+    assert fresh_quotes(con, now_epoch=T + 15) == {Symbol.BTCEUR: QS[Symbol.BTCEUR]}
 
 
 def test_newer_quotes_replace_older_ones(con: sqlite3.Connection) -> None:

@@ -15,6 +15,9 @@ from llm_trading_bot.web.files import write_private
 FILE_NAME = "service-status.json"
 STATES = ("starting", "running", "degraded", "stalled", "stopping", "stopped")
 RESULTS = ("ok", "incomplete", "no_quotes", "error")
+ADDED = frozenset({"trading_paused", "pause_source"})
+"""Fields added after the first release (Spec 011): a status file without them stays readable,
+e.g. right after an update, before the new service has written its first status."""
 
 
 def status_path(db: Path) -> Path:
@@ -37,6 +40,10 @@ class ServiceStatus:
     """Rounds in a row that were not ``ok``."""
     next_round_at: str | None = None
     config_warning: str = ""
+    trading_paused: bool = False
+    """Applied in the last round (Spec 011 AK6); the request itself is in secrets.env."""
+    pause_source: str = ""
+    """environment, file, invalid (fail closed) or "" - see paper.risk.Controls."""
 
     def __post_init__(self) -> None:
         if self.state not in STATES:
@@ -55,9 +62,11 @@ class ServiceStatus:
 
     @classmethod
     def from_json(cls, text: str) -> Self:
-        """Raises ValueError for anything that is not a status written by this version."""
+        """Raises ValueError for anything that is not a status written by this version or by an
+        older one (which lacks only the fields added later, see ADDED)."""
         data = json.loads(text)
-        if not isinstance(data, dict) or set(data) != {f.name for f in fields(cls)}:
+        names = {f.name for f in fields(cls)}
+        if not isinstance(data, dict) or not names - ADDED <= set(data) <= names:
             raise ValueError("not a service status file of this version")
         try:
             return cls(**data)
