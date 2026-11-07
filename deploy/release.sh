@@ -11,10 +11,15 @@
 #   ssh <alias> "sudo bash -s -- status" < deploy/release.sh
 #   ssh <alias> "sudo bash -s -- public '<domain>' '<service>'" < deploy/release.sh   (Spec 013)
 #   ssh <alias> "sudo bash -s -- public-off '<service>'" < deploy/release.sh
+#   ssh <alias> "sudo bash -s -- impressum <sha256>" < deploy/release.sh   (Spec 014, file uploaded first)
 #
 # Public HTTPS (Spec 013, ADR-0024): the domain lives only in /etc/llm-trading-bot/public-host. With
 # that file, deploy renders the release's deploy/Caddyfile (optional per release), validates it before
 # anything stops and installs it only once the new release is active; a rollback leaves caddy alone.
+#
+# Imprint (Spec 014, ADR-0025): the operator's name and address live only in
+# /etc/llm-trading-bot/impressum.md; the web UI reads it on every request. Its content never goes to
+# the output or deploy.log.
 #
 # Real host names, IPs, domains and user names never go into this file: the repository is public.
 # LTB_* variables exist only for the sandbox tests (tests/deploy/test_release.py).
@@ -77,6 +82,16 @@ CADDY_LIST=/etc/apt/sources.list.d/caddy-stable.list
 CADDY_REPO="deb [signed-by=$CADDY_KEYRING] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main"
 CADDY_ORIGIN=cloudsmith/caddy/stable
 UPGRADES_CONF=/etc/apt/apt.conf.d/53-llm-trading-bot-caddy
+JOURNALCTL="${LTB_JOURNALCTL:-journalctl}"
+
+# Spec 014: the path is fixed in deploy/llm-trading-bot-web.service (--impressum); the limit is the web
+# UI's (web/legal.py reads at most 16 KB).
+IMPRESSUM_FILE="$ROOT/etc/llm-trading-bot/impressum.md"
+IMPRESSUM_MAX=16384
+IMPRESSUM_INCOMING="" # deleted on exit, whatever happened (cmd_impressum)
+# Spec 014 AK8: the system journal (sshd, kernel, and caddy before its drop-in) keeps visitors' IP
+# addresses at most 14 + 1 days, like the bot's namespace (deploy/journald@llm-trading-bot.conf).
+SYSTEM_JOURNALD_DROPIN="$ROOT/etc/systemd/journald.conf.d/50-llm-trading-bot.conf"
 
 changes=0
 PUBLIC_HOST="" # set by load_public_host (deploy, rollback) or the public command
@@ -445,7 +460,8 @@ apply_caddyfile() {
   fi
   if [ -f "$old" ]; then install -m 644 "$old" "$CADDYFILE"; else rm -f "$CADDYFILE"; fi
   warn "caddy did not take the new Caddyfile - the previous one is back in place" \
-    "(journalctl -u caddy); the bot release stays"
+    "(journalctl --namespace=llm-trading-bot -u caddy; systemd's own lines: journalctl -u caddy);" \
+    "the bot release stays"
   return 1
 }
 
@@ -660,6 +676,38 @@ cmd_status() {
   else
     log "caddy: not installed"
   fi
+  log "impressum: $(impressum_state)"
+  log "web unit: $(web_impressum_state)"
+  # Caddy shares the namespace's 200 MB with the bot (Spec 014): attack noise would show up here.
+  log "journal: $("$JOURNALCTL" --namespace=llm-trading-bot --disk-usage 2>/dev/null || echo unknown)"
+}
+
+# Spec 014 AK9: never the content, only whether the web UI can serve it.
+impressum_state() {
+  local problem size hash
+  problem="$(impressum_problem "$IMPRESSUM_FILE" installed)"
+  case "$problem" in
+    "")
+      size="$(stat -c %s "$IMPRESSUM_FILE")"
+      hash="$(sha256sum <"$IMPRESSUM_FILE" | cut -c1-12)"
+      echo "ok ($size B, sha256 $hash)"
+      ;;
+    missing)
+      echo "missing - /impressum answers 503 (scripts/deploy.sh <alias> <service-user> impressum <file>)"
+      ;;
+    *) echo "INVALID ($problem) - /impressum answers 503" ;;
+  esac
+}
+
+# A release from before Spec 014 (e.g. after a rollback) does not pass the file to the web UI.
+web_impressum_state() {
+  if [ ! -f "$UNIT_DIR/$WEB" ]; then
+    echo "not installed"
+  elif grep -Eq "^ExecStart=.* --impressum ${IMPRESSUM_FILE#"$ROOT"}( |$)" "$UNIT_DIR/$WEB"; then
+    echo "passes --impressum"
+  else
+    echo "without --impressum (release before Spec 014) - /impressum is not served"
+  fi
 }
 
 # Like load_public_host, but only describes the file (status never stops on it).
@@ -680,10 +728,21 @@ public_host_state() {
 # --------------------------------------------------------------------------------- public (Spec 013)
 
 # /run/caddy for the admin socket: the package's unit runs caddy as its own user without it.
-CADDY_DROPIN_TEXT='# Spec 013 (deploy/release.sh): the admin API is a unix socket in /run/caddy.
+# LogNamespace (Spec 014, ADR-0025): caddy's warnings name visitors' IP addresses; in the bot's
+# namespace they expire after 15 days and never reach syslog. scripts/check-units.sh verifies this
+# text against the package's caddy.service - keep it one quoted block ending in a quote.
+CADDY_DROPIN_TEXT='# Spec 013/014 (deploy/release.sh): the admin API is a unix socket in /run/caddy; the log goes
+# to the namespace llm-trading-bot (journalctl --namespace=llm-trading-bot -u caddy).
 [Service]
 RuntimeDirectory=caddy
-RuntimeDirectoryMode=0750'
+RuntimeDirectoryMode=0750
+LogNamespace=llm-trading-bot'
+
+SYSTEM_JOURNALD_TEXT='# Spec 014 (deploy/release.sh public): old entries with IP addresses expire by themselves.
+# Whole files are dropped, so at most MaxRetentionSec + MaxFileSec = 15 days.
+[Journal]
+MaxRetentionSec=14day
+MaxFileSec=1day'
 
 UPGRADES_TEXT="// Spec 013 (deploy/release.sh): caddy is the only service facing the internet - its updates
 // install automatically like the security updates.
@@ -756,14 +815,42 @@ close_port() {
   fi
 }
 
+# Spec 014 AK8: journald reads its drop-ins only at start; restarted only when the file changed.
+# Services keep their log streams across the restart (journald holds them in systemd's fd store).
+journal_limits() {
+  local before=$changes
+  put_text "$SYSTEM_JOURNALD_DROPIN" 644 "$SYSTEM_JOURNALD_TEXT"
+  [ "$changes" -ne "$before" ] || return 0
+  if quietly "$SYSTEMCTL" restart systemd-journald.service; then
+    log "restarted  systemd-journald"
+  else
+    warn "systemd-journald did not restart - the limits take effect on its next start (reboot)"
+  fi
+}
+
+# Spec 014 AK8: the firewall logs every rejected packet with its source IP to kern.log, ufw.log and
+# syslog, which rotate for weeks. Asked first, so a second run changes nothing.
+ufw_logging_off() {
+  local out
+  out="$("$UFW" status verbose 2>&1)" || die "ufw status verbose failed: $out"
+  if grep -q '^Logging: off' <<<"$out"; then
+    log "unchanged  ufw logging off"
+    return
+  fi
+  out="$("$UFW" logging off 2>&1)" || die "ufw logging off failed: $out"
+  log "disabled   ufw logging"
+  changes=$((changes + 1))
+}
+
 restart_web() {
   quietly "$SYSTEMCTL" restart "$WEB" || true
   wait_web || die "the web UI did not come back - check its journal"
   log "restarted  $WEB"
 }
 
-# AK8 order: repository and package, automatic updates, domain file, units, firewall, Caddyfile,
-# restart caddy and the web UI. A second run changes and restarts nothing.
+# Spec 013 AK8 order: repository and package, automatic updates, domain file, units, firewall,
+# Caddyfile, restart caddy and the web UI. A second run changes and restarts nothing. Spec 014 AK8
+# adds the log limits (caddy's namespace in its drop-in, the system journal, no ufw logging).
 cmd_public() {
   local host="$1" service="$2" work before started=0
   require_root
@@ -789,9 +876,12 @@ cmd_public() {
   refresh_units "$service"
   put_text "$CADDY_DROPIN" 644 "$CADDY_DROPIN_TEXT"
   [ "$changes" -eq "$before" ] || quietly "$SYSTEMCTL" daemon-reload
+  # Before caddy (re)starts: its first lines with IP addresses already fall under the limits.
+  journal_limits
   # Let's Encrypt needs port 80 open before caddy starts (5 failed attempts per hour).
   open_port 80/tcp
   open_port 443/tcp
+  ufw_logging_off
   put_file "$CADDYFILE" 644 "$work/Caddyfile"
   rm -rf "$work"
   if ! "$SYSTEMCTL" is-enabled --quiet "$CADDY_UNIT"; then
@@ -800,7 +890,8 @@ cmd_public() {
     changes=$((changes + 1))
   fi
   if [ "$changes" -gt 0 ] || ! "$SYSTEMCTL" is-active --quiet "$CADDY_UNIT"; then
-    quietly "$SYSTEMCTL" restart "$CADDY_UNIT" || die "caddy did not start - journalctl -u caddy"
+    quietly "$SYSTEMCTL" restart "$CADDY_UNIT" || die "caddy did not start -" \
+      "journalctl --namespace=llm-trading-bot -u caddy (caddy's messages), journalctl -u caddy (systemd's)"
     log "restarted  caddy"
     started=1
   fi
@@ -839,7 +930,92 @@ cmd_public_off() {
   refresh_units "$service"
   [ "$changes" -eq "$before" ] || quietly "$SYSTEMCTL" daemon-reload
   [ "$changes" -eq 0 ] || restart_web
+  # The log limits (journald drop-ins, ufw logging off) stay: they protect SSH and firewall logs too.
   log "public address off - only the tunnel"
+  log "changes: $changes"
+}
+
+# --------------------------------------------------------------------------------- impressum (Spec 014)
+
+# Prints why $1 is no imprint the web UI can serve, nothing when it is one. The rules of its reader
+# (web/legal.py, Spec 014 AK3): a regular file, no link, at most IMPRESSUM_MAX bytes, UTF-8, no NUL,
+# not empty. "installed" also needs it readable for the service user. Never prints the content.
+impressum_problem() {
+  python3 - "$1" "$IMPRESSUM_MAX" "${2:-}" <<'PY'
+import os, stat, sys
+path, limit, installed = sys.argv[1], int(sys.argv[2]), sys.argv[3] == "installed"
+def done(reason):
+    print(reason)
+    sys.exit(0)
+try:
+    st = os.lstat(path)
+except FileNotFoundError:
+    done("missing")
+except OSError:
+    done("unreadable")
+if stat.S_ISLNK(st.st_mode):
+    done("a symlink")
+if not stat.S_ISREG(st.st_mode):
+    done("not a regular file")
+if st.st_size > limit:
+    done(f"too big: {st.st_size} B, at most {limit} B")
+if installed and not st.st_mode & stat.S_IROTH:
+    done(f"not readable for the web UI: mode {stat.S_IMODE(st.st_mode):o}")
+try:
+    with open(path, "rb") as f:
+        data = f.read(limit + 1)
+except OSError:
+    done("unreadable")
+if b"\0" in data:
+    done("contains a NUL byte")
+try:
+    text = data.decode("utf-8")
+except UnicodeDecodeError:
+    done("not UTF-8")
+if not text.lstrip("\ufeff").strip():
+    done("empty")
+PY
+}
+
+# The upload from scripts/deploy.sh: incoming/impressum-<sha256>.md (root only, 700), checked against
+# its hash and the reader's rules, then swapped in with one rename - a request in between sees the old
+# or the new file, never a half-written one. The incoming copy holds name and address: always deleted.
+cmd_impressum() {
+  local digest="$1" problem dir tmp target="$IMPRESSUM_FILE"
+  require_root
+  [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || die "not a sha256: $digest - nothing changed"
+  IMPRESSUM_INCOMING="$INCOMING/impressum-$digest.md"
+  trap 'rm -f "$IMPRESSUM_INCOMING"' EXIT
+  with_lock
+  [ -f "$IMPRESSUM_INCOMING" ] && [ ! -L "$IMPRESSUM_INCOMING" ] \
+    || die "no uploaded imprint for sha256 ${digest:0:12} - upload it with scripts/deploy.sh" \
+      "- nothing changed"
+  [ "$(sha256sum <"$IMPRESSUM_INCOMING" | awk '{print $1}')" = "$digest" ] \
+    || die "the uploaded imprint does not match its sha256 (upload cut short?) - nothing changed"
+  problem="$(impressum_problem "$IMPRESSUM_INCOMING")"
+  [ -z "$problem" ] || die "the uploaded imprint is invalid: $problem - nothing changed"
+  dir="$(dirname "$target")"
+  ensure_dir "$dir" 755 root:root
+  [ ! -d "$target" ] || [ -L "$target" ] || die "$target is a directory - nothing changed"
+  if [ -f "$target" ] && [ ! -L "$target" ] && cmp -s "$IMPRESSUM_INCOMING" "$target"; then
+    log "unchanged  $target"
+    chmod 644 "$target"
+    own root:root "$target"
+  else
+    # Same directory, so mv is a rename; -T replaces a link itself instead of following it.
+    tmp="$dir/.impressum.md.new"
+    rm -f "$tmp"
+    if testing; then
+      install -m 644 "$IMPRESSUM_INCOMING" "$tmp"
+    else
+      install -m 644 -o root -g root "$IMPRESSUM_INCOMING" "$tmp"
+    fi
+    mv -fT "$tmp" "$target"
+    log "written    $target ($(stat -c %s "$target") B, sha256 ${digest:0:12})" \
+      "- served from the next request on"
+    changes=$((changes + 1))
+  fi
+  log "web unit: $(web_impressum_state)"
   log "changes: $changes"
 }
 
@@ -857,7 +1033,8 @@ main() {
     status) cmd_status ;;
     public) [ "$#" -eq 3 ] || die "usage: public <domain> <service-user>"; cmd_public "$2" "$3" ;;
     public-off) [ "$#" -eq 2 ] || die "usage: public-off <service-user>"; cmd_public_off "$2" ;;
-    *) die "usage: install|deploy|rollback|status|public|public-off (see the header)" ;;
+    impressum) [ "$#" -eq 2 ] || die "usage: impressum <sha256>"; cmd_impressum "$2" ;;
+    *) die "usage: install|deploy|rollback|status|public|public-off|impressum (see the header)" ;;
   esac
 }
 

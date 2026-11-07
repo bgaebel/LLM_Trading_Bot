@@ -1,5 +1,5 @@
-"""Spec 008 AK10, Spec 009 AK4, Spec 013 AK7: the server files in deploy/ - options, placeholders,
-no real data.
+"""Spec 008 AK10, Spec 009 AK4, Spec 013 AK7, Spec 014 AK8/AK10/AK11: the server files in deploy/ -
+options, placeholders, log limits, no real data.
 
 `scripts/check-units.sh` lets systemd and caddy themselves verify them in the Linux CI; these tests
 pin what the service relies on (ADR-0017, ADR-0024) and that the public repository holds no server
@@ -8,6 +8,8 @@ details. They run on every platform.
 
 import configparser
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -22,7 +24,10 @@ JOURNAL = DEPLOY / "journald@llm-trading-bot.conf"
 BACKUP = DEPLOY / "llm-trading-bot-backup.service"
 TIMER = DEPLOY / "llm-trading-bot-backup.timer"
 CADDYFILE = DEPLOY / "Caddyfile"
+IMPRESSUM_EXAMPLE = DEPLOY / "impressum.example.md"
+RELEASE = DEPLOY / "release.sh"
 REPO = DEPLOY.parent
+SERVER_MD = REPO / "docs" / "betrieb" / "server.md"
 PLACEHOLDERS = {
     "__SERVICE_USER__",
     "__APP_DIR__",
@@ -30,14 +35,30 @@ PLACEHOLDERS = {
     "__BACKUP_DIR__",
     "__PUBLIC_HOST_ARG__",
     "__PUBLIC_HOST__",
+    # deploy/impressum.example.md (Spec 014): the operator fills them in a copy outside the repo.
+    "__OPERATOR_NAME__",
+    "__CO_ADDRESS__",
+    "__CO_STREET__",
+    "__CO_POSTCODE_CITY__",
 }
 
 
 def options(path: Path) -> dict[str, dict[str, str]]:
+    return parse_options(path.read_text(encoding="utf-8"))
+
+
+def parse_options(text: str) -> dict[str, dict[str, str]]:
     parser = configparser.ConfigParser(interpolation=None, strict=True)
     parser.optionxform = str  # type: ignore[assignment,method-assign]
-    parser.read_string(path.read_text(encoding="utf-8"))
+    parser.read_string(text)
     return {section: dict(parser[section]) for section in parser.sections()}
+
+
+def shell_text(name: str) -> str:
+    """The single-quoted value of a variable in release.sh, such as CADDY_DROPIN_TEXT."""
+    found = re.search(rf"^{name}='([^']*)'$", RELEASE.read_text(encoding="utf-8"), re.M)
+    assert found, name
+    return found.group(1)
 
 
 def test_service_unit_matches_the_service_loop() -> None:
@@ -96,10 +117,61 @@ def test_journal_is_bounded() -> None:
     assert j["SystemMaxUse"] == "200M" and j["MaxRetentionSec"] == "14day"
 
 
+def days(value: str) -> int:
+    found = re.fullmatch(r"(\d+)day", value)
+    assert found, value
+    return int(found.group(1))
+
+
+def test_journal_namespace_keeps_at_most_15_days_and_nothing_goes_to_syslog() -> None:
+    # Spec 014 AK8: journald drops whole files - an entry lives up to MaxRetentionSec + MaxFileSec.
+    j = options(JOURNAL)["Journal"]
+    assert days(j["MaxRetentionSec"]) + days(j["MaxFileSec"]) == 15
+    assert j["MaxFileSec"] == "1day" and j["ForwardToSyslog"] == "no"
+
+
+def test_journal_system_drop_in_of_release_sh_keeps_at_most_15_days() -> None:
+    release = RELEASE.read_text(encoding="utf-8")
+    path = 'SYSTEM_JOURNALD_DROPIN="$ROOT/etc/systemd/journald.conf.d/50-llm-trading-bot.conf"'
+    assert path in release
+    j = parse_options(shell_text("SYSTEM_JOURNALD_TEXT"))["Journal"]
+    assert j == {"MaxRetentionSec": "14day", "MaxFileSec": "1day"}
+    assert "restart systemd-journald.service" in release
+
+
+def test_journal_caddy_logs_into_the_namespace() -> None:
+    s = parse_options(shell_text("CADDY_DROPIN_TEXT"))["Service"]
+    assert s["LogNamespace"] == options(WEB)["Service"]["LogNamespace"] == "llm-trading-bot"
+    assert s["RuntimeDirectory"] == "caddy" and s["RuntimeDirectoryMode"] == "0750"
+    check = (REPO / "scripts" / "check-units.sh").read_text(encoding="utf-8")
+    assert "CADDY_DROPIN_TEXT" in check and 'systemd-analyze verify "$dir/caddy.service"' in check
+
+
+def test_journal_ufw_logging_off_in_public_and_kept_by_public_off() -> None:
+    release = RELEASE.read_text(encoding="utf-8")
+    assert '"$UFW" logging off' in release and "'^Logging: off'" in release
+    public = release[release.index("cmd_public() {") : release.index("cmd_public_off() {")]
+    off = release[release.index("cmd_public_off() {") : release.index("cmd_impressum() {")]
+    assert "\n  journal_limits\n" in public and "\n  ufw_logging_off\n" in public
+    # public off leaves the limits in place: they protect SSH and firewall logs too.
+    assert "journal_limits" not in off and "ufw_logging" not in off
+    assert "logging on" not in release
+
+
+@pytest.mark.parametrize("path", [RELEASE, SERVER_MD], ids=["release.sh", "server.md"])
+def test_journal_hints_name_the_namespace_for_caddy(path: Path) -> None:
+    # Spec 014 AK8: caddy's own messages are in the namespace, systemd's about the unit are not.
+    text = path.read_text(encoding="utf-8")
+    assert "journalctl --namespace=llm-trading-bot -u caddy" in text
+    for line in text.splitlines():
+        if "journalctl -u caddy" in line:
+            assert "--namespace=llm-trading-bot -u caddy" in line or "systemd" in line, line
+
+
 @pytest.mark.parametrize(
     "path",
-    [SERVICE, WEB, JOURNAL, BACKUP, TIMER, CADDYFILE],
-    ids=["service", "web", "journal", "backup", "timer", "caddyfile"],
+    [SERVICE, WEB, JOURNAL, BACKUP, TIMER, CADDYFILE, IMPRESSUM_EXAMPLE],
+    ids=["service", "web", "journal", "backup", "timer", "caddyfile", "impressum"],
 )
 def test_no_server_details_only_placeholders(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
@@ -109,10 +181,49 @@ def test_no_server_details_only_placeholders(path: Path) -> None:
     assert "/home/" not in text and "/root" not in text
 
 
+def test_impressum_example_holds_only_placeholders() -> None:
+    # Spec 014 AK11: name, address and domain exist only on the server and in a local copy.
+    text = IMPRESSUM_EXAMPLE.read_text(encoding="utf-8")
+    assert re.findall(r"\S+@\S+", text) == ["kontakt@<domain>"]
+    assert not re.search(r"\b\d{5}\b", text)  # no postcode
+    for heading in (
+        "# Impressum",
+        "## Angaben gemäß § 5 DDG",
+        "## Kontakt",
+        "## Verantwortlich für den Inhalt nach § 18 Abs. 2 MStV",
+        "## Haftung für Inhalte",
+        "## Haftung für Links",
+    ):
+        assert f"\n{heading}\n\n" in f"\n{text}", heading
+    # The markup web/legal.py renders: headings, "- " lists, paragraphs; LF, no BOM.
+    assert "\n- " in text and "\r" not in text and not text.startswith("\ufeff")
+
+
+def test_impressum_only_example_in_repo() -> None:
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("git is not available")
+    done = subprocess.run(
+        [git, "ls-files", "-z"], cwd=REPO, capture_output=True, check=False, timeout=60
+    )
+    if done.returncode != 0:
+        pytest.skip("not a git checkout")
+    files = done.stdout.decode("utf-8").split("\0")
+    imprints = [f for f in files if re.search(r"impressum[^/]*\.md$", f, re.I)]
+    assert imprints == ["deploy/impressum.example.md"]
+
+
 def test_web_unit_takes_the_public_host_from_release_sh_and_is_bounded() -> None:
     s = options(WEB)["Service"]
-    # release.sh fills in nothing or exactly `--public-host <domain> --public-port 8788`.
-    assert s["ExecStart"].endswith("--host 127.0.0.1 --port 8787 __PUBLIC_HOST_ARG__")
+    # release.sh fills in nothing or exactly `--public-host <domain> --public-port 8788`. The
+    # imprint path is fixed (Spec 014 AK10): the file may be missing, /impressum then answers 503.
+    assert s["ExecStart"].endswith(
+        "--host 127.0.0.1 --port 8787 --impressum /etc/llm-trading-bot/impressum.md"
+        " __PUBLIC_HOST_ARG__"
+    )
+    assert 'IMPRESSUM_FILE="$ROOT/etc/llm-trading-bot/impressum.md"' in RELEASE.read_text(
+        encoding="utf-8"
+    )
     assert s["MemoryMax"] == "256M" and s["TasksMax"] == "64" and s["OOMScoreAdjust"] == "500"
     release = (DEPLOY / "release.sh").read_text(encoding="utf-8")
     assert "--public-host $PUBLIC_HOST --public-port $PUBLIC_PORT" in release
