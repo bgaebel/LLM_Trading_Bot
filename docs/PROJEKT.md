@@ -23,7 +23,8 @@ Keine ungewollte echte Order und keine verfälschte Handelshistorie – im Zweif
 ## Nicht-Ziele
 - Keine Echtgeld-Orders vor dem Echtgeld-Meilenstein (siehe ADR-0004).
 - Keine weiteren Börsen, Märkte, Hebel, Margin oder Derivate in v1.
-- Kein öffentlich erreichbares Dashboard; Zugriff nur per SSH-Tunnel.
+- Kein öffentlich erreichbares Dashboard ohne Login; von außen nur per HTTPS mit Passwort (ADR-0024, Nutzer
+  2026-11-07) oder per SSH-Tunnel.
 - Kein Hochfrequenzhandel; höhere Signalfrequenz ist kein Ziel an sich.
 - Keine Änderungen am Arena-Repository aus diesem Projekt heraus; die Arena bleibt eigenständig.
 - Keine Gewinnbehauptungen; Kennzahlen nur aus echten Marktdaten und gekennzeichneten Orders.

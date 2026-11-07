@@ -9,7 +9,7 @@
 | [0002](0002-stack-python-uv.md) | Python 3.12 mit uv, pytest, ruff und mypy strict im src-Layout | angenommen |
 | [0003](0003-arena-module-uebernehmen.md) | Arena-Module mit Herkunftsvermerk übernehmen statt die Arena einzubinden | angenommen |
 | [0004](0004-paper-zuerst-echtgeld-gesperrt.md) | Paper-Modus zuerst; Echtgeld gesperrt bis zu eigener Spec und eigenem ADR | angenommen |
-| [0005](0005-betrieb-hetzner-cloud.md) | Betrieb auf Hetzner Cloud CX23 mit Ubuntu und systemd; Status nur per SSH-Tunnel | angenommen |
+| [0005](0005-betrieb-hetzner-cloud.md) | Betrieb auf Hetzner Cloud CX23 mit Ubuntu und systemd; Status nur per SSH-Tunnel | abgelöst durch [0024](0024-weboberflaeche-oeffentlich-https.md) |
 | [0006](0006-server-zugang-benutzer.md) | Admin-Benutzer mit Key und sudo NOPASSWD; Dienst unter eigenem Systembenutzer | angenommen |
 | [0007](0007-strategien-identisch-zur-arena.md) | Übernommene Strategien identisch zu Arena v0.3.1; Änderungen nur als neue Version | angenommen |
 | [0008](0008-paper-schema-ein-agent.md) | Eigenes versioniertes SQLite-Schema; ein aktiver Agent plus Buy & Hold | abgelöst durch [0010](0010-mehrere-llm-depots.md) |
@@ -28,3 +28,4 @@
 | [0021](0021-risiko-grenzen-m1.md) | Risiko in M1: Drawdown-Stopp 10 % wie Arena, Freigabe und Handelspause über die Weboberfläche, Kurse je Markt | angenommen |
 | [0022](0022-broker-naht-m1.md) | Broker-Naht in M1: Protokoll plus Paper-Delegation, Sperren als Tests, keine Laufzeitänderung | angenommen |
 | [0023](0023-live-ausfuehrung-m2-vorschlag.md) | Live-Ausführung für M2: zwei Phasen, nie blind wiederholen, getrennte Historie (Vorschlag bis M2) | vorgeschlagen |
+| [0024](0024-weboberflaeche-oeffentlich-https.md) | Weboberfläche öffentlich per HTTPS hinter Caddy mit gehärtetem Login; App bleibt auf 127.0.0.1 (löst 0005 ab) | angenommen |

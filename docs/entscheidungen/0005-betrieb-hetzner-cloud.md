@@ -1,6 +1,6 @@
 # ADR-0005: Betrieb auf Hetzner Cloud CX23 mit Ubuntu und systemd; Status nur per SSH-Tunnel
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0024](0024-weboberflaeche-oeffentlich-https.md)
 - **Löst ab:** –
 - **Datum:** 2026-11-05
 - **Bereich:** #betrieb #hetzner #sicherheit
