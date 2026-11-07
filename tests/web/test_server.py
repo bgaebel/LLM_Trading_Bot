@@ -126,9 +126,12 @@ def test_server_refuses_any_address_but_localhost(tmp_path: Path) -> None:
 
 
 def test_every_response_has_the_security_headers(running: Running) -> None:
-    for path in ("/", "/setup", "/app.css", "/nope"):
+    for path in ("/", "/setup", "/app.css", "/app.js", "/nope"):
         _, headers, _ = running.browser.request("GET", path)
-        assert "script-src 'none'" in headers["content-security-policy"]
+        # ADR-0019: scripts only from this origin (one file, /app.js), never inline or foreign.
+        assert "script-src 'self'" in headers["content-security-policy"]
+        assert "unsafe-inline" not in headers["content-security-policy"]
+        assert "unsafe-eval" not in headers["content-security-policy"]
         assert "default-src 'self'" in headers["content-security-policy"]
         assert headers["x-frame-options"] == "DENY"
         assert headers["cache-control"] == "no-store"
@@ -620,3 +623,21 @@ def test_navigation_reaches_both_pages(running: Running) -> None:
     setup(running)
     settings = running.browser.request("GET", "/settings")[2]
     assert '<a href="/">Übersicht</a>' in settings and '<a class="brand" href="/">' in settings
+
+
+def test_app_js_is_served_without_a_session_and_holds_no_data(running: Running) -> None:
+    from llm_trading_bot.web.script import JS
+
+    status, headers, body = running.browser.request("GET", "/app.js")
+    assert status == 200 and headers["content-type"] == "text/javascript; charset=utf-8"
+    assert headers["cache-control"] == "no-store" and body == JS
+    setup(running)
+    form: FormData = {"csrf": running.browser.csrf(), "OPENAI_API_KEY": KEY, "agents": ["trend"]}
+    running.browser.request("POST", "/settings", form)
+    assert KEY not in running.browser.request("GET", "/app.js")[2]
+
+
+def test_the_overview_loads_the_script_after_login(running: Running) -> None:
+    setup(running)
+    page = running.browser.request("GET", "/")[2]
+    assert page.count("<script") == 1 and '<script src="/app.js" defer></script>' in page

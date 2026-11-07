@@ -31,6 +31,7 @@ from llm_trading_bot.web.auth import (
 from llm_trading_bot.web.credentials import SecretsFile, mask
 from llm_trading_bot.web.overview_page import overview_page
 from llm_trading_bot.web.readonly import DbUnavailable, reading
+from llm_trading_bot.web.script import JS
 
 LOCALHOST = "127.0.0.1"
 LOCAL_NAMES = ("127.0.0.1", "localhost")
@@ -45,7 +46,7 @@ PRE_COOKIE = "ltb_pre"
 EXPIRED = "Formular abgelaufen – bitte erneut."
 SECURITY_HEADERS = {
     "Content-Security-Policy": (
-        "default-src 'self'; script-src 'none'; style-src 'self'; img-src 'self'; "
+        "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; "
         "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     ),
     "X-Frame-Options": "DENY",
@@ -207,6 +208,9 @@ class WebApp:
         """A ``KeyCheck`` asks the caller to run ``key_check`` and then ``key_checked``."""
         if path == "/app.css" and method == "GET":
             return Response(200, pages.CSS, "text/css; charset=utf-8")
+        if path == "/app.js" and method == "GET":
+            # ADR-0019: holds no data, so like the stylesheet it needs no session.
+            return Response(200, JS, "text/javascript; charset=utf-8")
         if not self.passwords.is_set():
             return self._setup(method, path, form, cookies)
         session = self._session(cookies)

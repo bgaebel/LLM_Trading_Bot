@@ -50,7 +50,7 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | `src/llm_trading_bot/market/` | Marktdaten: Modelle, HTTP-Transport, Bitvavo-Client, Snapshot-Prüfung |
 | `src/llm_trading_bot/strategy/` | Indikatoren, klassische Strategien, LLM-Kontext (reine Logik, ADR-0007) |
 | `src/llm_trading_bot/paper/` | Paper-Ausführung: Schema (`db`), Single-Writer-Sperre (`lock`), virtuelle Orders (`execution`), Zyklus (`cycle`), Ergebnis (`report`) |
-| `src/llm_trading_bot/web/` | Weboberfläche: Login (`auth`), Zugangsdaten-Datei (`credentials`), Seiten (`pages`, Übersicht `overview_page`, Stylesheet `style`, Deko-Chart `chart`), Übersichtsdaten (`overview`), Nur-Lese-Zugriff auf die Bot-DB (`readonly`, ADR-0016), Server und Routen (`app`), private Dateien (`files`) |
+| `src/llm_trading_bot/web/` | Weboberfläche: Login (`auth`), Zugangsdaten-Datei (`credentials`), Seiten (`pages`, Übersicht `overview_page`, Stylesheet `style`, Deko-Chart `chart`, Live-Skript `script` als `/app.js`), Übersichtsdaten (`overview`), Nur-Lese-Zugriff auf die Bot-DB (`readonly`, ADR-0016), Server und Routen (`app`), private Dateien (`files`) |
 | `src/llm_trading_bot/ops/` | Betrieb: geprüfte Backups, Prüfung und Wiederherstellung der Bot-DB (`backup`, ADR-0018) |
 | `src/llm_trading_bot/llm/` | GPT-Depots: Prompt v1 und Antwortprüfung (`contract`), Takt (`due`), Budget (`budget`), Konfiguration (`agents`), OpenAI-Adapter (`openai_client`), Ablauf je Depot (`cycle`) |
 | `tools/golden/` | Generator der Golden-Fixtures aus dem Arena-Code; `mutation_check.py` prüft, dass die Tests Änderungen an Schwellen/Gewichten erkennen (nur Entwicklung) |
@@ -158,7 +158,7 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `app`: `WebApp(data_dir, db=, key_check=)` mit `handle(method, path, cookie, form)` (für den Verbindungstest ein
     `KeyCheck`, den der Handler außerhalb der App-Sperre ausführt und mit `key_checked` beendet),
     `make_server(app, host, port)` (nur 127.0.0.1), `serve(...)`; Routen `/` (Übersicht), `/setup`, `/login`,
-    `/logout`, `/settings`, `/settings/test`, `/app.css`
+    `/logout`, `/settings`, `/settings/test`, `/app.css`, `/app.js`
   - `readonly`: `reading(db)` – ein Lese-Snapshot je Seitenaufruf (`mode=ro`, `query_only`, ADR-0016), sonst
     `DbUnavailable`
   - `overview`: `load(con, now, shares, service=)` → `Overview` (Depots, Equity-Reihen über den Index ausgedünnt,
@@ -169,7 +169,8 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 - **Invarianten:** nur 127.0.0.1; Host-Header-Name 127.0.0.1/localhost (Port frei, SSH-Tunnel); POST mit fremdem
   `Origin`/`Sec-Fetch-Site` abgelehnt; Ersteinrichtung nur mit Einrichtungscode aus dem Terminal; jedes Formular
   mit CSRF-Token (Sitzung bzw. Double-Submit-Cookie `ltb_pre` auf Login/Einrichtung); Cookies `ltb_*`, tolerant
-  gelesen; Keys nie vollständig im HTML; CSP ohne Skript, ohne Inline-Stil, Header auf jeder Antwort
+  gelesen; Keys nie vollständig im HTML; CSP `script-src 'self'` (nur `/app.js` auf der Übersicht, kein
+  Inline-Skript, kein `eval`, ADR-0019), ohne Inline-Stil, Header auf jeder Antwort
   (`end_headers`); `secrets.env` ohne Steuerzeichen/Zeilenumbrüche in Werten; kein Bitvavo-Key-Feld (ADR-0004).
   `secrets.env` und `web-auth.json` liegen im Datenverzeichnis, sind git-ignoriert, nie im Repo.
 

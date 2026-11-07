@@ -185,7 +185,8 @@ def test_reason_html_is_escaped() -> None:
     page = overview_page(_view(), csrf="t")
     assert "<script>alert(1)</script>" not in page
     assert "&lt;script&gt;alert(1)&lt;/script&gt; &amp; mehr" in page
-    assert "style=" not in page and "<script" not in page
+    assert "style=" not in page and page.count("<script") == 1
+    assert '<script src="/app.js" defer></script>' in page  # ADR-0019: our own file only
 
 
 def test_overview_refreshes_but_settings_do_not() -> None:
@@ -261,7 +262,9 @@ def test_readouts_take_the_last_cycle_by_label_not_from_the_service_pulse() -> N
     cycle = Pulse("Letzter Zyklus", "2026-11-06T12:00:00+00:00", 30.0)
     page = overview_page(_view(pulses=[service, cycle]), csrf="t")
     # Readouts are <small>label</small><b>value</b>; the pulse rows use <span>.
-    assert "<small>Letzter Zyklus</small><b>vor 30 s</b>" in page
+    assert re.search(
+        r'<small>Letzter Zyklus</small><b><span data-at="\d+">vor 30 s</span></b>', page
+    )
     # The bot readout follows the service, which knows more than the last equity point.
     assert '<small>Bot</small><b class="off">steht</b>' in page
 
@@ -281,7 +284,7 @@ def test_pulse_times_show_seconds() -> None:
     from llm_trading_bot.web.overview_page import overview_page
 
     page = overview_page(_view(), csrf="t")
-    assert "2026-11-06 12:00:00 UTC · vor 30 s" in page
+    assert re.search(r'2026-11-06 12:00:00 UTC · <span data-at="\d+">vor 30 s</span>', page)
 
 
 def _track(page: str) -> str:
@@ -333,3 +336,40 @@ def test_only_the_reloading_overview_drops_its_entrance_animation() -> None:
     assert '<body class="live">' in overview_page(_view(), csrf="t")
     assert '<body class="live">' not in pages.settings_page({}, csrf="t")
     assert ".live .panel, .live .readout, .live .msg { animation: none; }" in CSS
+
+
+def test_ages_carry_their_epoch_and_the_page_its_server_time() -> None:
+    # Spec 010 AK3: /app.js counts every age up from data-at, with the server's clock.
+    from llm_trading_bot.web.overview import Pulse, epoch
+    from llm_trading_bot.web.overview_page import overview_page
+
+    at = "2026-11-06T12:00:00+00:00"
+    view = _view(pulses=[Pulse("Letzter Zyklus", at, 30.0), Pulse("Kurs BTC-EUR", None, None)])
+    page = overview_page(view, csrf="t", now=epoch(at) + 30.4)
+    assert page.count(f'data-at="{int(epoch(at))}"') == 2  # pulse and readout
+    assert f'<span hidden data-now="{int(epoch(at) + 30.4)}"></span>' in page
+    assert "<span data-at" not in page.split("Kurs BTC-EUR")[1].split("</div>")[0]  # "nie"
+
+
+def test_only_the_overview_loads_the_script_and_falls_back_to_a_reload() -> None:
+    from llm_trading_bot.web.overview_page import REFRESH_SECONDS, overview_page
+
+    page = overview_page(_view(), csrf="t")
+    head = page.split("</head>")[0]
+    assert '<script src="/app.js" defer></script>' in head
+    assert f'<noscript><meta http-equiv="refresh" content="{REFRESH_SECONDS}"></noscript>' in head
+    for other in (pages.settings_page({}, csrf="t"), pages.login_page(csrf="t")):
+        assert "<script" not in other and "http-equiv" not in other
+
+
+def test_no_page_carries_inline_event_handlers() -> None:
+    from llm_trading_bot.web.overview_page import overview_page
+
+    for page in (
+        overview_page(_view(), csrf="t"),
+        pages.settings_page({}, csrf="t"),
+        pages.login_page(csrf="t"),
+        pages.setup_page(csrf="t"),
+    ):
+        assert not re.search(r"\son[a-z]+\s*=", page)
+        assert "javascript:" not in page

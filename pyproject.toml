@@ -42,6 +42,8 @@ select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF"]
 [tool.ruff.lint.per-file-ignores]
 # German UI texts use typographic dashes on purpose.
 "src/llm_trading_bot/web/*.py" = ["RUF001"]
+# Tests compare those German UI texts verbatim.
+"tests/web/*.py" = ["RUF001"]
 
 [tool.mypy]
 python_version = "3.12"

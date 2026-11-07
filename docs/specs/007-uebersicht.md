@@ -135,6 +135,8 @@ was zuletzt entschieden wurde und warum, was GPT heute gekostet hat und welche v
   (Verlauf).
 - **Nachweise:** `uv run pytest` 1080 passed, 5 skipped (Windows), CI grün; ruff, mypy strict ohne Befund; Prüfung:
   bereit, AK1–AK10 und AK12 mit Testnachweis; AK11 vom Nutzer abgenommen.
+- **Später geändert:** Seit Spec 010 (ADR-0019) aktualisiert sich die Übersicht live über `/app.js`; AK9
+  („Meta-Refresh, kein Skript“) gilt nur noch als Rückfall ohne Skript (`<noscript>`).
 - **Offen / Folgearbeit:** Die Budgetanteile zeigt die Seite aus `secrets.env`/Standardwerten; setzt der Dienst
   per Umgebung andere Werte, weicht die Anzeige ab (bekanntes Risiko, bei Nr. 6 im Blick behalten).
 - **Neue ADRs / Learnings:** ADR-0016; Learning „Sich selbst neu ladende Seite darf nicht die ganze Historie lesen".
