@@ -14,7 +14,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from llm_trading_bot.llm.agents import LlmAgent, LlmSettings
@@ -32,13 +32,14 @@ from llm_trading_bot.llm.contract import (
     PROMPT_VERSION,
     SYSTEM,
     InvalidSignal,
+    MarketAnswer,
     ordered,
     parse_answer,
     prompt_sha256,
     response_schema,
     user_message,
 )
-from llm_trading_bot.llm.due import hourly_limit_reached, iso, llm_due, trigger_state
+from llm_trading_bot.llm.due import Cadence, due_reason, hourly_limit_reached, iso, trigger_state
 from llm_trading_bot.llm.openai_client import API_ERRORS, MAX_RETRIES, ModelReply, SignalModel
 from llm_trading_bot.market.models import Symbol
 from llm_trading_bot.market.snapshot import MarketSnapshot
@@ -52,8 +53,9 @@ from llm_trading_bot.paper.execution import (
     fresh_quotes,
     record_decision,
 )
+from llm_trading_bot.paper.observations import ObservationBuffer, note
 from llm_trading_bot.paper.report import LlmOutcome, MarketResult, decision_result
-from llm_trading_bot.strategy.indicators import indicators
+from llm_trading_bot.strategy.indicators import Indicators, indicators
 from llm_trading_bot.strategy.payload import cost_roundtrip, feature_payload
 from llm_trading_bot.strategy.signals import run_strategy
 
@@ -101,6 +103,11 @@ class _Prepared:
     latency: float = 0.0
     answered_at: float = 0.0
     """Clock time when this depot's own reply arrived - not when the slowest depot finished."""
+    trigger: str = ""
+    """Why the depot is asked (llm.due.DUE_REASONS); observed only (Spec 015 AK4)."""
+    trigger_detail: dict[str, object] = field(default_factory=dict)
+    indicators: dict[Symbol, Indicators] = field(default_factory=dict)
+    """Unrounded indicators behind each payload; observed only."""
 
 
 def _rejected_unbilled(exc: BaseException) -> bool:
@@ -144,18 +151,23 @@ def _prepare(
     if not usable or not covers(p, qs):
         return _outcome(agent, "NO_QUOTES", "stored quotes missing or stale")
     payloads: dict[Symbol, dict[str, Any]] = {}
+    inds: dict[Symbol, Indicators] = {}
     for s, snap in usable.items():
         roundtrip = cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage)
+        inds[s] = indicators(snap, roundtrip)
         payloads[s] = feature_payload(
             snap,
-            indicators(snap, roundtrip),
+            inds[s],
             current_weight(p, s, qs),
             costs.fee_rate,
             costs.slippage,
         )
     triggers = market_triggers(usable, costs)
     mids = {s: snap.quote.mid for s, snap in usable.items()}
-    if not llm_due(con, agent.name, mids, triggers, now_epoch, settings.cadence):
+    trigger, trigger_detail = due_reason(
+        con, agent.name, mids, triggers, now_epoch, settings.cadence
+    )
+    if trigger is None:
         return _outcome(agent, "NOT_DUE")
     if hourly_limit_reached(con, agent.name, now_epoch, settings.cadence):
         return _outcome(agent, "HOURLY_LIMIT", f"{settings.cadence.max_calls_per_hour} attempts/h")
@@ -183,7 +195,18 @@ def _prepare(
     except BudgetBlocked as exc:
         return _outcome(agent, "BUDGET_BLOCKED", str(exc))
     assert agent.pricing is not None  # reserve() refuses an attempt without prices
-    return _Prepared(agent, attempt_id, agent.pricing, attempt, usable, payloads, schema)
+    return _Prepared(
+        agent,
+        attempt_id,
+        agent.pricing,
+        attempt,
+        usable,
+        payloads,
+        schema,
+        trigger=trigger,
+        trigger_detail=trigger_detail,
+        indicators=inds,
+    )
 
 
 def _ask(
@@ -214,9 +237,12 @@ def _finish(
     costs: Costs,
     clock: Callable[[], float],
     stops: list[RiskStop] | None = None,
+    observations: ObservationBuffer | None = None,
+    cadence: Cadence | None = None,
 ) -> tuple[LlmOutcome, list[MarketResult]]:
     agent, attempt_id, pricing = prepared.agent, prepared.attempt_id, prepared.pricing
     if prepared.error is not None or prepared.reply is None:
+        _observe_attempt(observations, prepared, cadence, None, None)
         exc = prepared.error or RuntimeError("no reply")
         # Type name only: provider messages may echo parts of the key. Unknown cost keeps the
         # whole reservation (all possible requests), so the budget stays on the safe side -
@@ -236,6 +262,8 @@ def _finish(
             return _outcome(agent, "ERROR", type(exc).__name__, attempt_id=attempt_id), []
         raise exc
     reply = prepared.reply
+    # Spec 015 AK4: the text as it came, before parsing - also when it turns out invalid.
+    raw_text = reply.text
     markets = ordered(list(prepared.usable))
     problem = reply.problem()
     answers = None
@@ -244,6 +272,7 @@ def _finish(
             answers = parse_answer(reply.text or "", markets, strategy=agent.name)
         except InvalidSignal as exc:
             problem = f"InvalidSignal: {exc}"
+    _observe_attempt(observations, prepared, cadence, raw_text, answers)
     # Requests before the last one (retries on 429/5xx) have unknown usage: worst case each.
     extra = request_worst_case(prepared.attempt, pricing) * (reply.requests - 1)
     cost = settle(
@@ -303,6 +332,10 @@ def _finish(
             # Without a quote of a held market record_decision stores STALE_QUOTE itself.
             partial=True,
         )
+        if new:
+            _observe_decision(
+                observations, agent.name, s, bar_ts, iso(decided_at), answer, prepared
+            )
         results.append(decision_result(con, agent.name, s, bar_ts, new, attempt=attempt_id))
     regimes = {s: a.regime for s, a in answers.items()}
     return (
@@ -318,6 +351,65 @@ def _finish(
     )
 
 
+def _observe_attempt(
+    obs: ObservationBuffer | None,
+    prepared: _Prepared,
+    cadence: Cadence | None,
+    raw_text: str | None,
+    answers: Mapping[Symbol, MarketAnswer] | None,
+) -> None:
+    """One GPT attempt for the observations: trigger, cadence, raw text, targets as answered."""
+    if obs is None:
+        return
+
+    def record(b: ObservationBuffer) -> None:
+        # The targets as the model gave them: record_decision clamps them to the current weight.
+        targets = {
+            s.name: {
+                "action": a.signal.action,
+                "target_fraction": a.signal.target_fraction,
+                "confidence": a.signal.confidence,
+                "market_regime": a.regime,
+            }
+            for s, a in (answers or {}).items()
+        }
+        b.llm_attempt(
+            iso(prepared.answered_at),
+            prepared.attempt_id,
+            prepared.agent.name,
+            prepared.trigger,
+            prepared.trigger_detail,
+            {} if cadence is None else asdict(cadence),
+            raw_text,
+            targets,
+        )
+
+    note(obs, record)
+
+
+def _observe_decision(
+    obs: ObservationBuffer | None,
+    agent: str,
+    symbol: Symbol,
+    bar_ts: int,
+    at: str,
+    answer: MarketAnswer,
+    prepared: _Prepared,
+) -> None:
+    note(
+        obs,
+        lambda b: b.decision(
+            agent,
+            symbol,
+            bar_ts,
+            at,
+            answer.signal.strategy,
+            answer.signal.version,
+            prepared.indicators[symbol],
+        ),
+    )
+
+
 def run_llm_depots(
     con: sqlite3.Connection,
     agents: Sequence[LlmAgent],
@@ -329,9 +421,13 @@ def run_llm_depots(
     refresh_quotes: Callable[[], Quotes | None],
     clock: Callable[[], float] = time.time,
     stops: list[RiskStop] | None = None,
+    observations: ObservationBuffer | None = None,
     paused: bool = False,
 ) -> list[tuple[LlmOutcome, list[MarketResult]]]:
-    """All GPT depots of one cycle; one depot's failure never blocks another (ADR-0012)."""
+    """All GPT depots of one cycle; one depot's failure never blocks another (ADR-0012).
+
+    ``observations`` (Spec 015) only collects each attempt and decision in memory.
+    """
     now_epoch = clock()
     done: dict[str, tuple[LlmOutcome, list[MarketResult]]] = {}
     prepared: list[_Prepared] = []
@@ -357,7 +453,9 @@ def run_llm_depots(
             fresh = None
         for p in prepared:
             try:
-                done[p.agent.name] = _finish(con, p, fresh, costs, clock, stops)
+                done[p.agent.name] = _finish(
+                    con, p, fresh, costs, clock, stops, observations, settings.cadence
+                )
             except Exception as exc:
                 done[p.agent.name] = (_outcome(p.agent, "ERROR", type(exc).__name__), [])
     return [done[a.name] for a in agents]
