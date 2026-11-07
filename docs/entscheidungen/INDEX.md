@@ -29,3 +29,4 @@
 | [0022](0022-broker-naht-m1.md) | Broker-Naht in M1: Protokoll plus Paper-Delegation, Sperren als Tests, keine Laufzeitänderung | angenommen |
 | [0023](0023-live-ausfuehrung-m2-vorschlag.md) | Live-Ausführung für M2: zwei Phasen, nie blind wiederholen, getrennte Historie (Vorschlag bis M2) | vorgeschlagen |
 | [0024](0024-weboberflaeche-oeffentlich-https.md) | Weboberfläche öffentlich per HTTPS hinter Caddy mit gehärtetem Login; App bleibt auf 127.0.0.1 (löst 0005 ab) | angenommen |
+| [0025](0025-rechtstexte.md) | Impressum nur auf dem Server, Datenschutzerklärung im Repo an den Code gebunden; Log-Fristen auf dem Server durchgesetzt | angenommen |
