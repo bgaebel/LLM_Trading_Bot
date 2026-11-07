@@ -180,6 +180,10 @@ Die Datenbank wird täglich auf dem Server gesichert, und eine Wiederherstellung
   zeigt das Lebenszeichen „Dienst“ jetzt „läuft“ mit dem Hinweis „ETH-EUR ohne Entscheidung: Marktdaten-Lücke bei
   Bitvavo“ (weicht von Spec 008 AK8 ab: dort `degraded` → verzögert); andere Fehler bleiben „verzögert“.
 
+- 2026-11-07: Abschlussprüfung umgesetzt (PR #17). Beobachtung in der CI: Schreibschutz per `chmod` ließ `install`
+  nicht scheitern (der Job hat offenbar Root-Rechte) – der Test erzwingt den Fehler jetzt mit einer Datei an Stelle
+  des Unit-Verzeichnisses.
+
 ## Ergebnis
 - **Erreicht:** Der Paper-Bot läuft seit 2026-11-06 22:38 UTC als systemd-Dienst auf dem CX23, die Weboberfläche
   per Tunnel. Ein Befehl von hier (`scripts/deploy.sh`) bringt nur geprüfte Commits von `main` als eigenes Release
