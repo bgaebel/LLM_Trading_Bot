@@ -38,7 +38,7 @@ uv run trading-bot paper-cycle --db <pfad>/bot.db
 ```
 
 Key und Einstellungen lassen sich auch über die lokale Weboberfläche eintragen (nur `127.0.0.1`; auf dem Server per
-SSH-Tunnel). Beim ersten Start steht ein Einrichtungscode im Terminal, damit legst du dein Passwort fest. Liegt die
+SSH-Tunnel oder per HTTPS über Caddy mit Login, siehe `docs/betrieb/server.md`). Beim ersten Start steht ein Einrichtungscode im Terminal, damit legst du dein Passwort fest. Liegt die
 Datenbank im selben Verzeichnis, liest `paper-cycle` die gespeicherten Werte automatisch. Die Startseite zeigt eine
 Übersicht aus der Bot-DB (`<pfad>/bot.db`, anderer Ort per `--db`), nur lesend, live aktualisiert:
 

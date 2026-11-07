@@ -14,7 +14,8 @@ eine OpenAI-Anfrage für beide Märkte nur bei Bedarf, hartes EUR-Budget, Proven
 Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`. Weboberfläche (`web`, Spec 006/007): Login, Übersicht
 (Depots, Equity-Verlauf, Lebenszeichen, Entscheidungen, GPT-Kosten, Trades; liest die Bot-DB nur lesend, ADR-0016)
 und Eingabe von OpenAI-Key und Einstellungen per `uv run trading-bot web --data-dir <dir> [--db <pfad>]`, nur auf
-127.0.0.1 (ADR-0015).
+127.0.0.1 (ADR-0015); auf dem Server von außen per HTTPS über Caddy (`--public-host <domain>`, Spec 013, ADR-0024)
+oder per SSH-Tunnel.
 Dauerbetrieb (`service`, Spec 008, ADR-0017): `uv run trading-bot run --db <pfad>` führt jede Minute (:05) einen
 Zyklus aus, liest die Einstellungen jede Runde neu, meldet sich bei systemd (Watchdog) und schreibt
 `service-status.json` neben der DB; die Übersicht zeigt daraus das Lebenszeichen „Dienst“. Units in `deploy/`.
@@ -37,7 +38,7 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
                 [store]    SQLite (WAL, Single-Writer) ──> [backup]
                     │
                     v
-               [status]    HTTP nur 127.0.0.1  <── SSH-Tunnel vom Desktop
+               [status]    HTTP nur 127.0.0.1  <── SSH-Tunnel (:8787) / Caddy HTTPS (:8788, ADR-0024)
 ```
 
 ## Verzeichnisse
@@ -200,21 +201,28 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 ### web
 - **Zweck:** Betreiber loggt sich ein und pflegt OpenAI-Key und Einstellungen; `paper-cycle` liest sie (ADR-0015).
 - **Schnittstelle:**
-  - `app`: `WebApp(data_dir, db=, key_check=)` mit `handle(method, path, cookie, form)` (für den Verbindungstest ein
-    `KeyCheck`, den der Handler außerhalb der App-Sperre ausführt und mit `key_checked` beendet),
-    `make_server(app, host, port)` (nur 127.0.0.1), `serve(...)`; Routen `/` (Übersicht), `/setup`, `/login`,
-    `/logout`, `/settings`, `/settings/test`, `/settings/pause`, `/settings/resume`, `/app.css`, `/app.js`
+  - `app`: `WebApp(data_dir, db=, key_check=, public_host=)` mit `handle(method, path, cookie, form, access)`
+    (`Access`: Tunnel oder öffentlich mit Client-Adresse; für den Verbindungstest ein `KeyCheck`, den der Handler
+    außerhalb der App-Sperre ausführt und mit `key_checked` beendet), `make_server(app, host, port, public=)` (nur
+    127.0.0.1), `serve(..., public_host=, public_port=)`; Routen `/` (Übersicht), `/setup`, `/login`, `/logout`,
+    `/settings`, `/settings/test`, `/settings/pause`, `/settings/resume`, `/settings/password`, `/app.css`,
+    `/app.js`
   - `readonly`: `reading(db)` – ein Lese-Snapshot je Seitenaufruf (`mode=ro`, `query_only`, ADR-0016), sonst
     `DbUnavailable`
   - `overview`: `load(con, now, shares, service=)` → `Overview` (Depots, Equity-Reihen über den Index ausgedünnt,
     Lebenszeichen, Entscheidungen, GPT heute, Trades, Kurse); `service_pulse(status, now)`
-  - `auth`: `PasswordStore` (scrypt), `LoginGuard` (5 Fehlversuche → 60 s), `Sessions` (12 h, im Speicher)
+  - `auth`: `PasswordStore` (scrypt; neue Passwörter ≥ 12 Zeichen, nicht häufig), `password_problem`,
+    `LoginGuard` (5 Fehlversuche → 60 s; öffentlich verdoppelnd bis 1 h), `PublicGuard` (je Client-Adresse, IPv6
+    je /64, globale Obergrenze), `DeviceKeys` (signiertes Geräte-Cookie, 90 Tage), `Sessions` (12 h, im Speicher)
   - `credentials`: `SecretsFile.update(form, agents=, clear_key=)` (prüft mit `load_config`), `set_paused`,
     `request_resume` (schreiben `BOT_PAUSED`/`BOT_RESUME`, auch wenn andere Einstellungen kaputt sind),
     `load_env_file`, `mask`
   - `files`: `write_private` (atomar, 600)
-- **Invarianten:** nur 127.0.0.1; Host-Header-Name 127.0.0.1/localhost (Port frei, SSH-Tunnel); POST mit fremdem
-  `Origin`/`Sec-Fetch-Site` abgelehnt; Ersteinrichtung nur mit Einrichtungscode aus dem Terminal; jedes Formular
+- **Invarianten:** nur 127.0.0.1. Zwei Sockets, der Zugangsweg kommt vom Socket: Tunnel-Port mit Host
+  127.0.0.1/localhost (Port frei) und ohne Proxy-Header; öffentlicher Port (nur Caddy) nur mit dem konfigurierten
+  Host, POSTs mit `Origin: https://<domain>`, Cookies `__Host-ltb_*` mit `Secure`, Fehlversuche je Client bzw.
+  Gerät, keine Einrichtung, Login nur mit Passwort ≥ 12 Zeichen (ADR-0024). POST mit fremdem
+  `Origin`/`Sec-Fetch-Site` abgelehnt; Ersteinrichtung nur per Tunnel mit Einrichtungscode aus dem Terminal; jedes Formular
   mit CSRF-Token (Sitzung bzw. Double-Submit-Cookie `ltb_pre` auf Login/Einrichtung); Cookies `ltb_*`, tolerant
   gelesen; Keys nie vollständig im HTML; CSP `script-src 'self'` (nur `/app.js` auf der Übersicht, kein
   Inline-Skript, kein `eval`, ADR-0019), ohne Inline-Stil, Header auf jeder Antwort

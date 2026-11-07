@@ -1,6 +1,7 @@
 # Server: Einrichtung und Prüfung
 
-Zielsystem laut ADR-0005: Hetzner Cloud CX23, Ubuntu 24.04 LTS. Zugangsmodell laut ADR-0006.
+Zielsystem laut ADR-0005 (abgelöst durch ADR-0024, Betrieb unverändert): Hetzner Cloud CX23, Ubuntu 24.04 LTS.
+Zugangsmodell laut ADR-0006.
 **Das Repo ist öffentlich:** IP, Hostname, Benutzernamen und SSH-Alias stehen nur lokal (`~/.ssh/config`),
 hier nur Platzhalter: `<server>` (IP/Host), `<admin>` (Admin-Benutzer), `<dienst>` (Systembenutzer des Bots),
 `<alias>` (lokaler SSH-Alias), `<key>` (Name des lokalen Keys).
@@ -10,7 +11,7 @@ hier nur Platzhalter: `<server>` (IP/Host), `<admin>` (Admin-Benutzer), `<dienst
 |---|---|
 | SSH | nur Public Key; kein Root-Login, kein Passwort-Login (`/etc/ssh/sshd_config.d/01-hardening.conf`) |
 | Benutzer | `<admin>` mit Key und `sudo` ohne Passwort; `<dienst>` als Systembenutzer ohne Shell und ohne sudo |
-| Firewall | ufw: eingehend nur 22/tcp mit Rate-Limit (max. 6 Verbindungen in 30 s je Quell-IP), ausgehend frei |
+| Firewall | ufw: eingehend 22/tcp mit Rate-Limit (max. 6 Verbindungen in 30 s je Quell-IP), ausgehend frei; mit Spec 013 zusätzlich 80/tcp und 443/tcp für Caddy (Abschnitt „Weboberfläche öffentlich“) |
 | Updates | unattended-upgrades: Sicherheitsupdates automatisch, Neustart bei Bedarf um 04:00 UTC |
 | Zeit | UTC, NTP über systemd-timesyncd |
 

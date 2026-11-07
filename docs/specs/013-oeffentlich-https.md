@@ -111,8 +111,8 @@ wird sie gehärtet (ADR-0024, löst ADR-0005 ab).
 ## Plan
 - [x] 1. Sperre je Schlüssel, Geräte-Cookie, Passwortregel und -änderung (AK4, AK6)
 - [x] 2. Zweiter Listener, Host/Origin/Cookies/Setup je Weg, `--public-host` (AK1–AK3, AK5)
-- [ ] 3. Caddyfile, Unit, `release.sh`, CI-Prüfung (AK7)
-- [ ] 4. `deploy.sh public` / `public off` / `status` mit Sandbox-Tests (AK8)
+- [x] 3. Caddyfile, Unit, `release.sh`, CI-Prüfung (AK7)
+- [x] 4. `deploy.sh public` / `public off` / `status` mit Sandbox-Tests (AK8)
 - [ ] 5. Doku, ADR, PROJEKT/CLAUDE.md; Prüfung (Workflow); PR (AK10)
 - [ ] 6. Mit Zustimmung: Deploy, `public <domain>`, Prüfung von außen (AK9)
 
