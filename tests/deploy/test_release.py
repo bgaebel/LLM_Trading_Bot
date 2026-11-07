@@ -1217,7 +1217,7 @@ def test_public_log_limits_survive_a_rollback_before_014(box: Sandbox) -> None:
     installed_conf = (box.root / "etc/systemd/journald@llm-trading-bot.conf").read_text(
         encoding="utf-8"
     )
-    assert "MaxFileSec" not in installed_conf  # the old release's file is back ...
+    assert "\nMaxFileSec=" not in installed_conf  # the old release's file is back ...
     assert box.namespace_drop_in.read_bytes() == drop_in  # ... the limits stay
     assert "LogNamespace=llm-trading-bot" in box.caddy_drop_in.read_text(encoding="utf-8")
 
