@@ -521,11 +521,13 @@ def test_a_failed_unit_install_never_switches_or_starts_the_release(box: Sandbox
     installed(box).secrets()
     box.upload(sha(1))
     box.run("deploy", sha(1), "botsvc")
-    blocker = box.root / "etc/systemd/system/llm-trading-bot-backup.timer"
-    blocker.unlink()
-    blocker.mkdir()  # `install -m 644` onto a directory fails
+    units = box.root / "etc/systemd/system"
     box.upload(sha(2))
-    result = box.run("deploy", sha(2), "botsvc", check=False)
+    units.chmod(0o555)  # `install -m 644` into it fails (the tests do not run as root)
+    try:
+        result = box.run("deploy", sha(2), "botsvc", check=False)
+    finally:
+        units.chmod(0o755)
     assert result.returncode != 0
     assert box.current() == sha(1)  # never switched to the half-installed release
 
