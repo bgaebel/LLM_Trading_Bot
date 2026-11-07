@@ -61,6 +61,25 @@ def test_public_pages_carry_no_inline_style_or_script(render: Callable[..., str]
     assert "style=" not in page and "<script" not in page and "<style" not in page
 
 
+def test_legal_pages_carry_no_inline_style_or_script() -> None:
+    """Spec 014 AK1: Impressum, privacy policy and the missing-Impressum page, also with an
+    Impressum that tries to smuggle markup in."""
+    from llm_trading_bot.web import legal
+    from llm_trading_bot.web.app import DATENSCHUTZ_HTML
+
+    hostile = legal.render('<style>x</style> <script>y</script> <p style="z"> a@b.de')
+    for page in (
+        pages.legal_page("Datenschutz", DATENSCHUTZ_HTML),
+        pages.legal_page("Impressum", hostile),
+        pages.impressum_missing_page(),
+    ):
+        # The hostile text shows up escaped, as text; no tag may carry a style attribute.
+        assert not re.search(r"<[^>]*\sstyle=", page)
+        assert "<script" not in page and "<style" not in page
+        assert "http-equiv" not in page and 'action="/logout"' not in page
+        assert 'class="tabs"' not in page
+
+
 def _cost_rows(page: str) -> dict[str, list[str]]:
     table = page[page.index('<table class="costs"') : page.index("</table>")]
     rows = re.findall(r"<tr><th>([^<]+)</th>((?:<td>[^<]*</td>)+)</tr>", table)

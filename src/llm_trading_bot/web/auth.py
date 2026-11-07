@@ -30,6 +30,11 @@ MAX_LOCKOUT_SECONDS = 3600
 GLOBAL_FAILURES_PER_HOUR = 100
 SESSION_SECONDS = 12 * 3600
 DEVICE_SECONDS = 90 * 86400
+# ADR-0025: a client's address is kept no longer than needed to slow down guessing - 24 h after
+# its last failure or the end of its lock, whichever is later. The privacy policy names this.
+FORGET_SECONDS = 24 * 3600
+PRUNE_SECONDS = 60
+"""How often the whole table is swept; a looked-up entry is checked on every access."""
 MAX_TRACKED_CLIENTS = 10_000
 OVERFLOW = "overflow"
 
@@ -158,11 +163,13 @@ class LoginGuard:
         self.failures = 0
         self.locks = 0
         self.locked_until = 0.0
+        self.last_failure = 0.0
 
     def seconds_locked(self) -> int:
         return max(0, int(self.locked_until - self.clock() + 0.999))
 
     def failed(self) -> None:
+        self.last_failure = self.clock()
         self.failures += 1
         if self.failures >= MAX_FAILURES:
             factor = 2**self.locks if self.doubling else 1
@@ -179,6 +186,13 @@ class LoginGuard:
         """Nothing to remember any more: no failures, no lock (doubling resets only on success,
         so a client that was locked stays tracked)."""
         return self.failures == 0 and self.locks == 0
+
+    def forgettable(self, now: float) -> bool:
+        """FORGET_SECONDS have passed since the last failure and since the end of the lock; a
+        running lock is never forgotten, whatever the constants say."""
+        if self.locked_until > now:
+            return False
+        return now >= max(self.last_failure, self.locked_until) + FORGET_SECONDS
 
 
 def client_key(address: str) -> str:
@@ -204,6 +218,25 @@ class PublicGuard:
         self.clock = clock
         self.guards: dict[str, LoginGuard] = {}
         self.recent: deque[float] = deque()
+        self.pruned = clock()
+
+    def prune(self) -> None:
+        """Forget every entry whose time is up (ADR-0025)."""
+        now = self.clock()
+        self.pruned = now
+        for k in [k for k, g in self.guards.items() if g.forgettable(now)]:
+            del self.guards[k]
+
+    def _tidy(self, key: str) -> None:
+        """Lazily on access: the entry asked for is checked every time, the whole table at
+        most every PRUNE_SECONDS - a flood of requests must not sweep 10,000 entries each."""
+        now = self.clock()
+        if now - self.pruned >= PRUNE_SECONDS:
+            self.prune()
+            return
+        guard = self.guards.get(key)
+        if guard is not None and guard.forgettable(now):
+            del self.guards[key]
 
     def _guard(self, key: str) -> LoginGuard:
         guard = self.guards.get(key)
@@ -231,12 +264,14 @@ class PublicGuard:
         return 0
 
     def seconds_locked(self, key: str, *, device: bool) -> int:
+        self._tidy(key)
         if key not in self.guards and len(self.guards) >= MAX_TRACKED_CLIENTS:
             key = OVERFLOW
         own = self.guards[key].seconds_locked() if key in self.guards else 0
         return own if device else max(own, self._global_seconds())
 
     def failed(self, key: str, *, device: bool) -> None:
+        self._tidy(key)
         self._guard(key).failed()
         if not device:
             self.recent.append(self.clock())

@@ -9,6 +9,7 @@ import pytest
 
 from llm_trading_bot.web.auth import (
     DEVICE_SECONDS,
+    FORGET_SECONDS,
     LOCKOUT_SECONDS,
     MAX_FAILURES,
     MAX_LOCKOUT_SECONDS,
@@ -288,3 +289,118 @@ def test_public_guard_full_table_keeps_escalated_clients(monkeypatch: pytest.Mon
     assert all(guard.seconds_locked(k, device=True) > 0 for k in ("ip:a", "ip:b", "ip:c"))
     assert len(guard.guards) <= 4
     assert guard.seconds_locked("ip:another", device=True) > 0  # newcomers share the overflow
+
+
+# ------------------------------------------------------------------ Spec 014 AK7: forgetting
+
+
+def _fail(guard: PublicGuard, key: str, times: int = 1) -> None:
+    for _ in range(times):
+        guard.failed(key, device=False)
+
+
+def test_public_guard_forgets_a_failure_after_24_hours() -> None:
+    clock = Clock()
+    guard = PublicGuard(clock)
+    _fail(guard, "ip:a")
+    clock.now += FORGET_SECONDS - 1
+    guard.seconds_locked("ip:a", device=True)
+    assert "ip:a" in guard.guards
+    clock.now += 1
+    guard.seconds_locked("ip:a", device=True)
+    assert "ip:a" not in guard.guards
+
+
+def test_public_guard_forgets_counts_from_the_last_failure() -> None:
+    clock = Clock()
+    guard = PublicGuard(clock)
+    _fail(guard, "ip:a")
+    clock.now += FORGET_SECONDS - 10
+    _fail(guard, "ip:a")  # a new failure restarts the period
+    clock.now += 10
+    guard.seconds_locked("ip:a", device=True)
+    assert guard.guards["ip:a"].failures == 2
+    clock.now += FORGET_SECONDS
+    guard.seconds_locked("ip:a", device=True)
+    assert "ip:a" not in guard.guards
+
+
+def test_public_guard_forgets_counts_from_the_end_of_the_lock() -> None:
+    clock = Clock()
+    guard = PublicGuard(clock)
+    _fail(guard, "ip:a", MAX_FAILURES)
+    locked = guard.seconds_locked("ip:a", device=False)
+    assert locked == LOCKOUT_SECONDS
+    clock.now += locked + FORGET_SECONDS - 1
+    guard.seconds_locked("ip:a", device=True)
+    assert "ip:a" in guard.guards  # 24 h after the last failure, but not yet after the lock
+    clock.now += 1
+    guard.seconds_locked("ip:a", device=True)
+    assert "ip:a" not in guard.guards
+
+
+def test_public_guard_forgets_the_escalation_too() -> None:
+    clock = Clock()
+    guard = PublicGuard(clock)
+    for _ in range(3):
+        _fail(guard, "ip:a", MAX_FAILURES)
+        clock.now += guard.seconds_locked("ip:a", device=False)
+    clock.now += FORGET_SECONDS
+    _fail(guard, "ip:a", MAX_FAILURES)
+    assert guard.seconds_locked("ip:a", device=False) == LOCKOUT_SECONDS  # back to the start
+
+
+def test_public_guard_forgets_never_while_locked(monkeypatch: pytest.MonkeyPatch) -> None:
+    from llm_trading_bot.web import auth
+
+    monkeypatch.setattr(auth, "FORGET_SECONDS", 1)  # even a period shorter than the lock
+    clock = Clock()
+    guard = PublicGuard(clock)
+    _fail(guard, "ip:a", MAX_FAILURES)
+    for _ in range(LOCKOUT_SECONDS - 1):
+        clock.now += 1
+        assert guard.seconds_locked("ip:a", device=False) > 0
+        assert "ip:a" in guard.guards
+    clock.now += 1
+    assert guard.seconds_locked("ip:a", device=False) == 0
+    assert "ip:a" in guard.guards  # the period starts when the lock ends
+    clock.now += 1
+    guard.seconds_locked("ip:a", device=False)
+    assert "ip:a" not in guard.guards
+
+
+def test_public_guard_forgets_others_when_the_table_is_swept() -> None:
+    """Entries nobody asks for again go on any access, at most every PRUNE_SECONDS."""
+    clock = Clock()
+    guard = PublicGuard(clock)
+    _fail(guard, "ip:a")
+    _fail(guard, "ip:b", MAX_FAILURES)
+    clock.now += LOCKOUT_SECONDS + FORGET_SECONDS
+    guard.seconds_locked("ip:c", device=True)
+    assert guard.guards == {}
+    _fail(guard, "ip:d")
+    clock.now += FORGET_SECONDS
+    guard.prune()
+    assert guard.guards == {}
+
+
+def test_public_guard_forgets_on_the_timer_without_visitors(tmp_path: Path) -> None:
+    """ADR-0025: serve() sweeps periodically, so an address leaves memory with no request."""
+    import threading
+
+    from llm_trading_bot.web.app import WebApp, forget_loop
+
+    clock = Clock()
+    app = WebApp(tmp_path, clock=clock)
+    app.public_guard.failed("ip:a", device=False)
+    clock.now += FORGET_SECONDS
+    stop = threading.Event()
+    thread = threading.Thread(target=forget_loop, args=(app, stop, 0.01), daemon=True)
+    thread.start()
+    for _ in range(500):
+        if not app.public_guard.guards:
+            break
+        threading.Event().wait(0.01)
+    stop.set()
+    thread.join(5)
+    assert app.public_guard.guards == {} and not thread.is_alive()

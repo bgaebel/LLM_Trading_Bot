@@ -422,3 +422,34 @@ def test_web_passes_the_public_host_and_port(
     args = ["--public-host", "bot.example.test", "--public-port", "9999"]
     assert main(["web", "--data-dir", str(tmp_path), *args]) == EXIT_OK
     assert seen == [(None, 8788), ("bot.example.test", 9999)]
+
+
+def test_web_passes_the_impressum(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Spec 014: the unit's `--impressum <path>` reaches serve(); without it there is none."""
+    from llm_trading_bot import cli
+
+    seen: list[object] = []
+    monkeypatch.setattr(cli, "serve", lambda data_dir, **kw: seen.append(kw["impressum"]))
+    assert main(["web", "--data-dir", str(tmp_path)]) == EXIT_OK
+    impressum = tmp_path / "missing-is-fine" / "impressum.md"
+    assert main(["web", "--data-dir", str(tmp_path), "--impressum", str(impressum)]) == EXIT_OK
+    assert seen == [None, impressum]
+
+
+def test_web_serve_hands_the_impressum_to_the_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from llm_trading_bot.web import app as app_module
+
+    apps: list[object] = []
+
+    def stop(app: object, *args: object, **kwargs: object) -> object:
+        apps.append(app)
+        raise OSError("port taken")
+
+    monkeypatch.setattr(app_module, "make_server", stop)
+    impressum = tmp_path / "impressum.md"
+    with pytest.raises(OSError):
+        app_module.serve(tmp_path, port=0, out=io.StringIO(), impressum=impressum)
+    (app,) = apps
+    assert isinstance(app, app_module.WebApp) and app.impressum == impressum
