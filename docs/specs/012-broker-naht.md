@@ -1,6 +1,6 @@
 # Spec 012: Echtgeld-Schnittstelle als Entwurf (Broker-Naht)
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s012-broker-naht` · **Meilenstein:** M1 (Nr. 8)
 - **Erstellt:** 2026-11-07
 
@@ -12,7 +12,7 @@ schlagen an, sobald jemand welchen hinzufügt. Für M2 liegt ein ADR-Vorschlag v
 Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich nichts (ADR-0022, ADR-0023).
 
 ## Akzeptanzkriterien
-- [ ] AK1: Paket `llm_trading_bot/broker/` mit `contract.py` (Protocols `Broker` und `OrderExchange`, Typen
+- [x] AK1: Paket `llm_trading_bot/broker/` mit `contract.py` (Protocols `Broker` und `OrderExchange`, Typen
   `OrderIntent`, `OrderOutcome`, `ExecutedFill`, `MarketRules`, `AccountBalances`, `OrderSide`, `OrderState`),
   `paper.py` (`PaperBroker`), `live.py` (`LiveTradingLocked`, `refuse_live`), `intents.py` (Zustandsmaschine) und
   `make_broker(mode)`. `Broker` hat `record_decision`, `mark`, `initialize_buyhold` (Signaturen wie
@@ -20,13 +20,13 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
   dass ein Live-Broker innerhalb einer Transaktion nur PLANNED-Vorgänge anlegt und ausschließlich in `dispatch`
   außerhalb jeder Transaktion sendet. `PaperBroker` erfüllt `Broker` statisch. — Nachweis: `uv run mypy src tests
   tools` (mit `_: Broker = PaperBroker()` in `tests/broker/test_broker_contract.py`); Laufzeit-Invarianten AK7
-- [ ] AK2: Der `PaperBroker` reicht nur durch und liefert bitgleich die Arena-Ergebnisse: In beiden
+- [x] AK2: Der `PaperBroker` reicht nur durch und liefert bitgleich die Arena-Ergebnisse: In beiden
   Golden-Fixtures (Spec 004 und Drawdown) laufen die `decide`-, `mark`- und `buyhold`-Ops über den `PaperBroker`,
   `trade`-Ops (kein Broker-Port) weiter direkt; alle Digests und benannten Fälle gleich. Jeder Parameter
   (`costs`, `now`, `qs`, `status`, `stops`, `partial`, `when`) kommt unverändert bei `paper.execution` an.
   — Nachweis: `tests/broker/test_paper_broker_golden.py` (`BrokerRunner(BotRunner)` überschreibt nur `apply`;
   `tests/golden_execution_runner.py` bleibt unverändert), `tests/broker/test_paper_broker.py` (Spy je Parameter)
-- [ ] AK3: Am laufenden Dienst ändert sich nichts: `git diff --exit-code main -- src
+- [x] AK3: Am laufenden Dienst ändert sich nichts: `git diff --exit-code main -- src
   ':(exclude)src/llm_trading_bot/broker' deploy scripts pyproject.toml uv.lock tests/paper/fixtures
   tests/golden_*.py tools/golden/generate_execution_golden.py` ist leer. In `tools/golden/mutation_check.py` bleiben
   alle bestehenden Mutationen und `EQUIVALENT`-Einträge gleich; neu sind nur die Einträge für `broker/`,
@@ -34,14 +34,14 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
   Temp-Kopie und die Zuordnung der Dateien `core.py`/`cli.py` zu ihren Tests in `group_of`
   (`git diff main -- tools/golden/mutation_check.py` zeigt nur diese Änderungen). Kein Deploy nötig.
   [manuell, optional] `generate_execution_golden.py <arena>/apps/arena --check` meldet beide Fixtures gleich.
-- [ ] AK4: Live ist gesperrt – eine Laufzeitsperre und zwei Vorab-Sperren für M2: `parse_mode` wirft
+- [x] AK4: Live ist gesperrt – eine Laufzeitsperre und zwei Vorab-Sperren für M2: `parse_mode` wirft
   `NotImplementedError` für `live`, ` LIVE `, `Live\n` und `ValueError` für `real`; mit `TRADING_MODE=live`
   bricht `main([...])` für `run`, `paper-cycle`, `market` und `web` ab, bevor ein `BitvavoClient` oder eine
   Datenbank entsteht; `make_broker(TradingMode.LIVE)` wirft `LiveTradingLocked` (Unterklasse von
   `NotImplementedError`), auch wenn jemand `parse_mode` umgeht; `live.py` definiert keine Klasse mit Methoden und
   importiert nur `typing`. — Nachweis: `tests/test_core.py`, `tests/test_cli.py -k live`,
   `tests/broker/test_live_locked.py`
-- [ ] AK5: Es gibt keinen Order-Pfad, und ein eingeschleuster würde auffallen. Statische Prüfung (AST, Docstrings
+- [x] AK5: Es gibt keinen Order-Pfad, und ein eingeschleuster würde auffallen. Statische Prüfung (AST, Docstrings
   ausgenommen) über `src/`, `tests/` und `tools/` (ohne die Prüfdatei selbst) sowie Textprüfung über `scripts/` und
   `deploy/`:
   - keine Literale `/order`, `/orders`, `/ordersOpen`, `/trades`, `/balance`, `/account`, `/cancelOrdersAfter`,
@@ -59,11 +59,11 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
   - kein Paket in `pyproject.toml`/`uv.lock`, dessen Name `bitvavo` oder `ccxt` enthält.
   Jede Regel hat einen Negativtest (verbotenes Muster in einer temporären Kopie → Prüfung schlägt an).
   — Nachweis: `tests/broker/test_no_order_path.py`
-- [ ] AK6: Modus und Börsen-Keys lassen sich weder über die Weboberfläche noch über `secrets.env` noch über die
+- [x] AK6: Modus und Börsen-Keys lassen sich weder über die Weboberfläche noch über `secrets.env` noch über die
   Server-Dateien setzen: `TRADING_MODE`, `BITVAVO_*`, `LIVE_*` stehen nicht in `web/credentials.FIELDS`,
   `parse("TRADING_MODE=live")` ist leer; Units und Skripte in `deploy/` und `scripts/` setzen weder diese
   Variablen noch `EnvironmentFile=`. — Nachweis: `tests/broker/test_live_locked.py -k config`
-- [ ] AK7: Die Live-Typen lehnen Ungültiges ab:
+- [x] AK7: Die Live-Typen lehnen Ungültiges ab:
   - `OrderIntent`: genau eine Menge > 0 als `Decimal` (`float`/`bool` abgelehnt); BUY trägt ein EUR-Budget
     (`amount_quote`), SELL/RISK_SELL eine Basismenge (`amount_base`) – die Umrechnung in eine Bitvavo-Order
     (Market mit `amountQuote` oder IOC-Limit mit `amount` und `price`) gehört zum Live-Broker in M2;
@@ -80,24 +80,24 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
     Verstoß gemeldet.
   — Nachweis: `tests/broker/test_broker_contract.py` mit der unveränderten öffentlichen Antwort
   `tests/broker/fixtures/markets_2026-11.json`
-- [ ] AK8: Die Zustandsmaschine (`ALLOWED`) erlaubt genau: PLANNED → SENT, UNKNOWN, ABORTED; SENT → FILLED,
+- [x] AK8: Die Zustandsmaschine (`ALLOWED`) erlaubt genau: PLANNED → SENT, UNKNOWN, ABORTED; SENT → FILLED,
   PARTIAL, EXPIRED, REJECTED, UNKNOWN; UNKNOWN → FILLED, PARTIAL, EXPIRED (nur nach Nachfragen). Endzustände
   sind endgültig; nichts führt zurück zu PLANNED oder SENT (kein erneutes Senden). ABORTED heißt „nie gesendet“
   (nur vor dem Versand in derselben Runde); beim Start gilt jeder PLANNED-Vorgang als UNKNOWN. `may_plan` ist
   falsch, solange für (Depot, Markt) ein Vorgang in PLANNED, SENT oder UNKNOWN steht. — Nachweis:
   `tests/broker/test_intents.py` (alle Paare `OrderState × OrderState`)
-- [ ] AK9: Eine fremde Datenbank (etwa eine spätere Live-DB mit `user_version` ≥ 100, auch im WAL-Modus mit nicht
+- [x] AK9: Eine fremde Datenbank (etwa eine spätere Live-DB mit `user_version` ≥ 100, auch im WAL-Modus mit nicht
   zurückgeschriebenen Einträgen) wird von `open_db` und der Weboberfläche abgelehnt; ihr Inhalt (`iterdump` über
   eine lesende Verbindung) und `user_version` sind vorher und nachher gleich. — Nachweis:
   `tests/broker/test_live_locked.py -k foreign_database`
-- [ ] AK10: Der Mutationstest erfasst die neuen Sperren: alle Mutationen der Gruppen `broker` und `cli` KILLED, der
+- [x] AK10: Der Mutationstest erfasst die neuen Sperren: alle Mutationen der Gruppen `broker` und `cli` KILLED, der
   `broker noop control` überlebt (die Prüfung meldet Überlebende). Mindestens: `raise LiveTradingLocked` →
   `return None`; `make_broker` gibt bei LIVE einen `PaperBroker`; je eine Prüfung in `OrderIntent`/`OrderOutcome`
   entfernt; ein Übergang zu viel in `ALLOWED`; `may_plan` ignoriert UNKNOWN; `PaperBroker` reicht `partial` bzw.
   `stops` nicht weiter; Limitpreis bei BUY auf- bzw. bei SELL abgerundet; Menge aufgerundet; `parse_mode` gibt bei
   `live` PAPER zurück; der `parse_mode`-Aufruf in `cli.py` fehlt. — Nachweis: `uv run python
   tools/golden/mutation_check.py --only broker` und `--only cli`
-- [ ] AK11: Doku: ADR-0022 angenommen, ADR-0023 vorgeschlagen (mit Quellen je Fakt), INDEX, ARCHITEKTUR
+- [x] AK11: Doku: ADR-0022 angenommen, ADR-0023 vorgeschlagen (mit Quellen je Fakt), INDEX, ARCHITEKTUR
   (Broker-Schicht; die Zyklen rufen in M1 weiter `paper.execution` direkt), ROADMAP Nr. 8 → Spec 012,
   `docs/recherche/bitvavo-trading-api-2026-11.md`; Lint, Format, `mypy src tests tools`, Shellcheck, CI grün.
 
@@ -148,7 +148,7 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
 - [x] 3. Sperr-Tests: Order-Pfad-Prüfung mit Negativtests, Konfiguration, fremde DB, `parse_mode`-Varianten,
   CLI-Abbruch (AK4, AK5, AK6, AK9)
 - [x] 4. Mutationstest: Kopierliste, `group_of`, Einträge `broker`/`cli`, `broker noop control` (AK10); Nachweis AK3
-- [ ] 5. ARCHITEKTUR, Ergebnis; Prüfung (Workflow), PR (AK11)
+- [x] 5. ARCHITEKTUR, Ergebnis; Prüfung (Workflow), PR (AK11)
 
 ## Risiken & offene Fragen
 - **Naht ohne Aufrufer:** Bis M2 ruft niemand den `Broker` auf. Gegenmittel: AK2 lässt beide Fixtures über ihn
@@ -171,8 +171,16 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
 - 2026-11-07: Prüf-Workflow (4 Blickwinkel, je Befund 3 Gegenprüfer): 23 Befunde, 17 widerlegt, 6 bestätigt und behoben – Skriptregel erkennt nun sendendes `curl` auch mit Host in einer Variablen und die verbotenen Literale in jeder Zeile; Bytes-Literale werden geprüft; börsenartige Klassen auch in `tests/`/`tools/`; Test, dass Bitvavo-Status und `restatementReason` unverändert bleiben; ARCHITEKTUR nennt den Umfang je Regel genau; Code-Anker verweisen auf das angenommene ADR-0022 statt auf den Vorschlag ADR-0023.
 
 ## Ergebnis
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Paket `broker/` mit Vertrag (`Broker`, `OrderExchange`), Paper-Delegation, Live-Sperre,
+  Live-Typen mit Echtgeld-Regeln und Zustandsmaschine; Sperren als Tests mit Negativtests; Mutationen für Naht und
+  Sperren. Laufzeitcode unverändert, kein Deploy (PR #19, `b7279cb`).
+- **Abweichungen vom Plan:** Schritt 5 ohne neue ADR-Dateien (schon mit der Freigabe angelegt). Tests von
+  `paper.risk` nicht betroffen. `http.client` in `market/http.py` als benannte Ausnahme (nur für den
+  Ausnahmetyp; Verbindungen bleiben verboten).
+- **Nachweise:** Testsuite lokal grün (1755 + neue Broker-Tests), CI grün auf PR #19; AK3: `git diff --exit-code`
+  über Laufzeitcode, Server-Dateien, Paketliste und Fixtures leer; Mutationstest `broker` 25/25, `cli` 2/2 wie
+  erwartet, die Kontrollmutation überlebt; Prüf-Workflow: 6 bestätigte Befunde behoben (siehe Verlauf).
+- **Offen / Folgearbeit:** M2: Arena-Regeln golden-geprüft aus `paper.execution` herauslösen, Zyklen auf den
+  `Broker` umstellen, ADR-0023 annehmen oder ändern, ADR für die Ablösung von ADR-0004.
+- **Neue ADRs / Learnings:** ADR-0022 (angenommen), ADR-0023 (vorgeschlagen bis M2);
+  `docs/recherche/bitvavo-trading-api-2026-11.md`.

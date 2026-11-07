@@ -61,5 +61,5 @@ die eine Schnittstelle auf Entscheidungsebene kapselt.
 - Neu bewerten, wenn: M2 geplant wird (mit ADR-0023 und einem ADR, das ADR-0004 ablöst).
 
 ## Code-Anker
-- `src/llm_trading_bot/broker/` (`contract.py`, `paper.py`, `live.py`, `intents.py`) – geplant, Spec 012
-- `tests/broker/test_no_order_path.py`, `tests/broker/test_live_locked.py` – geplant, Spec 012
+- `src/llm_trading_bot/broker/` (`contract.py`, `paper.py`, `live.py`, `intents.py`) (Spec 012)
+- `tests/broker/test_no_order_path.py`, `tests/broker/test_live_locked.py` (Spec 012)
