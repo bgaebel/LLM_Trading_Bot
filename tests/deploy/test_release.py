@@ -1,5 +1,6 @@
-"""Spec 009 AK5: deploy/release.sh in a sandbox - real bash, tar, flock and python3; systemctl,
-systemd-analyze and uv are stand-ins that record what they are asked and play the service.
+"""Spec 009 AK5, Spec 013 AK7/AK8: deploy/release.sh in a sandbox - real bash, tar, flock, curl and
+python3; systemctl, systemd-analyze, uv, caddy, ufw, apt-get, apt-cache and gpg are stand-ins that
+record what they are asked and play the service.
 
 Linux only (the CI): the script targets Ubuntu and needs GNU tools and flock.
 """
@@ -30,6 +31,8 @@ UNITS = [
     "llm-trading-bot-backup.timer",
     "journald@llm-trading-bot.conf",
 ]
+CADDYFILE = (REPO / "deploy" / "Caddyfile").read_text(encoding="utf-8")
+WEB_UNIT = "llm-trading-bot-web.service"
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or shutil.which("flock") is None, reason="Linux tools (CI)"
@@ -95,6 +98,8 @@ case "$cmd" in
       exit 3
     fi ;;
   show) if [ -e "$state/active-llm-trading-bot.service" ]; then cat "$state/pid"; else echo 0; fi ;;
+  # bad-reload: caddy refuses the new configuration and keeps running the old one.
+  reload) [ ! -e "$state/bad-reload" ] ;;
   daemon-reload | try-restart) exit 0 ;;
   *) echo "fake systemctl: unknown $cmd" >&2; exit 1 ;;
 esac
@@ -120,6 +125,67 @@ esac
 BOT
 chmod +x .venv/bin/trading-bot
 """
+
+# Installed once the fake apt-get installed it; validate must get throwaway storage.
+FAKE_CADDY = r"""#!/usr/bin/env bash
+echo "caddy $*" >>"$FAKE_STATE/calls"
+[ -e "$FAKE_STATE/caddy-installed" ] || exit 127
+case "$1" in
+  version) echo "v2.10.2 h1:fake" ;;
+  validate)
+    [ "$2 $3 $4" = "--adapter caddyfile --config" ] || exit 2
+    [ -n "${XDG_DATA_HOME:-}" ] && [ -n "${XDG_CONFIG_HOME:-}" ] || exit 2
+    cp "$5" "$FAKE_STATE/validated"
+    if [ -e "$FAKE_STATE/bad-caddyfile" ]; then echo "Error: adapting config: bad"; exit 1; fi ;;
+  *) exit 2 ;;
+esac
+"""
+
+# Rules as files; the messages real ufw prints.
+FAKE_UFW = r"""#!/usr/bin/env bash
+echo "ufw $*" >>"$FAKE_STATE/calls"
+del=0
+if [ "$1" = delete ]; then del=1; shift; fi
+[ "$1" = allow ] || exit 1
+rule="$FAKE_STATE/ufw-${2/\//-}"
+if [ "$del" = 1 ]; then
+  if [ -e "$rule" ]; then rm "$rule"; echo "Rule deleted"; echo "Rule deleted (v6)"
+  else echo "Could not delete non-existent rule"; fi
+elif [ -e "$rule" ]; then echo "Skipping adding existing rule"
+else touch "$rule"; echo "Rule added"; echo "Rule added (v6)"; fi
+"""
+
+# Like the real package: installing caddy enables and starts it with its welcome site.
+FAKE_APT_GET = r"""#!/usr/bin/env bash
+echo "apt-get $*" >>"$FAKE_STATE/calls"
+[ "${DEBIAN_FRONTEND:-}" = noninteractive ] || exit 1
+[ -f "$FAKE_ROOT/etc/apt/sources.list.d/caddy-stable.list" ] || exit 100
+case " $* " in
+  *" install "*)
+    touch "$FAKE_STATE/caddy-installed" "$FAKE_STATE/enabled-caddy.service" \
+      "$FAKE_STATE/active-caddy.service" ;;
+esac
+"""
+
+FAKE_APT_CACHE = r"""#!/usr/bin/env bash
+echo "apt-cache $*" >>"$FAKE_STATE/calls"
+origin=cloudsmith/caddy/stable
+[ -e "$FAKE_STATE/bad-origin" ] && origin=someone/else
+echo " 500 https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version/main amd64 Packages"
+echo "     release o=$origin,a=any-version,n=any-version,l=source=none,c=main,b=amd64"
+"""
+
+# gpg --batch --yes --dearmor -o <out> <in>: only an armored key is accepted.
+FAKE_GPG = r"""#!/usr/bin/env bash
+echo "gpg $*" >>"$FAKE_STATE/calls"
+out="" prev=""
+for a in "$@"; do [ "$prev" = -o ] && out="$a"; prev="$a"; done
+in="${*: -1}"
+grep -q "BEGIN PGP PUBLIC KEY BLOCK" "$in" || exit 2
+cp "$in" "$out"
+"""
+
+KEY = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nfake\n-----END PGP PUBLIC KEY BLOCK-----\n"
 
 
 @dataclass
@@ -159,14 +225,42 @@ class Sandbox:
         path = self.state / "calls"
         return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
-    def upload(self, sha: str, extra: dict[str, str] | None = None) -> None:
-        """What scripts/deploy.sh streams: a tar.gz of the commit with deploy/ inside."""
+    @property
+    def caddyfile(self) -> Path:
+        return self.root / "etc" / "caddy" / "Caddyfile"
+
+    @property
+    def public_file(self) -> Path:
+        return self.root / "etc" / "llm-trading-bot" / "public-host"
+
+    def unit(self, name: str) -> str:
+        return (self.root / "etc/systemd/system" / name).read_text(encoding="utf-8")
+
+    def public_host(self, text: str) -> None:
+        self.public_file.parent.mkdir(parents=True, exist_ok=True)
+        self.public_file.write_text(text, encoding="utf-8", newline="\n")
+
+    def caddy(self, active: bool = True) -> None:
+        """caddy installed (and running) as `public` leaves it."""
+        (self.state / "caddy-installed").touch()
+        if active:
+            (self.state / "enabled-caddy.service").touch()
+            (self.state / "active-caddy.service").touch()
+
+    def upload(self, sha: str, extra: dict[str, str] | None = None, pre013: bool = False) -> None:
+        """What scripts/deploy.sh streams: a tar.gz of the commit with deploy/ inside. pre013: a
+        release from before Spec 013 - no Caddyfile, no public host in the web unit."""
         incoming = self.app / "incoming"
         incoming.mkdir(parents=True, exist_ok=True)
         with tarfile.open(incoming / f"{sha}.tar.gz", "w:gz") as tar:
             files = {
                 f"deploy/{u}": (REPO / "deploy" / u).read_text(encoding="utf-8") for u in UNITS
             }
+            if pre013:
+                web = f"deploy/{WEB_UNIT}"
+                files[web] = files[web].replace(" __PUBLIC_HOST_ARG__", "")
+            else:
+                files["deploy/Caddyfile"] = CADDYFILE
             files["pyproject.toml"] = "[project]\nname = 'x'\n"
             files.update(extra or {})
             for name, text in files.items():
@@ -201,6 +295,18 @@ def box(tmp_path: Path) -> Iterator[Sandbox]:
         bin_dir / "systemd-analyze", '#!/bin/sh\necho "analyze $*" >>"$FAKE_STATE/calls"\n'
     )
     uv = executable(bin_dir / "uv", FAKE_UV)
+    fakes = {
+        name: str(executable(bin_dir / name, text))
+        for name, text in [
+            ("caddy", FAKE_CADDY),
+            ("ufw", FAKE_UFW),
+            ("apt-get", FAKE_APT_GET),
+            ("apt-cache", FAKE_APT_CACHE),
+            ("gpg", FAKE_GPG),
+        ]
+    }
+    key = tmp_path / "caddy-gpg.key"
+    key.write_text(KEY, encoding="utf-8")
     # The uv release tarball install() downloads: here a local file:// URL with its checksum.
     tarball = tmp_path / "uv.tar.gz"
     with tarfile.open(tarball, "w:gz") as tar:
@@ -212,6 +318,12 @@ def box(tmp_path: Path) -> Iterator[Sandbox]:
         "LTB_ANALYZE": str(analyze),
         "LTB_UV_URL": tarball.as_uri(),
         "LTB_UV_SHA256": hashlib.sha256(tarball.read_bytes()).hexdigest(),
+        "LTB_CADDY": fakes["caddy"],
+        "LTB_UFW": fakes["ufw"],
+        "LTB_APT_GET": fakes["apt-get"],
+        "LTB_APT_CACHE": fakes["apt-cache"],
+        "LTB_GPG": fakes["gpg"],
+        "LTB_CADDY_KEY_URL": key.as_uri(),
         "LTB_HEALTH_SECONDS": "3",
         "LTB_POLL_SECONDS": "0.2",
         "FAKE_STATE": str(state),
@@ -546,3 +658,289 @@ def test_pruning_counts_only_releases_that_were_active(box: Sandbox) -> None:
     left = sorted(p.name for p in (box.app / "releases").iterdir())
     # Three that ran (6 current, 5 previous, 4) plus the newest failed build to look at.
     assert left == [sha(3), sha(4), sha(5), sha(6)]
+
+
+# ------------------------------------------------------------------ Spec 013: public HTTPS
+
+
+def index(calls: list[str], prefix: str, start: int = 0) -> int:
+    return next(i for i in range(start, len(calls)) if calls[i].startswith(prefix))
+
+
+def public_box(box: Sandbox) -> Sandbox:
+    """Installed, with secrets, caddy running and the public host set."""
+    installed(box).secrets()
+    box.caddy()
+    box.public_host("example.test\n")
+    return box
+
+
+def test_public_host_file_adds_the_listener_and_installs_the_caddyfile(box: Sandbox) -> None:
+    public_box(box).upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    assert "--port 8787 --public-host example.test --public-port 8788\n" in box.unit(WEB_UNIT)
+    caddy = box.caddyfile.read_text(encoding="utf-8")
+    assert "\nexample.test {\n" in caddy and "\nwww.example.test {\n" in caddy
+    assert "redir https://example.test{uri} permanent" in caddy and "__" not in caddy
+    assert (box.state / "validated").read_text(encoding="utf-8") == caddy
+    assert "reload caddy.service" in box.calls()
+
+
+def test_public_without_the_host_file_neither_listener_nor_caddy(box: Sandbox) -> None:
+    installed(box).secrets()
+    box.caddy()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    assert "--host 127.0.0.1 --port 8787\n" in box.unit(WEB_UNIT)
+    assert not box.caddyfile.exists()
+    assert not any(c.startswith(("caddy ", "reload ")) for c in box.calls())
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Example.test\n",
+        "example.test\nother.test\n",
+        "",
+        "\n",
+        "example\n",
+        "exa mple.test\n",
+        "a..test\n",
+        "-a.test\n",
+    ],
+)
+def test_public_host_file_that_is_not_one_domain_stops_nothing(box: Sandbox, text: str) -> None:
+    public_box(box).upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    box.public_host(text)
+    box.upload(sha(2))
+    before = len(box.calls())
+    result = box.run("deploy", sha(2), "botsvc", check=False)
+    assert result.returncode != 0 and "nothing changed" in result.stderr, result.stderr
+    assert not any(c.startswith("stop ") for c in box.calls()[before:])
+    assert box.current() == sha(1)
+
+
+def test_public_caddyfile_is_validated_before_the_stop_and_reloaded_once_healthy(
+    box: Sandbox,
+) -> None:
+    public_box(box).upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    box.upload(sha(2), {"deploy/Caddyfile": CADDYFILE + "# release 2\n"})
+    start = len(box.calls())
+    box.run("deploy", sha(2), "botsvc")
+    calls = box.calls()
+    validated = index(calls, "caddy validate --adapter caddyfile --config", start)
+    stopped = index(calls, "stop ", start)
+    started = index(calls, "restart llm-trading-bot.service", start)
+    healthy = max(i for i in range(start, len(calls)) if calls[i].startswith("show "))
+    reloaded = index(calls, "reload caddy.service", start)
+    assert validated < stopped < started < healthy < reloaded
+    assert box.caddyfile.read_text(encoding="utf-8").endswith("# release 2\n")
+
+
+def test_public_an_invalid_caddyfile_changes_nothing(box: Sandbox) -> None:
+    public_box(box).upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    old = box.caddyfile.read_text(encoding="utf-8")
+    (box.state / "bad-caddyfile").touch()
+    box.upload(sha(2), {"deploy/Caddyfile": CADDYFILE + "# release 2\n"})
+    before = len(box.calls())
+    result = box.run("deploy", sha(2), "botsvc", check=False)
+    assert result.returncode != 0 and "caddy validate rejected" in result.stderr
+    assert "nothing changed" in result.stderr
+    assert not any(c.startswith("stop ") for c in box.calls()[before:])
+    assert box.current() == sha(1) and box.caddyfile.read_text(encoding="utf-8") == old
+
+
+def test_public_host_without_caddy_installed_stops_nothing(box: Sandbox) -> None:
+    installed(box).secrets()
+    box.public_host("example.test\n")
+    box.upload(sha(1))
+    result = box.run("deploy", sha(1), "botsvc", check=False)
+    assert result.returncode != 0 and "caddy is not installed" in result.stderr
+    assert not any(c.startswith("stop ") for c in box.calls())
+    assert not os.path.lexists(box.app / "current")
+
+
+def test_public_a_failed_caddy_reload_keeps_the_old_caddyfile_and_the_release(
+    box: Sandbox,
+) -> None:
+    public_box(box).upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    old = box.caddyfile.read_text(encoding="utf-8")
+    (box.state / "bad-reload").touch()
+    box.upload(sha(2), {"deploy/Caddyfile": CADDYFILE + "# release 2\n"})
+    result = box.run("deploy", sha(2), "botsvc", check=False)
+    assert result.returncode != 0 and "previous Caddyfile" in result.stderr, result.stderr
+    assert "rolling back" not in result.stdout + result.stderr
+    assert box.current() == sha(2) and (box.state / "active-llm-trading-bot.service").exists()
+    assert box.caddyfile.read_text(encoding="utf-8") == old
+    deployed = (box.app / "deployed.log").read_text(encoding="utf-8")
+    assert f" {sha(2)} active" in deployed
+
+
+@pytest.mark.parametrize("public", [False, True], ids=["tunnel", "public"])
+def test_public_first_deploy_over_a_release_from_before_013(box: Sandbox, public: bool) -> None:
+    installed(box).secrets()
+    box.caddy()
+    if public:
+        box.public_host("example.test\n")
+    box.upload(sha(1), pre013=True)
+    out = box.run("deploy", sha(1), "botsvc").stdout
+    assert "--host 127.0.0.1 --port 8787\n" in box.unit(WEB_UNIT)
+    assert not box.caddyfile.exists()
+    assert ("has no deploy/Caddyfile" in out) == public
+    box.upload(sha(2))
+    box.run("deploy", sha(2), "botsvc")
+    assert box.current() == sha(2)
+    assert box.caddyfile.exists() == public
+    assert ("--public-host example.test --public-port 8788" in box.unit(WEB_UNIT)) == public
+
+
+def test_public_rollback_to_a_release_from_before_013_leaves_caddy_alone(box: Sandbox) -> None:
+    public_box(box).upload(sha(1), pre013=True)
+    box.run("deploy", sha(1), "botsvc")
+    box.upload(sha(2))
+    box.run("deploy", sha(2), "botsvc")
+    caddy = box.caddyfile.read_text(encoding="utf-8")
+    before = len(box.calls())
+    box.run("rollback", "botsvc")
+    assert box.current() == sha(1)
+    assert not any(c.startswith("caddy ") or "caddy.service" in c for c in box.calls()[before:])
+    assert box.caddyfile.read_text(encoding="utf-8") == caddy
+    assert "--public-host" not in box.unit(WEB_UNIT)
+
+
+def test_public_an_unhealthy_release_rolls_back_without_touching_caddy(box: Sandbox) -> None:
+    public_box(box).upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    caddy = box.caddyfile.read_text(encoding="utf-8")
+    (box.state / f"bad-{sha(2)}").touch()
+    box.upload(sha(2), {"deploy/Caddyfile": CADDYFILE + "# release 2\n"})
+    before = len(box.calls())
+    result = box.run("deploy", sha(2), "botsvc", check=False)
+    assert result.returncode != 0 and f"rolled back to {sha(1)}" in result.stderr
+    assert "reload caddy.service" not in box.calls()[before:]
+    assert box.caddyfile.read_text(encoding="utf-8") == caddy
+
+
+def test_public_command_sets_up_caddy_in_order_and_twice_changes_nothing(box: Sandbox) -> None:
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    start = len(box.calls())
+    out = box.run("public", "example.test", "botsvc").stdout
+    assert not out.rstrip().endswith("changes: 0")
+    calls = box.calls()
+    apt = "apt-get -o DPkg::Lock::Timeout=300"
+    order = [
+        index(calls, f"{apt} -qq update", start),
+        index(calls, f"{apt} -y -qq install --no-install-recommends caddy", start),
+        index(calls, "stop caddy.service", start),  # the package's welcome site stays off
+        index(calls, "caddy validate --adapter caddyfile --config", start),
+        index(calls, "daemon-reload", start),
+        index(calls, "ufw allow 80/tcp", start),
+        index(calls, "ufw allow 443/tcp", start),
+        index(calls, "restart caddy.service", start),
+        index(calls, f"restart {WEB_UNIT}", start),
+    ]
+    assert order == sorted(order), calls[start:]
+    assert not any(c.startswith("ufw limit") for c in calls[start:])  # allow, not limit
+    assert box.public_file.read_text(encoding="utf-8") == "example.test\n"
+    assert box.public_file.stat().st_mode & 0o777 == 0o644
+    assert "--port 8787 --public-host example.test --public-port 8788\n" in box.unit(WEB_UNIT)
+    assert "\nexample.test {\n" in box.caddyfile.read_text(encoding="utf-8")
+    drop_in = box.root / "etc/systemd/system/caddy.service.d/10-llm-trading-bot.conf"
+    assert "RuntimeDirectory=caddy\n" in drop_in.read_text(encoding="utf-8")
+    keyring = box.root / "usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+    assert keyring.read_text(encoding="utf-8") == KEY
+    source = (box.root / "etc/apt/sources.list.d/caddy-stable.list").read_text(encoding="utf-8")
+    assert source == (
+        "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg]"
+        " https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main\n"
+    )
+    upgrades = box.root / "etc/apt/apt.conf.d/53-llm-trading-bot-caddy"
+    assert '"origin=cloudsmith/caddy/stable";' in upgrades.read_text(encoding="utf-8")
+    for name in ("ufw-80-tcp", "ufw-443-tcp", "enabled-caddy.service", "active-caddy.service"):
+        assert (box.state / name).exists(), name
+
+    second = box.run("public", "example.test", "botsvc").stdout
+    assert second.rstrip().endswith("changes: 0"), second
+    again = box.calls()[len(calls) :]
+    assert not any(c.startswith(("apt-get", "restart ", "stop ", "daemon-reload")) for c in again)
+
+
+def test_public_command_refuses_a_release_without_caddyfile(box: Sandbox) -> None:
+    installed(box).secrets()
+    box.upload(sha(1), pre013=True)
+    box.run("deploy", sha(1), "botsvc")
+    before = len(box.calls())
+    result = box.run("public", "example.test", "botsvc", check=False)
+    assert result.returncode != 0 and "has no deploy/Caddyfile" in result.stderr
+    assert not any(c.startswith(("apt-get", "ufw", "gpg")) for c in box.calls()[before:])
+    assert not box.public_file.exists()
+
+
+@pytest.mark.parametrize(
+    "domain", ["Example.test", "example", "a..test", "-a.test", "a.test;id", "a.test x", ""]
+)
+def test_public_command_refuses_a_bad_domain_before_anything(box: Sandbox, domain: str) -> None:
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    before = len(box.calls())
+    result = box.run("public", domain, "botsvc", check=False)
+    assert result.returncode != 0 and "invalid public host" in result.stderr
+    assert box.calls()[before:] == []
+    assert not box.public_file.exists()
+
+
+def test_public_command_without_the_expected_origin_opens_no_port(box: Sandbox) -> None:
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    (box.state / "bad-origin").touch()
+    result = box.run("public", "example.test", "botsvc", check=False)
+    assert result.returncode != 0 and "automatic updates" in result.stderr
+    assert not any(c.startswith("ufw") for c in box.calls())
+    assert not box.public_file.exists()
+
+
+def test_public_off_undoes_everything_and_twice_changes_nothing(box: Sandbox) -> None:
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    box.run("public", "example.test", "botsvc")
+    start = len(box.calls())
+    box.run("public-off", "botsvc")
+    assert not box.public_file.exists()
+    for name in ("enabled-caddy.service", "active-caddy.service", "ufw-80-tcp", "ufw-443-tcp"):
+        assert not (box.state / name).exists(), name
+    assert "--host 127.0.0.1 --port 8787\n" in box.unit(WEB_UNIT)
+    assert f"restart {WEB_UNIT}" in box.calls()[start:]
+    assert box.run("public-off", "botsvc").stdout.rstrip().endswith("changes: 0")
+    # Off stays off: the next deploy neither validates nor reloads caddy.
+    box.upload(sha(2))
+    before = len(box.calls())
+    box.run("deploy", sha(2), "botsvc")
+    assert not any(c.startswith("caddy ") or "caddy.service" in c for c in box.calls()[before:])
+
+
+def test_public_status_names_the_public_host_and_caddy(box: Sandbox) -> None:
+    installed(box).secrets()
+    box.upload(sha(1))
+    box.run("deploy", sha(1), "botsvc")
+    out = box.run("status").stdout
+    assert "public host: off" in out and "caddy: not installed" in out
+    box.run("public", "example.test", "botsvc")
+    out = box.run("status").stdout
+    assert "public host: example.test" in out and "caddy: v2.10.2, active" in out
+    box.public_host("Example.test\n")
+    assert "public host: INVALID" in box.run("status").stdout
+
+
+def test_public_bad_arguments(box: Sandbox) -> None:
+    installed(box)
+    for args in (["public", "example.test"], ["public-off"], ["public-off", "Bad User"]):
+        assert box.run(*args, check=False).returncode != 0, args
