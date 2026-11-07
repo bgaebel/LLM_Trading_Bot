@@ -377,3 +377,32 @@ def test_paper_cycle_reports_controls_releases_and_stops(tmp_path: Path) -> None
     assert "trading controls: BOT_PAUSED='yes' is not 1 or 0: trading paused" in text
     assert "trading paused: no trades except forced sales" in text
     assert "risk stop trend released on request" in text
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["market"],
+        ["signals"],
+        ["paper-cycle", "--db", "{db}"],
+        ["run", "--db", "{db}"],
+        ["web", "--data-dir", "{dir}"],
+        ["backup", "--db", "{db}", "--dir", "{dir}/b"],
+        ["verify-db", "--db", "{db}"],
+    ],
+)
+def test_live_mode_stops_every_command_before_any_client_or_database(
+    argv: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec 012 AK4 (ADR-0004): TRADING_MODE=live never reaches Bitvavo or a database."""
+    from llm_trading_bot import cli
+
+    def no_client(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a Bitvavo client was built")
+
+    monkeypatch.setattr(cli, "BitvavoClient", no_client)
+    monkeypatch.setenv("TRADING_MODE", "live")
+    args = [a.format(db=tmp_path / "bot.db", dir=tmp_path) for a in argv]
+    with pytest.raises(NotImplementedError):
+        cli.main(args)
+    assert list(tmp_path.iterdir()) == []
