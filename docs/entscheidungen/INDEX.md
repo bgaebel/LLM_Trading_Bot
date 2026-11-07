@@ -23,3 +23,4 @@
 | [0016](0016-weboberflaeche-liest-bot-db.md) | Weboberfläche liest die Bot-DB nur lesend (`mode=ro`, `query_only`); genau ein Schreiber | angenommen |
 | [0017](0017-dienst-eine-runde-pro-minute.md) | Dienst: ein Prozess, eine Paper-Runde pro Minute, systemd-Watchdog + Statusdatei, Config je Runde | angenommen |
 | [0018](0018-deploy-releases-backup-rollback.md) | Deploy als Release je Commit per SSH mit automatischem Code-Rollback; DB-Backups täglich nur auf dem Server, 14 Tage | angenommen |
+| [0019](0019-uebersicht-live-eigenes-skript.md) | Übersicht live über ein eigenes Skript `/app.js` (`script-src 'self'`); Server rendert, Skript tauscht aus | angenommen |
