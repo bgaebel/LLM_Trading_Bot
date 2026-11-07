@@ -15,6 +15,8 @@ from llm_trading_bot.market.http import HTTPFailure, Transport, UrllibTransport
 from llm_trading_bot.market.models import (
     SYMBOLS,
     Candle,
+    ClosedCandles,
+    Depth,
     MarketDataError,
     Quote,
     QuoteBook,
@@ -73,10 +75,11 @@ class BitvavoClient:
         """
         data = self._get("/ticker/book")
         if not isinstance(data, list):
-            raise MarketDataError("ticker/book: unexpected response format")
+            raise MarketDataError("ticker/book: unexpected response format", "parse")
         by_market = {symbol.market: symbol for symbol in SYMBOLS}
         result: dict[Symbol, Quote] = {}
         errors: dict[Symbol, str] = {}
+        depth: dict[Symbol, Depth] = {}
         for item in data:
             if not isinstance(item, dict):
                 continue
@@ -95,74 +98,105 @@ class BitvavoClient:
                 del result[symbol]
                 continue
             result[symbol] = quote
+            # Spec 015 AK1: after the quote is accepted and outside its checks, so a missing or
+            # broken size never costs the quote, and two rows with equal bid/ask but different
+            # sizes are still no conflict. The last accepted row's sizes win.
+            depth[symbol] = _depth(item)
         for s in SYMBOLS:
             if s not in result and s not in errors:
                 errors[s] = "ticker/book: missing"
-        return QuoteBook(result, errors)
+        return QuoteBook(result, errors, {s: d for s, d in depth.items() if s in result})
 
-    def closed_candles(
-        self, symbol: Symbol, interval: int, *, now_epoch: int
-    ) -> tuple[Candle, ...]:
-        """Completed candles only, ascending by open time; forming and future bars are dropped."""
+    def closed_candles(self, symbol: Symbol, interval: int, *, now_epoch: int) -> ClosedCandles:
+        """Completed candles only, ascending by open time; forming and future bars are dropped.
+
+        The result also says what Bitvavo sent before that filter (Spec 015 AK4, observed only).
+        """
         if interval not in TIMEFRAMES:
             raise MarketDataError(f"unsupported interval: {interval} min")
         query = urlencode({"interval": TIMEFRAMES[interval], "limit": CANDLE_LIMIT})
         rows = self._get(f"/{url_quote(symbol.market, safe='')}/candles?{query}")
         if not isinstance(rows, list):
-            raise MarketDataError("candles: unexpected response format")
+            raise MarketDataError("candles: unexpected response format", "parse")
         step = interval * 60
         seen: dict[int, Candle] = {}
+        opens: list[int] = []
+        forming = False
         for row in rows:
+            opened = _open_time(row)
+            opens.append(opened)
             # As in the Arena, forming and future bars are skipped before any other check:
             # their values are not final, so they must neither be used nor reject the interval.
-            if _open_time(row) + step > now_epoch:
+            if opened + step > now_epoch:
+                forming = forming or opened <= now_epoch
                 continue
             candle = _parse_candle(row, step)
             if candle.ts in seen and seen[candle.ts] != candle:
-                raise MarketDataError(f"candles: conflicting duplicate at {candle.ts}")
+                raise MarketDataError(f"candles: conflicting duplicate at {candle.ts}", "conflict")
             seen[candle.ts] = candle
-        return tuple(seen[ts] for ts in sorted(seen))
+        return ClosedCandles(
+            (seen[ts] for ts in sorted(seen)),
+            received=len(rows),
+            first_open=min(opens, default=None),
+            last_open=max(opens, default=None),
+            forming=forming,
+        )
+
+
+def _depth(item: dict[object, object]) -> Depth:
+    return _size(item.get("bidSize")), _size(item.get("askSize"))
+
+
+def _size(raw: object) -> float | None:
+    """A book size, or None for anything that is not a finite amount >= 0 (never raises)."""
+    if isinstance(raw, bool) or not isinstance(raw, int | float | str):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if math.isfinite(value) and value >= 0 else None
 
 
 def _open_time(row: object) -> int:
     """Open time in epoch seconds; rejects anything that is not an exact whole second."""
     if not isinstance(row, list | tuple) or len(row) < 6:
-        raise MarketDataError("candles: incomplete OHLCV row")
+        raise MarketDataError("candles: incomplete OHLCV row", "parse")
     raw_ts = row[0]
     # A fractional or misaligned millisecond stamp must fail, not be silently rounded.
     if isinstance(raw_ts, bool) or not isinstance(raw_ts, int | float | str):
-        raise MarketDataError("candles: invalid timestamp type")
+        raise MarketDataError("candles: invalid timestamp type", "parse")
     try:
         ts_ms = int(raw_ts)
         exact = float(raw_ts) == ts_ms
     except (TypeError, ValueError, OverflowError) as exc:
-        raise MarketDataError("candles: unreadable timestamp") from exc
+        raise MarketDataError("candles: unreadable timestamp", "parse") from exc
     if not exact or ts_ms % 1000:
-        raise MarketDataError("candles: fractional millisecond timestamp")
+        raise MarketDataError("candles: fractional millisecond timestamp", "parse")
     return ts_ms // 1000
 
 
 def _parse_candle(row: object, step: int) -> Candle:
     ts = _open_time(row)
     if not isinstance(row, list | tuple):  # already checked by _open_time; narrows the type
-        raise MarketDataError("candles: incomplete OHLCV row")
+        raise MarketDataError("candles: incomplete OHLCV row", "parse")
     try:
         values = [float(x) for x in row[1:6]]
     except (TypeError, ValueError, OverflowError) as exc:
-        raise MarketDataError("candles: unreadable OHLCV row") from exc
+        raise MarketDataError("candles: unreadable OHLCV row", "parse") from exc
     if ts % step:
-        raise MarketDataError("candles: timestamp not aligned to interval")
+        raise MarketDataError("candles: timestamp not aligned to interval", "parse")
     candle = Candle(ts, *values)
     if not all(
         math.isfinite(x) and x > 0 for x in (candle.open, candle.high, candle.low, candle.close)
     ):
-        raise MarketDataError("candles: invalid prices")
+        raise MarketDataError("candles: invalid prices", "parse")
     if not math.isfinite(candle.volume) or candle.volume < 0:
-        raise MarketDataError("candles: invalid volume")
+        raise MarketDataError("candles: invalid volume", "parse")
     if candle.low > min(candle.open, candle.close) or candle.high < max(
         candle.open, candle.close, candle.low
     ):
-        raise MarketDataError("candles: OHLC out of range")
+        raise MarketDataError("candles: OHLC out of range", "parse")
     return candle
 
 
