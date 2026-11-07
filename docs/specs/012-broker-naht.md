@@ -1,6 +1,6 @@
 # Spec 012: Echtgeld-Schnittstelle als Entwurf (Broker-Naht)
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s012-broker-naht` · **Meilenstein:** M1 (Nr. 8)
 - **Erstellt:** 2026-11-07
 
@@ -141,7 +141,7 @@ Eigenschaften der Bitvavo-Trading-API aufbaut. Am laufenden Dienst ändert sich 
   Live-Limits in M1 (Laufzeitänderung ohne Nutzen vor M2); stille Umdeutung von ADR-0004.
 
 ## Plan
-- [ ] 1. `broker/contract.py` (Protocol `Broker`), `paper.py`, `live.py`, `make_broker`; Tests Vertrag, Spy,
+- [x] 1. `broker/contract.py` (Protocol `Broker`), `paper.py`, `live.py`, `make_broker`; Tests Vertrag, Spy,
   Goldens über den Broker (AK1, AK2, AK4 teilweise)
 - [ ] 2. Live-Typen mit Invarianten; öffentliche `/markets`-Antwort (ohne Key) einmal abrufen und unverändert als
   Fixture speichern; `MarketRules`; `intents.py` (AK7, AK8)
