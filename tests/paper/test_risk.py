@@ -126,7 +126,9 @@ def test_a_stop_triggered_by_a_trade_is_handed_to_the_caller(tmp_path: Path) -> 
 
 # ------------------------------------------------------------------ AK5: release on request
 
-from llm_trading_bot.paper.risk import NOT_STOPPED, RESUME_MAX_AGE, epoch, release  # noqa: E402
+from llm_trading_bot.paper.risk import NOT_STOPPED, epoch, release  # noqa: E402
+
+DAY = 24 * 3600  # ADR-0021: a release request counts for 24 h
 
 STOP_AT = "2026-11-07T08:00:00+00:00"
 
@@ -154,7 +156,7 @@ def test_resume_releases_a_stopped_depot_from_its_cash(tmp_path: Path) -> None:
         (0, 60, "the request is older than the stop"),
         (-60, 60, "the request is older than the stop"),
         (400, 60, "the request lies in the future"),
-        (60, 60 + RESUME_MAX_AGE + 1, "the request is older than 24 h"),
+        (60, 60 + DAY + 1, "the request is older than 24 h"),
     ],
 )
 def test_resume_refuses_requests_that_do_not_fit_the_stop(
@@ -169,7 +171,7 @@ def test_resume_refuses_requests_that_do_not_fit_the_stop(
 def test_resume_at_the_edge_of_24_hours_is_still_applied(tmp_path: Path) -> None:
     con = _stopped(tmp_path)
     t = epoch(STOP_AT)
-    assert release(con, "trend", t + 60, t + 60 + RESUME_MAX_AGE) == ""
+    assert release(con, "trend", t + 60, t + 60 + DAY) == ""
 
 
 def test_resume_refuses_a_depot_that_still_holds_coins(tmp_path: Path) -> None:
