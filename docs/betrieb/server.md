@@ -188,3 +188,84 @@ starten – erst beim Start entsteht ein neuer Einrichtungscode (im Terminal bzw
 Prozess zu entfernen reicht nicht: Ohne Neustart gibt es keinen Code, jeder Versuch zählt als Fehlversuch.
 `secrets.env` bleibt dabei unberührt. Die Seite prüft beim Absenden von Formularen, dass `Origin` denselben Port
 nennt wie der Host, den der Browser aufruft – das passt bei jedem Tunnel-Port.
+
+## Weboberfläche öffentlich per HTTPS (Spec 013, ADR-0024)
+Von außen nur über Caddy (offizielles, signiertes apt-Repo, automatische Updates): `https://<domain>/` mit
+Let's-Encrypt-Zertifikat, `www.<domain>` leitet dauerhaft auf `<domain>` weiter, `http://` auf `https://`. Die App
+bindet weiter nur an `127.0.0.1` – Port 8787 für den Tunnel (bleibt), Port 8788 nur für Caddy. `<domain>` steht nur
+auf dem Server in `/etc/llm-trading-bot/public-host` (eine Zeile, Kleinbuchstaben), nie im Repo.
+
+| Was | Wo | Wer |
+|---|---|---|
+| Domain | `/etc/llm-trading-bot/public-host` | root, 644 |
+| Caddy-Konfiguration | `/etc/caddy/Caddyfile` (aus `deploy/Caddyfile` des aktiven Release) | root, 644 |
+| Admin-API von Caddy | Unix-Socket `/run/caddy/admin.sock` (Drop-in `caddy.service.d/10-llm-trading-bot.conf`), kein Port 2019 | caddy |
+| Paketquelle | `/etc/apt/sources.list.d/caddy-stable.list`, Schlüssel `/usr/share/keyrings/caddy-stable-archive-keyring.gpg` | root |
+| Automatische Updates | `/etc/apt/apt.conf.d/53-llm-trading-bot-caddy` (Origin `cloudsmith/caddy/stable`) | root |
+| Firewall | ufw `allow 80/tcp` und `allow 443/tcp` (ohne Rate-Limit), SSH unverändert | – |
+
+### Voraussetzungen (manuell, vorher prüfen)
+1. **DNS:** A-Eintrag von `<domain>` und `www.<domain>` zeigt auf `<server>`. Gibt es AAAA-Einträge, müssen sie auf
+   die IPv6-Adresse des Servers zeigen – sonst scheitert das Zertifikat über IPv6. Prüfen:
+   ```bash
+   nslookup -type=A <domain>; nslookup -type=AAAA <domain>; nslookup -type=A www.<domain>
+   ```
+2. **Hetzner-Cloud-Firewall** (falls eingerichtet): eingehend 80/tcp und 443/tcp erlauben. Let's Encrypt erlaubt
+   nur wenige Fehlversuche je Stunde – deshalb erst Firewall und DNS, dann `public`.
+3. **Release 013 aktiv:** `public` bricht ab, wenn der aktive Release kein `deploy/Caddyfile` kennt. Erst deployen:
+   ```bash
+   bash scripts/deploy.sh <alias> <dienst> deploy
+   ```
+4. **Passwort ≥ 12 Zeichen:** Der öffentliche Login nimmt nur Passwörter mit mindestens 12 Zeichen, die nicht in der
+   Liste häufiger Passwörter stehen. Ein kürzeres vorher über den Tunnel ändern (Einstellungen → „Passwort ändern“).
+
+### Einschalten
+```bash
+bash scripts/deploy.sh <alias> <dienst> public <domain>
+```
+Eine SSH-Verbindung, mit Deploy-Sperre, in dieser Reihenfolge: Caddy-Repo mit Schlüssel und Paket
+(`apt-get -o DPkg::Lock::Timeout=300`), Origin in die automatischen Updates, Domain-Datei, Units neu erzeugen
+(Web-Unit mit `--public-host <domain> --public-port 8788`), `ufw allow 80/tcp` und `443/tcp`, Caddyfile installieren,
+Caddy und Web-Unit neu starten. Das Caddyfile prüft `caddy validate` gleich nach der Paketinstallation, bevor
+Domain, Units oder Firewall geändert werden. Ein erneuter Aufruf meldet `changes: 0` und startet nichts neu.
+
+Danach rendert jeder `deploy` das Caddyfile des neuen Release mit der Domain, prüft es vor dem Stoppen
+(`caddy validate`; ungültig → nichts geändert) und lädt Caddy erst neu, wenn der neue Release gesund ist. Scheitert
+das Neuladen, bleibt das alte Caddyfile, der Deploy endet mit Fehler, der Bot wird **nicht** zurückgerollt. Ein
+Rollback (automatisch oder `rollback`) ändert Caddy nie; ein Release vor Spec 013 bleibt ein gültiger Rückfall
+(dann antwortet nur der Tunnel, die öffentliche Adresse liefert einen Fehler, bis wieder ein 013-Release läuft).
+
+### Prüfen (von außen)
+```bash
+curl -sI https://<domain>/login
+```
+Erwartet: `HTTP/2 200`, `strict-transport-security: max-age=31536000`, kein `server`-Header.
+```bash
+curl -sI http://<domain>/login
+```
+```bash
+curl -sI https://www.<domain>/login
+```
+Erwartet: `308`/`301` auf `https://<domain>/login`. Auf dem Server – Bot-Ports nur auf `127.0.0.1`, kein Port 2019:
+```bash
+ssh <alias> 'sudo ss -ltnp | grep -E ":(80|443|2019|8787|8788) "'
+```
+```bash
+bash scripts/deploy.sh <alias> <dienst> status
+```
+`status` nennt zusätzlich `public host: <domain>` (oder `off`) und `caddy: <version>, active`. Logs von Caddy (es
+gibt bewusst kein Zugriffslog, nur Start- und Zertifikatsmeldungen):
+```bash
+ssh <alias> 'sudo journalctl -u caddy -n 50 --no-pager'
+```
+
+### Abschalten
+```bash
+bash scripts/deploy.sh <alias> <dienst> public off
+```
+Entfernt die Domain-Datei, stoppt und deaktiviert Caddy, löscht die ufw-Regeln für 80/443, erzeugt die Units ohne
+öffentlichen Listener neu und startet die Web-Unit neu. Das Caddy-Paket bleibt installiert. Der Tunnel geht weiter.
+
+### Passwort zurücksetzen
+Nur per Tunnel, wie oben unter „Passwort vergessen“: Öffentlich gibt es keine Einrichtung – ohne Passwort zeigt
+`https://<domain>/` nur „Einrichtung nur per SSH-Tunnel“ (503). Der Einrichtungscode steht im Journal.
