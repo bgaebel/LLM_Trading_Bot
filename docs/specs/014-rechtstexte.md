@@ -1,6 +1,6 @@
 # Spec 014: Impressum und Datenschutzerklärung
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s014-rechtstexte` · **Meilenstein:** M1 (Nachtrag zu Nr. 7)
 - **Erstellt:** 2026-11-07
 
@@ -11,26 +11,26 @@ beschreibt, was der Server tatsächlich verarbeitet, und der Server hält die ge
 Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem Server, nie im öffentlichen Repo.
 
 ## Akzeptanzkriterien
-- [ ] AK1: `GET /impressum` und `GET /datenschutz` antworten auf beiden Wegen (Tunnel 8787, öffentlich 8788) ohne
+- [x] AK1: `GET /impressum` und `GET /datenschutz` antworten auf beiden Wegen (Tunnel 8787, öffentlich 8788) ohne
   Session und ohne Set-Cookie, auch bevor ein Passwort eingerichtet ist (öffentlich sonst 503). Die Routen liegen in
   `WebApp.handle` vor der Einrichtungs-Weiche; Host-Prüfung, Proxy-Header-Sperre und Origin-Prüfung in
   `make_handler` gelten unverändert. `POST` auf beide → 405 mit `Allow: GET`; andere Methoden bleiben 501 wie heute
   (kein HEAD). Gleiche Sicherheits-Header, CSP und `Cache-Control: no-store`; kein Inline-Stil oder -Skript. —
   Nachweis: `tests/web/test_legal.py::test_legal_pages_*`, `tests/web/test_pages.py` (Inline-Prüfung erweitert)
-- [ ] AK2: Fußzeile mit Links „Impressum“ und „Datenschutz“ auf diesen Seiten: Login (200/401/403/429), Einrichtung
+- [x] AK2: Fußzeile mit Links „Impressum“ und „Datenschutz“ auf diesen Seiten: Login (200/401/403/429), Einrichtung
   (Tunnel), Einrichtung geschlossen (503), Übersicht, Einstellungen, 404 der App, die beiden Rechtstexte und die
   Impressum-503. Ausgenommen: Text-Antworten der App (400/403/413/421), Fehler von `http.server` und von Caddy. —
   Nachweis: `tests/web/test_legal.py::test_footer_links_on_every_html_page`
-- [ ] AK3: Das Impressum kommt aus `/etc/llm-trading-bot/impressum.md` (root, 644); die Web-Unit übergibt den Pfad
+- [x] AK3: Das Impressum kommt aus `/etc/llm-trading-bot/impressum.md` (root, 644); die Web-Unit übergibt den Pfad
   mit `--impressum`. Gelesen bei jedem Abruf mit `O_NOFOLLOW|O_NONBLOCK`, nur reguläre Datei, höchstens 16 KB, UTF-8;
   jeder `OSError`/`UnicodeDecodeError`, eine zu große oder leere Datei → `/impressum` 503 „Impressum nicht
   hinterlegt“ ohne Pfad oder Fehlertext. — Nachweis: `tests/web/test_legal.py::test_impressum_*`
-- [ ] AK4: Renderer `web/legal.py::render`: Blöcke durch Leerzeilen; `# `/`## ` Überschriften, `- ` Listen, sonst
+- [x] AK4: Renderer `web/legal.py::render`: Blöcke durch Leerzeilen; `# `/`## ` Überschriften, `- ` Listen, sonst
   Absatz, einfache Zeilenumbrüche im Absatz → `<br>`; BOM entfernt, CRLF wie LF. Jeder Text wird zuerst mit
   `html.escape(quote=True)` maskiert; danach werden nur Treffer von `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`
   zu `mailto:`-Links (kein anderes Schema, keine Parameter). — Nachweis: `tests/web/test_legal_render.py` (u. a.
   `<script>`, `<meta http-equiv>`, `a"onmouseover=x@y.de`, `javascript:`, `&amp;` ohne Doppelmaskierung, BOM, CRLF)
-- [ ] AK5: Die Datenschutzerklärung liegt im Repo als Python-Modul (`web/datenschutz.py`, wie `style.py`/`script.py`
+- [x] AK5: Die Datenschutzerklärung liegt im Repo als Python-Modul (`web/datenschutz.py`, wie `style.py`/`script.py`
   – kein Datenfile im Wheel), ohne Namen, Anschrift, Domain oder Server-Details; Verantwortlicher „siehe Impressum“.
   Inhalt nach Art. 13 DSGVO, je Punkt mit Zweck, Rechtsgrundlage und Dauer:
   - Hosting: Hetzner Online GmbH, Rechenzentrum in Deutschland, AVV.
@@ -47,7 +47,7 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
   - E-Mail an `kontakt@` (Migadu, Schweiz, Angemessenheitsbeschluss, AVV), gelöscht nach Erledigung; Rechte der
     Betroffenen inkl. Widerspruch; Beschwerderecht; Stand-Datum.
   — Nachweis: `tests/web/test_legal.py::test_datenschutz_*`
-- [ ] AK6: Tests binden den Text an den Code:
+- [x] AK6: Tests binden den Text an den Code:
   - Cookies aus echten Set-Cookie-Antworten des öffentlichen Wegs (Login-Seite, erfolgreicher Login, Logout): genau
     diese Namen (`__Host-ltb_*`) mit ihrer Max-Age stehen im Text, kein anderer `ltb_`-Name; dafür werden die
     Literale 43200/3600 in `app.py` zu Konstanten.
@@ -59,10 +59,10 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
   - `ufw logging off` in `release.sh public`.
 
   — Nachweis: `tests/web/test_legal.py::test_datenschutz_matches_*`, `tests/test_legal_bindings.py::test_datenschutz_matches_*`
-- [ ] AK7: Vergessen im Login-Schutz: Ein Eintrag in `PublicGuard` verfällt 24 h nach dem letzten Fehlversuch bzw.
+- [x] AK7: Vergessen im Login-Schutz: Ein Eintrag in `PublicGuard` verfällt 24 h nach dem letzten Fehlversuch bzw.
   nach Ende seiner Sperre (bei jedem Zugriff geprüft); eine laufende Sperre wird nie vorzeitig vergessen. —
   Nachweis: `tests/web/test_auth.py::test_public_guard_forgets_*`
-- [ ] AK8: Server-Protokolle halten die Frist ein, eingerichtet von `release.sh public` (idempotent, `changes: 0`
+- [x] AK8: Server-Protokolle halten die Frist ein, eingerichtet von `release.sh public` (idempotent, `changes: 0`
   beim zweiten Lauf):
   - Caddy-Drop-in mit `LogNamespace=llm-trading-bot`; Caddy-Neustart nur bei Änderung.
   - Namensraum-Journal mit `MaxFileSec=1day` und `ForwardToSyslog=no` – in der Release-Datei und als Drop-in von
@@ -76,7 +76,7 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
   - `public off` lässt Drop-ins und Logging-Einstellung stehen.
 
   — Nachweis: `tests/deploy/test_release.py::test_public_sets_log_limits_*`, `tests/test_deploy_files.py::test_journal_*`
-- [ ] AK9: Hochladen:
+- [x] AK9: Hochladen:
   - `bash scripts/deploy.sh <alias> <dienst> impressum <datei>` prüft lokal (UTF-8, ≤ 16 KB, nicht leer, kein NUL;
     BOM weg, CRLF → LF).
   - Verbindung 1 lädt nach `incoming/impressum-<sha256>.md` (außerhalb der Sperre); Verbindung 2 führt
@@ -88,7 +88,7 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
   - Der Inhalt erscheint nie in der Ausgabe oder im Log.
 
   — Nachweis: `tests/deploy/test_release.py::test_impressum_*`, `tests/deploy/test_deploy_script.py::test_impressum_*`
-- [ ] AK10: Units und Rückfall:
+- [x] AK10: Units und Rückfall:
   - Die Web-Unit trägt fest `--impressum /etc/llm-trading-bot/impressum.md`. Ein Test rendert beide `ExecStart`-Varianten
     wie `release.sh` und lässt sie vom echten CLI-Parser lesen.
   - Die Sandbox bekommt eine Variante „vor 014“: Deploy alt → 014 → Rollback → `ExecStart` ohne `--impressum`,
@@ -96,10 +96,10 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
   - Angepasste Prüfungen: `test_deploy_files.py:115`, `test_release.py` (ExecStart-Enden), `check-units.sh`.
 
   — Nachweis: `tests/deploy/test_release.py::test_rollback_before_014_*`, `tests/deploy/test_release.py::test_public_log_limits_survive_a_rollback_before_014`, `tests/test_legal_bindings.py::test_web_unit_execstart_*`
-- [ ] AK11: Im Repo kein Impressum mit echten Daten: nur `deploy/impressum.example.md` mit Platzhaltern; ein Test prüft,
+- [x] AK11: Im Repo kein Impressum mit echten Daten: nur `deploy/impressum.example.md` mit Platzhaltern; ein Test prüft,
   dass kein anderes `impressum*.md` versioniert ist. Die echte Datei liegt lokal außerhalb des Repos. — Nachweis:
   `tests/test_deploy_files.py::test_impressum_only_example_in_repo`
-- [ ] AK12: [manuell] Mit Zustimmung, in dieser Reihenfolge:
+- [x] AK12: [manuell] Mit Zustimmung, in dieser Reihenfolge:
   1. Nutzer: Postfach `kontakt@<domain>` bei Migadu, AVV mit Hetzner und Migadu geprüft, beide Texte gelesen und
      freigegeben.
   2. `impressum <datei>`, `status`.
@@ -112,7 +112,7 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
      - `systemctl show caddy -p LogNamespace`.
      - Neue Caddy-Meldung nur im Namensraum, Cookie darin geschwärzt.
      - `ufw status verbose` zeigt Logging aus.
-- [ ] AK13: Doku: ADR-0025, ARCHITEKTUR, `docs/betrieb/server.md` (Impressum hochladen/ändern, Protokolle, Aufräumen),
+- [x] AK13: Doku: ADR-0025, ARCHITEKTUR, `docs/betrieb/server.md` (Impressum hochladen/ändern, Protokolle, Aufräumen),
   STAND. — Nachweis: `scripts/docs-check.sh`, Review
 
 ## Abgrenzung
@@ -158,7 +158,7 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
 - [x] 4. `release.sh public`: Drop-ins, Journal-Grenzen, `ufw logging off`; `check-units.sh` (AK8)
 - [x] 5. `impressum`-Modus in `release.sh`/`deploy.sh`, `status`, Beispieldatei (AK9, AK11)
 - [x] 6. Doku, ADR, Prüfung (Workflow), PR (AK13); Impressum-Datei lokal erzeugen
-- [ ] 7. Mit Zustimmung: Server-Schritte (AK12)
+- [x] 7. Mit Zustimmung: Server-Schritte (AK12)
 
 ## Risiken & offene Fragen
 - **Rechtliche Richtigkeit:** keine Rechtsberatung; Freigabe durch den Nutzer (AK12).
@@ -184,11 +184,31 @@ Text und Code aneinander. Name und Anschrift des Betreibers stehen nur auf dem S
   verweigert einen grünen Commit ohne Impressum-Modus vor dem Hochladen, alte Upload-Kopien werden gelöscht;
   Firewall-Text nennt SSH; Haftungsabsatz ohne veraltete DDG-Paragraphen (Art. 8 DSA); Warnung zu
   Hetzner-Backups; Zeitfenster der globalen Sperre als Konstante gebunden; Cookie-Dauern verankert geprüft.
+- 2026-11-07: Server mit Zustimmung: Impressum hochgeladen (944 B), Release 30536d0 deployt, `public <domain>`
+  erneut (5 Änderungen: Caddy-Drop-in, Namensraum- und System-Journal-Drop-in, `ufw logging off`, Caddy-Neustart),
+  einmalig aufgeräumt (System-Journal geleert, 39 MB; `ufw.log`, `kern.log`, `syslog` geleert).
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Impressum (nur auf dem Server) und Datenschutzerklärung (im Repo, an Code und Server-Dateien
+  gebunden) ohne Login erreichbar und auf jeder Seite verlinkt; die genannten Fristen setzt der Server durch
+  (Journale höchstens 15 Tage, keine Firewall-Logs, Login-Schutz vergisst nach 24 h). AK1–AK13 erfüllt.
+- **Abweichungen vom Plan:** Web- und Deploy-Seite parallel in Worktrees gebaut; Bindungstests und
+  ExecStart-Parser-Test in `tests/test_legal_bindings.py` statt `tests/test_cli.py`. Nach dem Review zusätzlich:
+  Namensraum-Grenzen als Drop-in (Rollback-fest), Upload-Sperre für Commits ohne Impressum-Modus,
+  Haftungsabsatz mit Art. 8 DSA statt veralteter DDG-Paragraphen; `forget_loop` im Web-Prozess räumt den
+  Login-Schutz auch ohne neue Anfragen.
+- **Nachweise:**
+  - PR #21, CI grün (inkl. Linux-Sandbox-Tests und `systemd-analyze verify` des Caddy-Drop-ins); lokal 1911 Tests,
+    ruff, mypy, shellcheck, docs-check.
+  - Server (2026-11-07, AK12): `/impressum` und `/datenschutz` von außen 200 ohne Cookie, Links im Fuß der
+    Login-Seite, POST → 405, Tunnel 200.
+  - `systemctl show caddy -p LogNamespace` → `llm-trading-bot`; `ufw status verbose` → `Logging: off`;
+    `systemd-analyze cat-config` des Namensraums zeigt 14day/1day/`ForwardToSyslog=no`.
+  - Seit dem Aufräumen keine Caddy-Zeile mit IP im System-Journal. Ports: 8787/8788 nur auf `127.0.0.1`, 80/443
+    Caddy, kein 2019.
+- **Offen / Folgearbeit:** Eine Caddy-Meldung mit Anfrage (und damit die Cookie-Schwärzung, Caddy-Standard ohne
+  `log_credentials`) gab es nach der Umstellung noch nicht – beim nächsten Blick ins Journal prüfen. Nutzer:
+  Postfach `kontakt@<domain>`, AVV mit Hetzner und Migadu, Texte gelesen (vom Nutzer bestätigt mit „Ja, alles“).
+  Auf den anderen Seiten des Nutzers steht noch der veraltete DDG-Haftungsabsatz.
+- **Neue ADRs / Learnings:** ADR-0025.
