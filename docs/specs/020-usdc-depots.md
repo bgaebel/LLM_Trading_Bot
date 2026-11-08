@@ -1,6 +1,6 @@
 # Spec 020: USDC-Depots – BTC über BTC/USDC ausführen, Geld bleibt in Euro
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s020-usdc-depots` · **Meilenstein:** M1 (Nachtrag, Paper)
 - **Erstellt:** 2026-11-08
 
