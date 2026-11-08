@@ -4,7 +4,8 @@
 
 ## Fokus
 - **Spec 019 fertig:** Übersicht ohne Login lesbar (ADR-0028), „Letzte Signale“ ohne HOLD; live seit
-  2026-11-08 09:41 UTC (Release 9908dea) – **M1-Uhr läuft ab da**.
+  2026-11-08 09:41 UTC (Release 9908dea). Danach Kacheln etwas durchsichtiger: Release a7dba9c seit
+  2026-11-08 10:00 UTC – **M1-Uhr läuft ab da** (7 Tage → 2026-11-15 10:00 UTC).
 - **Spec 015 fertig:** Live-Aufzeichnung in `observations.db` läuft seit 2026-11-08 08:23 UTC (Release aac30e4).
 - **Strategie-Labor** (ADR-0026/0027): danach Spec 016 Kerzenarchiv, Backtest, Basisbericht v0.3.1
   (Q2 2021–Q3 2025; ab 2025-10-01 versiegelt). 017/018 sind Skizzen.
