@@ -114,6 +114,23 @@ Kosten gebracht hätte – mit Unsicherheitsbändern und Vergleich mit Buy & Hol
 - [ ] AK12: [manuell] Archiv vollständig geladen; Basisbericht erzeugt und dem Nutzer als privates Artifact gezeigt.
 - [ ] AK13: Doku: ARCHITEKTUR (Modul `lab`), `docs/labor.md` (Ordner, Bedienung, Lesart, Grenzen, versiegelter Zeitraum).
   — Nachweis: `scripts/docs-check.sh`, Review
+- [ ] AK14 (aus Spec 020 AK8): **Ausführung über USDC** – Backtest-Variante `usdc` (ADR-0029/0030):
+  - rechnet `trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc` und `buyhold-usdc` statt v0.3.1 (Buy & Hold
+    läuft wie live mit) über dasselbe BTC-EUR-/ETH-EUR-Archiv, mit ausdrücklichem `BotConfig`; `base`, Kostenraster und
+    Diagnose rechnen weiter genau die v0.3.1-Depots, unabhängig von `BOT_USDC_AGENTS`;
+  - BTC-USDC gibt es erst ab 2024-07-01: beide Kurse des Wegs aus der BTC-EUR-Mitte, USDC-EUR = 1,0 mit 1,1 bp
+    Spread (gemessen), BTC-USDC = BTC-EUR-Mitte / 1,0 mit 3 bp (gemessen Median 2 bp, vorsichtig) – als Annahme im
+    Bericht; Kosten des Wegs aus `paper/usdc.py`;
+  - eigene Variante im Prüfregister (Version `v0.3.1-usdc`, eigener Depot-Satz); frühere Konfigurations-Hashes bleiben
+    gültig;
+  - Bericht: Abschnitt „Ausführung über USDC“ neben dem Basislauf, nur über Quartale, die in beiden gewertet sind;
+  - Treue-Test: Entscheidungen der USDC-Depots wie ihr Zwilling nachgebaut, BTC mit den Wegkosten aus den
+    aufgezeichneten Büchern (`observations.db`); fehlen sie, mit Ursache übersprungen, nie still weggelassen.
+
+  — Nachweis: `tests/lab/test_backtest.py::test_usdc_variant`, `tests/lab/test_report.py::test_usdc_variant_shown_next_to_base`,
+  `tests/lab/test_fidelity.py::test_usdc_decisions_rebuilt_on_the_route_costs`,
+  `::test_usdc_btc_without_observations_listed_not_compared`,
+  `tests/lab/test_register.py::test_variant_field_added_later_keeps_earlier_hashes`
 
 ## Abgrenzung
 - Keine Parametersuche, keine neue Strategieversion, keine GPT-Backtests (ADR-0026), kein Echtgeld (ADR-0004).
@@ -139,16 +156,17 @@ Kosten gebracht hätte – mit Unsicherheitsbändern und Vergleich mit Buy & Hol
   bricht Release und CI).
 
 ## Plan
-- [ ] 1. Kerzenarchiv (AK1)
-- [ ] 2. Historischer Client mit Zukunfts-Tests (AK2)
-- [ ] 3. Live-Rohantworten einfrieren, Gleichheit, Mutationsgruppe (AK3)
-- [ ] 4. Lauf: Abschnitte, Zulassung, Versiegelung, Isolation (AK4, AK11 Teil)
-- [ ] 5. Spread-Modell und Kennzahlen (AK6, AK7)
-- [ ] 6. Prüfregister und Diagnose-Lauf (AK8, AK9)
-- [ ] 7. Treue-Test (AK5)
-- [ ] 8. Bericht und Laufzeitmessung (AK10, AK11)
-- [ ] 9. Doku, Prüfung (Workflow), PR (AK13)
-- [ ] 10. Archiv laden, Basisbericht an den Nutzer (AK12)
+- [x] 1. Kerzenarchiv (AK1)
+- [x] 2. Historischer Client mit Zukunfts-Tests (AK2)
+- [x] 3. Live-Rohantworten einfrieren, Gleichheit, Mutationsgruppe (AK3)
+- [x] 4. Lauf: Abschnitte, Zulassung, Versiegelung, Isolation (AK4, AK11 Teil)
+- [x] 5. Spread-Modell und Kennzahlen (AK6, AK7)
+- [x] 6. Prüfregister und Diagnose-Lauf (AK8, AK9)
+- [x] 7. Treue-Test (AK5)
+- [x] 8. Bericht und Laufzeitmessung (AK10, AK11)
+- [ ] 9. Doku, Prüfung (Workflow), PR (AK13) – Doku geschrieben (`docs/labor.md`, ARCHITEKTUR); Prüfung und PR offen
+- [ ] 10. Archiv laden, Basisbericht an den Nutzer (AK12) – Archiv geladen; Backtest, Bericht und Artifact offen
+- [x] 11. Variante `usdc` nach dem Merge von Spec 020 (AK14)
 
 ## Risiken & offene Fragen
 - **Ergebnis kann ernüchtern:** Wahrscheinlich schlägt keine Strategie Buy & Hold verlässlich – ein gültiges Ergebnis.
@@ -162,6 +180,20 @@ Kosten gebracht hätte – mit Unsicherheitsbändern und Vergleich mit Buy & Hol
   gewertet ab Q2 2021 mit Zulassungsregel, Quote ohne Vorgriff, Gleichheit gegen eingefrorene Live-Rohantworten,
   Treue-Test mit Mindestzahl, Kosten-Gleichstand bei festen Entscheidungen, Benchmark als Formel, Register-Einheit,
   Diagnose-Lauf, nur Standardbibliothek.
+- 2026-11-08: Umsetzung in Wellen mit parallelen Arbeitszweigen (1: Paket, Kennzahlen, Prüfregister, Kerzenarchiv und
+  Spread-Modell; 2: historischer Client mit eingefrorenen Live-Antworten und Mutationsgruppe `lab`, CLI, Bericht;
+  3: Backtest je Quartal, Treue-Test). Danach mehrere Prüfrunden (Register, Bericht, Backtest, Treue-Test,
+  Order-Pfad-Wächter) mit Korrekturen, u. a.: versiegelte Einträge ohne jede Zahl, Spreads nur aus ganzen Quartalen,
+  gesperrte Stunden auch aus veralteten höheren Intervallen, Register-Reihenfolge fest, Beobachtungs-Abfragen über
+  Indizes. Archiv geladen: 6,6 Mio. Kerzen, Spread-Stichproben 991 Stunden.
+- 2026-11-08: main mit Spec 020 (USDC-Depots) hereingeholt. Ursachen der roten Labor-Tests: (1) der Treue-Test-Lauf
+  las `BOT_USDC_AGENTS` als Standard (alle an) und legte `buyhold-usdc` nicht an; der Treue-Test kannte `*-usdc` nicht
+  (BTC hätte er mit BTC-EUR-Kosten nachgebaut); (2) der Live-Client liest seit 020 auch BTC-USDC und USDC-EUR aus dem
+  eingefrorenen `/ticker/book`, und `Symbol` hat jetzt vier Märkte – die Gleichheitstests liefen über `Symbol` statt
+  über die Kerzenmärkte und fragten Kerzen von BTC-USDC ab. Behoben ohne Änderung der Fixtures und des Live-Codes:
+  ausdrückliche Konfiguration ohne USDC-Depots, Gleichheit über `SYMBOLS`, zusätzlich ein Gleichheitslauf mit
+  USDC-Depots auf den echten Büchern; Treue-Test mit Wegkosten aus `observations.db`; Variante `usdc` (AK14) und Doku
+  (AK13).
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

@@ -23,6 +23,9 @@ Dauerbetrieb (`service`, Spec 008, ADR-0017): `uv run trading-bot run --db <pfad
 Zyklus aus, liest die Einstellungen jede Runde neu, meldet sich bei systemd (Watchdog) und schreibt
 `service-status.json` neben der DB; die Übersicht zeigt daraus das Lebenszeichen „Dienst“. Units in `deploy/`.
 Diagnose per `uv run trading-bot market` und `uv run trading-bot signals`.
+Strategie-Labor (`lab`, Spec 016, ADR-0026/0029): nur auf dem PC per `uv run trading-bot lab …` – Kerzenarchiv,
+Backtest je Quartal über den unveränderten `paper_cycle`, Treue-Test gegen Live-Kopien, Prüfregister und Basisbericht
+(`docs/labor.md`).
 **Zielbild M1** (Bausteine werden schrittweise per Spec aus der Arena übernommen, ADR-0003):
 
 ```
@@ -58,8 +61,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 | `src/llm_trading_bot/web/` | Weboberfläche: Login (`auth`), Zugangsdaten-Datei (`credentials`), Seiten (`pages`, Übersicht `overview_page`, Stylesheet `style`, Deko-Chart `chart`, Live-Skript `script` als `/app.js`), Übersichtsdaten (`overview`), Nur-Lese-Zugriff auf die Bot-DB (`readonly`, ADR-0016), Server und Routen (`app`), private Dateien (`files`) |
 | `src/llm_trading_bot/ops/` | Betrieb: geprüfte Backups, Prüfung und Wiederherstellung der Bot-DB (`backup`, ADR-0018) |
 | `src/llm_trading_bot/llm/` | GPT-Depots: Prompt v1 und Antwortprüfung (`contract`), Takt (`due`), Budget (`budget`), Konfiguration (`agents`), OpenAI-Adapter (`openai_client`), Ablauf je Depot (`cycle`) |
+| `src/llm_trading_bot/lab/` | Strategie-Labor (Spec 016, ADR-0026/0029), nur auf dem PC und nur über `trading-bot lab …` geladen: Kerzenarchiv (`archive`), historischer Kursgeber (`history`), Backtest (`backtest`), Treue-Test (`fidelity`), Spread-Modell (`spread`), Kennzahlen (`metrics`), Prüfregister (`register`), Bericht (`report`), gemeinsame Typen (`model`), Ordner (`paths`), Code-Stand (`gitstate`); Bedienung in `docs/labor.md` |
 | `tools/golden/` | Generator der Golden-Fixtures aus dem Arena-Code; `mutation_check.py` prüft, dass die Tests Änderungen an Schwellen/Gewichten erkennen (nur Entwicklung) |
-| `tests/` | pytest-Tests; `broker/` Vertrag, Sperren und Order-Pfad-Prüfung (Spec 012), `broker/fixtures/markets_2026-11.json` öffentliche `/markets`-Antwort; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests der Strategien; `golden_execution_cases.py`/`golden_execution_runner.py` + `paper/fixtures/` Golden-Tests der Ausführung; `llm_fakes.py` Fake-Modell; Marker `net` = echte API (standardmäßig aus) |
+| `tests/` | pytest-Tests; `broker/` Vertrag, Sperren und Order-Pfad-Prüfung (Spec 012), `broker/fixtures/markets_2026-11.json` öffentliche `/markets`-Antwort; `fakes.py` Test-Doubles; `golden_scenarios.py`/`golden.py` + `strategy/fixtures/` Golden-Tests der Strategien; `golden_execution_cases.py`/`golden_execution_runner.py` + `paper/fixtures/` Golden-Tests der Ausführung; `llm_fakes.py` Fake-Modell; `lab/` Labor-Tests mit `lab/fixtures/bitvavo_captures.json.xz` (eingefrorene echte Bitvavo-Antworten, `lab_captures.py`) und synthetischen Archiven (`lab_backtest_data.py`); Marker `net` = echte API, `slow` = Laufzeitmessung (beide standardmäßig aus) |
 | `deploy/` | Server-Dateien: `setup-server.sh` härtet einen frischen Server (Spec 002); `release.sh` installiert, aktualisiert und rollt zurück (Spec 009, ADR-0018); systemd-Units `llm-trading-bot.service` (Dienst), `llm-trading-bot-web.service` (Weboberfläche), `llm-trading-bot-backup.service`/`.timer` (tägliches Backup) und `journald@llm-trading-bot.conf` mit Platzhaltern |
 | `scripts/` | `deploy.sh` (Deploy von hier: nur geprüfte Commits von `origin/main`, Spec 009), `docs-check.sh` (Doku-Hygiene), `check-units.sh` (Units mit Testwerten per `systemd-analyze verify`), `github-labels.sh` |
 | `.github/workflows/` | CI (ruff, mypy, pytest, shellcheck, systemd-Units) und Doku-Prüfung |
@@ -264,6 +268,39 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   Inline-Skript, kein `eval`, ADR-0019), ohne Inline-Stil, Header auf jeder Antwort
   (`end_headers`); `secrets.env` ohne Steuerzeichen/Zeilenumbrüche in Werten; kein Bitvavo-Key-Feld (ADR-0004).
   `secrets.env` und `web-auth.json` liegen im Datenverzeichnis, sind git-ignoriert, nie im Repo.
+
+### lab
+- **Zweck:** Strategie-Labor auf dem PC (Spec 016, ADR-0026/0029): Bitvavo-Historie laden, die v0.3.1-Depots (und
+  in der Variante `usdc` die USDC-Depots) über den unveränderten Live-Pfad je Quartal durchrechnen, mit live
+  abgleichen, Ergebnis als Basisbericht. Bedienung, Lesart und Grenzen: `docs/labor.md`.
+- **Schnittstelle:** CLI `trading-bot lab fetch|check|spread|backtest|fidelity|report` (je Befehl
+  `cli_main(command, argv, out)`, deutsche Ausgabe); Daten in `paths.lab_dir()` (`LTB_LAB_DIR`), nie im Repo.
+  - `archive`: `Archive` über `candles.db` – Fenster `[start, start + 1440 Intervalle)`, nur abgeschlossene Zeilen,
+    geprüft mit dem Parser des Live-Clients, fertige Fenster unveränderlich; `open_readonly`, `rows`, `last_rows`,
+    `checksum`, `window_state`
+  - `history`: `HistoricalClient(source, spreads, clock, start=, end=, quotes=, forming_hint=, route=)` erfüllt
+    `market.snapshot.MarketClient`; letzte 500 Zeilen bis zur Uhr, dann der Live-Filter; Quote = Schluss der
+    letzten abgeschlossenen Minute ± halber Spread; `UsdcRoute` bildet BTC-USDC/USDC-EUR aus der BTC-EUR-Mitte
+    (nur mit `route`)
+  - `backtest`: `run_quarter(archive, quarter, variant, spreads)` (Arbeiterprozess, schreibt nichts) und
+    `run_quarters(...)` (Hauptprozess, trägt jedes Ergebnis in fester Reihenfolge ins Register ein); Varianten
+    `BASE`, Kostenraster, Diagnose, `USDC`
+  - `fidelity`: `check(bot, source, obs=)` / `run(...)` – baut jeden aufgezeichneten Snapshot zur Zeit `inputs.utc`
+    nach (klassisch, GPT-Referenzsignale, USDC-Depots mit den Wegkosten aus den Büchern von `observations.db`)
+    → `FidelitySummary`
+  - `spread`: Spread je Quartal aus Stichproben öffentlicher Trades (`QuarterSpreads`, `DEFAULT_SPREAD`)
+  - `metrics`: `summarize(results)` → `LabMetrics` (Rendite, Drawdown, FIFO-Round-Trips, Benchmark gleicher Quote,
+    Block-Bootstrap, Marktphasen, Datenqualität)
+  - `register`: `Register` über `runs.db` + `register.jsonl` (nur anhängen, Prüfsummenkette, `trial_count`)
+  - `report`: `build_report(...)` → Markdown + HTML, `write_report` in einen neuen Ordner unter `reports/`
+  - `model`: gemeinsame Datentypen (`Quarter`, `Variant`, `QuarterResult`, `FidelitySummary`), Siegel
+    `SEAL_EPOCH` (2025-10-01), Annahmen der USDC-Variante
+- **Invarianten:** Live-Code unverändert und nur aufgerufen (`paper_cycle`, `build_snapshots`, `run_strategy`);
+  `trading-bot --help` und der Dienst importieren `lab` nie (AK11). Jede Variante läuft mit ausdrücklichem
+  `BotConfig` (nie den Standardwerten von `BOT_AGENTS`/`BOT_USDC_AGENTS`). Nichts aus dem Zeitraum ab 2025-10-01
+  wird gerechnet oder gezeigt; ein versiegeltes Quartal steht nur als verweigert im Register. Das Register löscht
+  und überschreibt nie; Berichte überschreiben nie. Bot-Daten nur als Kopie, schreibgeschützt geöffnet
+  (`mode=ro`); keine Order-Endpunkte (ADR-0004, Order-Pfad-Prüfung in `tests/broker`).
 
 ## Datenfluss & Nebenläufigkeit
 `build_snapshots` holt je Markt die Kerzen für 1/15/60/240 min, danach einmal die Quotes (sie veralten am
