@@ -147,12 +147,18 @@ class QuarterResult:
     quarter: Quarter
     variant: Variant
     status: str = "ok"
-    """ok, no_lead (fewer than LEAD_ROWS rows before the start), sealed, aborted."""
+    """ok, no_lead (fewer than LEAD_ROWS rows before the start), incomplete (the archive's
+    windows over the quarter are not all fetched yet, so no run: missing rows would look like
+    exchange gaps), sealed, aborted. Only ok can be graded."""
     error: str = ""
     depots: dict[str, DepotResult] = field(default_factory=dict)
     quality: dict[str, MarketQuality] = field(default_factory=dict)
     daily_mid: dict[str, list[tuple[str, float]]] = field(default_factory=dict)
-    """Market -> (day, mid at the day's last round) for the buy & hold benchmark (AK7)."""
+    """Market -> ``[(day_before_quarter, mid at the first round), (day_1, mid at day 1's last
+    round), ...]`` for the buy & hold benchmark (AK7), one entry per UTC day in increasing
+    order. The first entry is only the base of day 1, labelled with the day before the quarter
+    (e.g. ``2021-03-31`` for 2021Q2), never a benchmark day itself; without it day 1 has no
+    return and ``metrics`` flags it as a data issue."""
     spread: dict[str, float] = field(default_factory=dict)
     """Assumed full spread per market as a fraction of mid (AK6)."""
     rounds: int = 0
@@ -227,10 +233,14 @@ class FidelitySummary:
 
     @property
     def established(self) -> dict[str, bool]:
-        """Never "100 %" below FIDELITY_MIN; an unexplained deviation also fails."""
+        """Never "100 %" below FIDELITY_MIN. Every comparison needs equal action and target and
+        indicators within one rounding step (AK5); an unexplained deviation also fails."""
         unexplained = {d["market"] for d in self.deviations if not d.get("cause")}
         return {
-            m: n >= FIDELITY_MIN and self.equal_action.get(m, 0) == n and m not in unexplained
+            m: n >= FIDELITY_MIN
+            and self.equal_action.get(m, 0) == n
+            and self.indicators_ok.get(m, 0) == n
+            and m not in unexplained
             for m, n in self.compared.items()
         }
 

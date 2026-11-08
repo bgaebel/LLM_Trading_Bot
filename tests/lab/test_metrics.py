@@ -6,6 +6,7 @@ import math
 import random
 import statistics
 from dataclasses import asdict
+from datetime import date, timedelta
 from typing import Any
 
 import pytest
@@ -53,16 +54,24 @@ def trade(
     return Trade(Q.start + ts, agent, market, side, qty, notional / qty, notional, fee, context)
 
 
+def fitted(depots: dict[str, DepotResult]) -> Quarter:
+    """2022Q1 cut to end after the depots' last day point, so a short hand-made series is a
+    complete quarter (metrics flags missing days up to the quarter's end)."""
+    last = max((p.day for d in depots.values() for p in d.days), default="2022-01-01")
+    n = (date.fromisoformat(last) - date(2022, 1, 1)).days + 1
+    return Quarter(Q.label, Q.start, Q.start + max(n, 1) * 86_400)
+
+
 def result(
     depots: dict[str, DepotResult],
     *,
-    quarter: Quarter = Q,
+    quarter: Quarter | None = None,
     daily_mid: dict[str, list[tuple[str, float]]] | None = None,
     spread: dict[str, float] | None = None,
     variant: Variant | None = None,
 ) -> QuarterResult:
     return QuarterResult(
-        quarter,
+        quarter or fitted(depots),
         variant or Variant(),
         depots=depots,
         quality={m: MarketQuality(m, 100, 100) for m in (BTC, ETH)},
@@ -558,7 +567,9 @@ def test_gap_in_the_depot_series_is_flagged() -> None:
     assert "Depotwert ohne Vortag" in issue.text
     # Day 1 is measured against the start capital, so it must be the quarter's first day.
     late = result({"trend": DepotResult("trend", points[:1])}, quarter=Quarter.parse("2022Q2"))
-    assert benchmark(late, "trend").issues[0].missing_days == ["2022-01-01"]
+    outside, absent = benchmark(late, "trend").issues
+    assert (outside.kind, outside.missing_days) == (metrics.OUTSIDE, ["2022-01-01"])
+    assert absent.kind == metrics.MISSING and len(absent.missing_days) == 91
 
 
 def _with_depot(q: QuarterResult, agent: str, weights: dict[str, float]) -> QuarterResult:
@@ -613,3 +624,130 @@ def test_drawdown_basis_is_end_of_day() -> None:
     s = summarize([result({"trend": depot})], draws=10)
     assert s.drawdown_basis == "Tagesende"
     assert json.loads(json.dumps(asdict(s), allow_nan=False))["drawdown_basis"] == "Tagesende"
+
+
+# --- wave-2 review: series against the quarter, duplicates, issue text, spread flag -------
+
+
+def _series(first: date, n: int, weights: dict[str, float] | None = None) -> list[DayPoint]:
+    out = []
+    for i in range(n):
+        day = (first + timedelta(days=i)).isoformat()
+        out.append(DayPoint(day, 10_000.0, 10_000.0, dict(weights or {})))
+    return out
+
+
+def _mids(first: date, n: int) -> list[tuple[str, float]]:
+    """The base labelled the day before ``first``, then ``n`` days."""
+    return [((first + timedelta(days=i - 1)).isoformat(), 100.0 + i) for i in range(n + 1)]
+
+
+def test_truncated_series_is_flagged() -> None:
+    # Review probe: a full 2022Q1 with day points only for 01-01..01-03 used to read as a
+    # complete benchmark, while the bootstrap silently lost days 4 to 90.
+    points = _series(date(2022, 1, 1), 3, {BTC: 0.5})
+    depot = DepotResult("trend", points, end_mid=15_000.0, end_liquidated=15_000.0)
+    q = result({"trend": depot}, quarter=Q, daily_mid={BTC: _mids(date(2022, 1, 1), 31)})
+    m = depot_metrics(q, "trend")
+    assert not m.benchmark_complete and m.benchmark_days == 3
+    (issue,) = m.data_issues
+    assert (issue.kind, issue.market, len(issue.missing_days)) == (
+        metrics.MISSING,
+        metrics.DEPOT_SERIES,
+        87,
+    )
+    assert issue.text == (
+        "2022Q1 trend: kein Depotwert an 87 von 90 Tagen (2022-01-04 bis 2022-03-31); "
+        "Benchmark und Unsicherheit ohne diese Tage"
+    )
+    u = uncertainty([q], "trend", draws=20)
+    assert (u.days, u.excluded_days) == (3, 87)
+    # A depot without any day point misses the whole quarter.
+    empty = depot_metrics(result({"trend": DepotResult("trend")}, quarter=Q), "trend")
+    (none,) = empty.data_issues
+    assert none.kind == metrics.MISSING and none.missing_days == metrics.quarter_days(Q)
+    # The last day of the quarter present: complete.
+    full = DepotResult("trend", _series(date(2022, 1, 1), 90))
+    assert depot_metrics(result({"trend": full}, quarter=Q), "trend").benchmark_complete
+
+
+def test_days_outside_the_quarter_are_never_graded() -> None:
+    # Review probe: 2022-04-01 belongs to 2022Q2 but became a 2022Q1 benchmark day.
+    points = [
+        DayPoint("2022-03-31", 10_000.0, 10_000.0, {}),
+        DayPoint("2022-04-01", 10_100.0, 10_100.0, {}),
+    ]
+    b = benchmark(result({"trend": DepotResult("trend", points)}, quarter=Q), "trend")
+    assert b.days == []
+    outside, gap = b.issues
+    assert (outside.kind, outside.missing_days) == (metrics.OUTSIDE, ["2022-04-01"])
+    assert outside.text == (
+        "2022Q1 trend: Depotwert außerhalb des Quartals (2022-01-01 bis 2022-03-31) an 1 "
+        "Tagen (2022-04-01); diese Tage werden nie gewertet"
+    )
+    # The real problem is named too: the series starts late, so 03-31 has no predecessor.
+    assert (gap.kind, gap.missing_days) == (metrics.GAP, ["2022-03-31"])
+
+    # A last point spilling into the sealed period never reaches the pooled days.
+    q3 = Quarter.parse("2025Q3")
+    series = [*_series(date(2025, 7, 1), 92), DayPoint("2025-10-01", 9_000.0, 9_000.0, {})]
+    spill = result({"trend": DepotResult("trend", series)}, quarter=q3)
+    pooled = metrics.pooled_days([spill], "trend")
+    assert len(pooled) == 92 and pooled[-1][0] == "2025-09-30"
+    (issue,) = depot_metrics(spill, "trend").data_issues
+    assert (issue.kind, issue.missing_days) == (metrics.OUTSIDE, ["2025-10-01"])
+    assert uncertainty([spill], "trend", draws=20).excluded_days == 0
+
+
+def test_days_carried_twice_are_reported_and_left_out() -> None:
+    # Review finding: rows keyed by day kept one copy and dropped the other without a word.
+    q = _bootstrap_quarter()
+    s = summarize([q, q], draws=20)
+    dups = [i for i in s.data_issues if i.kind == metrics.DUPLICATE]
+    assert len(dups) == 2 and all(len(i.missing_days) == 12 for i in dups)
+    assert dups[0].text == (
+        "2022Q1 trend: Tag auch in einem anderen gewerteten Ergebnis (2022Q1) an 12 Tagen "
+        "(2022-01-01 bis 2022-01-12); Unsicherheit ohne diese Tage"
+    )
+    assert metrics.pooled_days([q, q], "trend") == []
+    assert s.uncertainty == {} and "trend" in s.uncertainty_missing
+    # Partly overlapping results: only the shared days go, the rest is still pooled.
+    later = Quarter(Q.label + "b", Q.start + 6 * 86_400, Q.start + 18 * 86_400)
+    other = result({"trend": DepotResult("trend", _series(date(2022, 1, 7), 12))}, quarter=later)
+    pooled = [row[0] for row in metrics.pooled_days([q, other], "trend")]
+    assert pooled == [f"2022-01-{i:02d}" for i in (1, 2, 3, 4, 5, 6, *range(13, 19))]
+    issues = metrics.pooled_issues([q, other], "trend")
+    assert [(i.quarter, i.missing_days[0], i.missing_days[-1]) for i in issues] == [
+        ("2022Q1", "2022-01-07", "2022-01-12"),
+        ("2022Q1b", "2022-01-07", "2022-01-12"),
+    ]
+
+
+def test_issue_text_lists_separate_blocks() -> None:
+    # Review probe: four scattered days read as "2022-01-02 bis 2022-01-10", nine in a row.
+    depot = DepotResult("trend", _series(date(2022, 1, 1), 10, {BTC: 1.0}))
+    gone = ("2022-01-02", "2022-01-09")
+    mids = [row for row in _mids(date(2022, 1, 1), 10) if row[0] not in gone]
+    (issue,) = benchmark(result({"trend": depot}, daily_mid={BTC: mids}), "trend").issues
+    assert issue.missing_days == ["2022-01-02", "2022-01-03", "2022-01-09", "2022-01-10"]
+    blocks = "(2022-01-02 bis 2022-01-03, 2022-01-09 bis 2022-01-10)"
+    assert f"an 4 von 10 Tagen {blocks}" in issue.text
+    # Single days stay single; a long list is cut after MAX_BLOCKS - 1 blocks.
+    every_other = [f"2022-01-{i:02d}" for i in range(1, 20, 2)]
+    assert metrics._blocks(every_other[:2]) == "2022-01-01, 2022-01-03"
+    assert metrics._blocks(every_other) == (
+        "2022-01-01, 2022-01-03, 2022-01-05, 2022-01-07, 2022-01-09, und 5 weitere Abschnitte"
+    )
+
+
+def test_quarter_spread_marks_incomplete_excess() -> None:
+    whole = DepotResult("trend", _series(date(2022, 1, 1), 2), end_mid=10_100.0)
+    q1 = result({"trend": whole})
+    second = Quarter.parse("2022Q2")
+    cut = Quarter(second.label, second.start, second.start + 2 * 86_400)
+    short = DepotResult("trend", _series(date(2022, 4, 1), 1), end_mid=9_900.0)
+    q2 = result({"trend": short}, quarter=cut)
+    s = summarize([q1, q2], draws=10)
+    spread = s.spreads["trend"]
+    assert spread.excess.n == 2 and spread.incomplete == ["2022Q2"]
+    assert summarize([q1], draws=10).spreads["trend"].incomplete == []

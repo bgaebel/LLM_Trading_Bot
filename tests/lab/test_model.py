@@ -1,19 +1,25 @@
 """Spec 016: shared lab data - quarters, seal, JSON round trip."""
 
 import calendar
+import inspect
+from typing import Any
 
 import pytest
 
 from llm_trading_bot.lab.model import (
+    FIDELITY_MIN,
     SEAL_EPOCH,
     DayPoint,
     DepotResult,
+    FidelitySummary,
     MarketQuality,
     Quarter,
     QuarterResult,
     Trade,
     Variant,
 )
+
+BTC = "BTC-EUR"
 
 
 def test_seal_is_2025_10_01_utc() -> None:
@@ -64,3 +70,39 @@ def test_result_survives_json() -> None:
     again = QuarterResult.from_json(result.to_json())
     assert again == result
     assert again.eligible == {"BTC-EUR": True} and again.graded
+
+
+def _fidelity(n: int, equal: int, indicators: int, **kw: Any) -> FidelitySummary:
+    return FidelitySummary(
+        compared={BTC: n}, equal_action={BTC: equal}, indicators_ok={BTC: indicators}, **kw
+    )
+
+
+def test_fidelity_needs_indicators_within_one_step() -> None:
+    # Review finding: indicators_ok was ignored, so 350 of 400 still read "belegt" (AK5).
+    assert _fidelity(400, 400, 400).established == {BTC: True}
+    assert _fidelity(400, 400, 350).established == {BTC: False}
+    assert _fidelity(400, 400, 399).established == {BTC: False}
+    # A summary without the indicator count proves nothing about the indicators.
+    no_count = FidelitySummary(compared={BTC: 400}, equal_action={BTC: 400})
+    assert no_count.established == {BTC: False}
+    # The other rules stay: the minimum count, equal actions, explained deviations only.
+    assert _fidelity(FIDELITY_MIN - 1, FIDELITY_MIN - 1, FIDELITY_MIN - 1).established == {
+        BTC: False
+    }
+    assert _fidelity(FIDELITY_MIN, FIDELITY_MIN, FIDELITY_MIN).established == {BTC: True}
+    assert _fidelity(400, 399, 400).established == {BTC: False}
+    unexplained = [{"market": BTC, "field": "adx", "cause": ""}]
+    assert _fidelity(400, 400, 400, deviations=unexplained).established == {BTC: False}
+    explained = [{"market": BTC, "field": "adx", "cause": "laufende Kerze"}]
+    summary = _fidelity(400, 400, 400, deviations=explained)
+    assert summary.established == {BTC: True}
+    assert FidelitySummary.from_json(summary.to_json()) == summary
+
+
+def test_docstrings_state_the_contract_metrics_relies_on() -> None:
+    # Review finding: the backtest is built from model.py; a stale docstring here left out the
+    # daily_mid base (day 1 flagged in every quarter) and the status "incomplete".
+    source = inspect.getsource(QuarterResult)
+    assert "incomplete" in source
+    assert "day_before_quarter" in source and "base of day 1" in source
