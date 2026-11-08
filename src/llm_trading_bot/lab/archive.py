@@ -93,9 +93,15 @@ EARLIEST: dict[tuple[str, int], int] = {
     ("ETH-EUR", 240): calendar.timegm((2019, 3, 8, 0, 0, 0)),
 }
 
-# Public market endpoints only (ADR-0004): a market in the path, then candles or trades.
-_PUBLIC_PATH = re.compile(r"^/[A-Z0-9]{2,10}-[A-Z0-9]{2,10}/(candles|trades)\?[A-Za-z0-9=&.%-]*$")
-_MARKET = re.compile(r"^[A-Z0-9]{2,10}-[A-Z0-9]{2,10}$")
+# Public market endpoints only (ADR-0004): API, a market in the path, then candles or trades.
+# Bitvavo's private ``/trades``, ``/order`` or ``/account`` have no market segment, so they can
+# never match. Checked where a URL is built (``public_url``) and again where it is sent
+# (``LabTransport``), with ``fullmatch`` so a trailing newline cannot slip through ``$``.
+PUBLIC_ENDPOINTS = ("candles", "trades")
+_MARKET = re.compile(r"[A-Z0-9]{2,10}-[A-Z0-9]{2,10}")
+_PUBLIC_URL = re.compile(
+    re.escape(API) + r"/[A-Z0-9]{2,10}-[A-Z0-9]{2,10}/(candles|trades)\?[A-Za-z0-9=&.%-]*"
+)
 
 RawCandle = list[int | str]
 """One row as ``/candles`` sends it: ``[open ms, open, high, low, close, volume]``."""
@@ -194,18 +200,37 @@ class HeaderTransport(Protocol):
     def get_json_and_headers(self, url: str) -> tuple[object, dict[str, str]]: ...
 
 
+def checked_url(url: str) -> str:
+    """``url`` unchanged if it is a public market URL (``_PUBLIC_URL``), else ``ValueError``.
+
+    The allow-list every lab request passes; ``tests/broker/test_no_order_path.py`` requires
+    each ``get_json_and_headers`` call in this file to pass its URL through it.
+    """
+    if not _PUBLIC_URL.fullmatch(url):
+        raise ValueError(f"not a public market URL: {url}")
+    return url
+
+
+def public_url(market: str, endpoint: str, query: str) -> str:
+    """The only way the lab builds a URL: ``API/<market>/<candles|trades>?<query>``."""
+    if endpoint not in PUBLIC_ENDPOINTS:
+        raise ValueError(f"not a public market endpoint: {endpoint!r}")
+    return checked_url(API + "/" + _market_segment(market) + "/" + endpoint + "?" + query)
+
+
 class LabTransport:
     """The live GET-only urllib transport (``market/http.py``) with the lab's own User-Agent.
 
     The HTTP code itself stays in ``market/`` so that the static ADR-0004 checks keep seeing
-    every request in one place; 429 delays come from ``retry_after_seconds`` there.
+    every request in one place; 429 delays come from ``retry_after_seconds`` there. Any URL
+    outside ``_PUBLIC_URL`` is refused before a request is sent.
     """
 
     def __init__(self, *, timeout: float = 30.0) -> None:
         self._http = UrllibTransport(timeout=timeout, user_agent="llm-trading-bot-lab/0.1")
 
     def get_json_and_headers(self, url: str) -> tuple[object, dict[str, str]]:
-        return self._http.get_json_and_headers(url)
+        return self._http.get_json_and_headers(checked_url(url))
 
 
 def _header_number(headers: Mapping[str, str], name: str) -> float | None:
@@ -261,20 +286,19 @@ class PublicApi:
                 "end": end * 1000,
             }
         )
-        return self._request(
-            f"/{_market_segment(market)}/candles?{query}", weight=WEIGHTS["candles"]
-        )
+        return self._request(market, "candles", query, weight=WEIGHTS["candles"])
 
     def trades(self, market: str, start: int, end: int, *, limit: int = 1000) -> tuple[object, int]:
         """Public trades in ``[start, end)`` (epoch s, under 24 h; weight 5 per request)."""
         if not 0 < end - start < 86_400:
             raise ValueError("trades window must be shorter than 24 h")
         query = urlencode({"start": start * 1000, "end": end * 1000, "limit": limit})
-        return self._request(f"/{_market_segment(market)}/trades?{query}", weight=WEIGHTS["trades"])
+        return self._request(market, "trades", query, weight=WEIGHTS["trades"])
 
-    def _request(self, path: str, *, weight: int) -> tuple[object, int]:
-        if not _PUBLIC_PATH.match(path):
-            raise ValueError(f"not a public market path: {path}")
+    def _request(
+        self, market: str, endpoint: str, query: str, *, weight: int
+    ) -> tuple[object, int]:
+        url = public_url(market, endpoint, query)  # refused before any pacing or sending
         failure: Exception | None = None
         for attempt in range(self._attempts):
             if attempt:
@@ -285,7 +309,7 @@ class PublicApi:
             sent_at = self.now()
             self.requests += 1
             try:
-                data, headers = self._transport.get_json_and_headers(API + path)
+                data, headers = self._transport.get_json_and_headers(checked_url(url))
             except HTTPFailure as exc:
                 if exc.status == 429:
                     # Key-less 429 = 15-minute IP ban (research §2); a shorter hint is the
@@ -332,7 +356,7 @@ class PublicApi:
 
 
 def _market_segment(market: str) -> str:
-    if not _MARKET.match(market):
+    if not _MARKET.fullmatch(market):
         raise ValueError(f"unknown market format: {market!r}")
     return url_quote(market, safe="")
 

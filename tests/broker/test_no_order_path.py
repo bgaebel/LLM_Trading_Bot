@@ -43,13 +43,19 @@ FORBIDDEN_IMPORTS = (
 EXCHANGE_METHODS = {"market_rules", "balances", "submit", "lookup", "cancel_all"}
 ORDER_FUNCTIONS = {"place_order", "create_order", "cancel_order"}
 HTTP_MODULE = "market/http.py"
-# Spec 016: the strategy lab's candle/trade downloader, the only caller of the header variant
-# and the only file that may build the public ``f"/{market}/trades?{query}"`` path. The src
-# scans key files relative to the package, the literal scan relative to the repository.
+# Spec 016: the strategy lab's candle/trade downloader, the only caller of the header variant.
+# It builds its URLs only through ``public_url`` and sends only what ``checked_url`` lets
+# through (see ``rule_lab_fetch``). The src scans key files relative to the package, the
+# literal scan relative to the repository.
 LAB_FETCH = "lab/archive.py"
 LAB_FETCH_IN_REPO = "src/llm_trading_bot/" + LAB_FETCH
 # Spec 016 AK8: the register's git runner, the only src file allowed to import subprocess.
 GIT_MODULE = "lab/gitstate.py"
+# Spec 016 AK2: the backtest's worker pool, the only process start besides git. It starts the
+# same Python interpreter with the lab's own top-level function (``run_quarter``), never a
+# program of its choosing; multiprocessing itself stays forbidden in src, so neither a start
+# method nor an executable can be set (``rule_process_starts``).
+PROCESS_POOL_MODULE = "lab/backtest.py"
 HEADERS_METHOD = "get_json_and_headers"
 BITVAVO_MODULE = "market/bitvavo.py"
 EXCHANGE_PROTOCOL = ("broker/contract.py", "OrderExchange")
@@ -126,36 +132,12 @@ def _calls(tree: ast.AST) -> Iterator[ast.Call]:
 # ------------------------------------------------------------------ rules
 
 
-def _public_trades_parts(tree: ast.AST) -> set[int]:
-    """Literal parts of ``f"/{market}/trades?{query}"``: Bitvavo's public market trades (the
-    strategy lab's spread samples, Spec 016 AK6). The private ``/trades`` has no market in the
-    path, so only this exact shape is exempt, and only in ``LAB_FETCH_IN_REPO`` (see
-    ``rule_literals``); any other string with ``/trades`` still fails."""
-    ids: set[int] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.JoinedStr) and len(node.values) == 4:
-            first, market, middle, query = node.values
-            if (
-                isinstance(first, ast.Constant)
-                and first.value == "/"
-                and isinstance(market, ast.FormattedValue)
-                and isinstance(middle, ast.Constant)
-                and middle.value == "/trades?"
-                and isinstance(query, ast.FormattedValue)
-            ):
-                ids.update({id(first), id(middle)})
-    return ids
-
-
 def rule_literals(files: Files) -> list[str]:
     out = []
     for path, text in files.items():
-        tree = ast.parse(text)
-        # The same f-string elsewhere (``f"/{ver}/trades?{q}"`` in broker/) would build the
-        # private path, so the exemption is tied to the one file whose run-time check
-        # (``archive._PUBLIC_PATH``) only lets ``/{MARKET}/trades?`` through.
-        skip = _public_trades_parts(tree) if path == LAB_FETCH_IN_REPO else set()
-        for line, value in _strings(tree, skip=skip):
+        # No exemption, not even in LAB_FETCH: its public URL is joined from parts
+        # (``public_url``), so no literal there holds ``/trades`` (final review of Spec 016).
+        for line, value in _strings(ast.parse(text)):
             for bad in FORBIDDEN_LITERALS:
                 if bad in value:
                     out.append(f"{path}:{line}: literal {bad!r}")
@@ -211,7 +193,7 @@ def rule_public_paths(files: Files) -> list[str]:
                     if not call.args or not _public_path(call.args[0]):
                         out.append(f"{path}:{call.lineno}: _get with a non-public path")
                 elif path == LAB_FETCH and _name(call.func) == HEADERS_METHOD:
-                    continue  # the lab downloader checks its paths at run time (tests/lab)
+                    continue  # held by rule_lab_fetch: two call sites, each through checked_url
                 elif path not in (BITVAVO_MODULE, HTTP_MODULE):
                     out.append(f"{path}:{call.lineno}: {_name(call.func)} outside market/")
     return out
@@ -326,12 +308,34 @@ def rule_subprocess_calls(files: Files) -> list[str]:
                     out.append(f"{path}:{node.lineno}: subprocess outside {GIT_MODULE}")
                 elif id(node) not in used_ok:
                     out.append(f"{path}:{node.lineno}: subprocess beyond run(...)/DEVNULL")
+            # ``gitstate.subprocess.Popen`` reaches the module through gitstate's namespace.
+            if isinstance(node, ast.Attribute) and node.attr == "subprocess":
+                out.append(f"{path}:{node.lineno}: subprocess reached as an attribute")
+            # ``gitstate.REV_PARSE_HEAD = ["curl", ...]`` from another module would change what
+            # the pinned run call starts.
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr in GIT_PINS
+                and not isinstance(node.ctx, ast.Load)
+            ):
+                out.append(f"{path}:{node.lineno}: {node.attr} rebound from outside")
         for line, value in _strings(tree):
             if PROCESS_MODULE_NAME.fullmatch(value):
                 out.append(f"{path}:{line}: string {value!r} names the subprocess module")
+            if value in GIT_PINS:
+                out.append(f"{path}:{line}: string {value!r} names a pinned git command")
         if path != GIT_MODULE:
             continue
+        # Final review of Spec 016: the shape of a run call alone let ``run(["curl", "-X",
+        # "POST", ...], shell=False, timeout=5)`` through. Now what it starts is pinned too.
+        out += _pinned(path, tree, GIT_PINS, GIT_IMPORTS, GIT_UNBOUND)
+        if len(runs) != 1:
+            out.append(f"{path}: {len(runs)} subprocess.run calls, exactly one allowed")
         for call in runs:
+            if _enclosing(tree, call) != ("git",):
+                out.append(f"{path}:{call.lineno}: run outside the module-level def git")
+            if not call.args or not _fixed_git_argv(call.args[0]):
+                out.append(f"{path}:{call.lineno}: run argument is not list(<a GIT_PINS name>)")
             keywords = {k.arg: k.value for k in call.keywords}
             shell = keywords.get("shell")
             unknown = sorted(str(k) for k in keywords if k not in RUN_KEYWORDS)
@@ -346,6 +350,335 @@ def rule_subprocess_calls(files: Files) -> list[str]:
                 out.append(f"{path}:{call.lineno}: run without shell=False and a timeout")
             if unknown:
                 out.append(f"{path}:{call.lineno}: run with keyword(s) {unknown}")
+            env = keywords.get("env")
+            if env is not None and ast.unparse(env) != GIT_ENV:
+                out.append(f"{path}:{call.lineno}: run with an env other than {GIT_ENV}")
+    return out
+
+
+# The two git commands GIT_MODULE may start, as their one module-level binding must read.
+GIT_PINS = {
+    "REV_PARSE_HEAD": "REV_PARSE_HEAD = ('git', 'rev-parse', 'HEAD')",
+    "STATUS_PORCELAIN": "STATUS_PORCELAIN = ('git', 'status', '--porcelain')",
+}
+GIT_IMPORTS = {"os": "os"}
+"""Names GIT_MODULE binds only by a plain ``import``: ``os = fake`` would change the env."""
+GIT_UNBOUND = frozenset({"list"})
+"""Never bound in GIT_MODULE: a local ``list`` would turn ``list(REV_PARSE_HEAD)`` into anything."""
+GIT_ENV = "{**os.environ, 'GIT_OPTIONAL_LOCKS': '0'}"
+"""The env the run call passes: a different ``PATH`` would pick another program named git."""
+# In a pinned file these could rebind a pinned name behind the AST's back.
+DYNAMIC_NAMES = frozenset(
+    {"globals", "vars", "setattr", "delattr", "exec", "eval", "compile", "__builtins__"}
+)
+
+
+def _fixed_git_argv(arg: ast.expr) -> bool:
+    """``list(NAME)`` or ``list(NAME if <test> else NAME)``, each NAME one of GIT_PINS."""
+    if not (
+        isinstance(arg, ast.Call)
+        and isinstance(arg.func, ast.Name)
+        and arg.func.id == "list"
+        and len(arg.args) == 1
+        and not arg.keywords
+    ):
+        return False
+    inner = arg.args[0]
+    branches = [inner.body, inner.orelse] if isinstance(inner, ast.IfExp) else [inner]
+    return all(isinstance(b, ast.Name) and b.id in GIT_PINS for b in branches)
+
+
+def _enclosing(tree: ast.Module, target: ast.AST) -> tuple[str, ...]:
+    """Names of the classes and functions around ``target``, outermost first."""
+
+    def walk(node: ast.AST, names: tuple[str, ...]) -> tuple[str, ...] | None:
+        for child in ast.iter_child_nodes(node):
+            if child is target:
+                return names
+            scope = (
+                (*names, child.name)
+                if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+                else names
+            )
+            found = walk(child, scope)
+            if found is not None:
+                return found
+        return None
+
+    return walk(tree, ()) or ()
+
+
+def _bindings(tree: ast.AST) -> dict[str, list[ast.AST]]:
+    """Every node that binds a name, whatever the syntax (assignment, def, import, argument,
+    ``global``, ``except ... as``, ``match`` capture, type parameter)."""
+    out: dict[str, list[ast.AST]] = {}
+
+    def add(name: str | None, node: ast.AST) -> None:
+        if name is not None:
+            out.setdefault(name, []).append(node)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            add(node.id, node)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            add(node.name, node)
+        elif isinstance(node, ast.arg):
+            add(node.arg, node)
+        elif isinstance(node, ast.alias):
+            add(node.asname or node.name.split(".")[0], node)
+        elif isinstance(node, ast.Global | ast.Nonlocal):
+            for name in node.names:
+                add(name, node)
+        elif isinstance(node, ast.ExceptHandler | ast.MatchAs | ast.MatchStar):
+            add(node.name, node)
+        elif isinstance(node, ast.MatchMapping):
+            add(node.rest, node)
+        elif isinstance(node, ast.TypeVar | ast.ParamSpec | ast.TypeVarTuple):
+            add(node.name, node)
+    return out
+
+
+def _import_site_ok(site: ast.AST, parent: ast.AST | None, module: str) -> bool:
+    if not isinstance(site, ast.alias) or site.asname is not None:
+        return False
+    if isinstance(parent, ast.Import):
+        return site.name == module
+    return isinstance(parent, ast.ImportFrom) and parent.module == module and parent.level == 0
+
+
+def _pinned(
+    path: str,
+    tree: ast.Module,
+    assigns: dict[str, str],
+    imports: dict[str, str],
+    unbound: frozenset[str] = frozenset(),
+    functions: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Each name in ``assigns`` is bound once, by a module-level assignment reading exactly as
+    given; each in ``imports`` once, by a plain module-level import from the given module; each
+    in ``functions`` once, by a module-level def; ``unbound`` never. No star import and no
+    DYNAMIC_NAMES, which could rebind any of them unseen."""
+    out = []
+    bound = _bindings(tree)
+    top = {id(n) for n in tree.body}
+    parents = {
+        id(a): n for n in tree.body if isinstance(n, ast.Import | ast.ImportFrom) for a in n.names
+    }
+    for name, expected in assigns.items():
+        sites = bound.get(name, [])
+        stmt = next(
+            (
+                n
+                for n in tree.body
+                if isinstance(n, ast.Assign) and any(t in sites for t in n.targets)
+            ),
+            None,
+        )
+        if len(sites) != 1 or stmt is None or ast.unparse(stmt) != expected:
+            out.append(f"{path}: {name} must be bound once, as {expected!r}")
+    for name, module in imports.items():
+        sites = bound.get(name, [])
+        if len(sites) != 1 or not _import_site_ok(sites[0], parents.get(id(sites[0])), module):
+            out.append(f"{path}: {name} must be bound once, by an import from {module}")
+    for name in sorted(functions):
+        sites = bound.get(name, [])
+        if len(sites) != 1 or not isinstance(sites[0], ast.FunctionDef) or id(sites[0]) not in top:
+            out.append(f"{path}: {name} must be bound once, by a module-level def")
+    for name in sorted(unbound):
+        for site in bound.get(name, []):
+            out.append(f"{path}:{getattr(site, 'lineno', 0)}: {name} rebound")
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names):
+            out.append(f"{path}:{node.lineno}: star import")
+        if isinstance(node, ast.Name) and node.id in DYNAMIC_NAMES:
+            out.append(f"{path}:{node.lineno}: {node.id}")
+        if isinstance(node, ast.Attribute) and node.attr == "__dict__":
+            out.append(f"{path}:{node.lineno}: __dict__")
+    return out
+
+
+# How LAB_FETCH must build and check every URL it sends (final review of Spec 016: the old
+# file-wide exemption let ``t.get_json_and_headers(base + f"/{ver}/trades?{q}")`` through).
+LAB_PINS = {
+    "_PUBLIC_URL": ast.unparse(
+        ast.parse(
+            "_PUBLIC_URL = re.compile(re.escape(API) + "
+            r'r"/[A-Z0-9]{2,10}-[A-Z0-9]{2,10}/(candles|trades)\?[A-Za-z0-9=&.%-]*")'
+        )
+    ),
+}
+LAB_IMPORTS = {"re": "re", "API": "llm_trading_bot.market.bitvavo"}
+LAB_FUNCTIONS = frozenset({"checked_url", "public_url"})
+PUBLIC_URL_RETURN = (
+    "return checked_url(API + '/' + _market_segment(market) + '/' + endpoint + '?' + query)"
+)
+# The two places that send, and the only argument shape each may pass.
+LAB_SENDERS = {("PublicApi", "_request"), ("LabTransport", HEADERS_METHOD)}
+
+
+def _body(func: ast.FunctionDef) -> list[ast.stmt]:
+    """The statements of ``func`` without its docstring."""
+    first = func.body[0] if func.body else None
+    doc = isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+    return func.body[1:] if doc else func.body
+
+
+def _params(func: ast.FunctionDef) -> list[str]:
+    a = func.args
+    if a.vararg or a.kwarg or a.kwonlyargs or a.defaults or a.posonlyargs:
+        return []
+    return [x.arg for x in a.args]
+
+
+def _checked_url_ok(func: ast.FunctionDef) -> bool:
+    """``if not _PUBLIC_URL.fullmatch(url): raise ...`` then ``return url``, nothing else."""
+    params, body = _params(func), _body(func)
+    if len(params) != 1 or len(body) != 2:
+        return False
+    guard, done = body
+    return (
+        isinstance(guard, ast.If)
+        and ast.unparse(guard.test) == f"not _PUBLIC_URL.fullmatch({params[0]})"
+        and not guard.orelse
+        and all(isinstance(n, ast.Raise) for n in guard.body)
+        and ast.unparse(done) == f"return {params[0]}"
+    )
+
+
+def _public_url_ok(func: ast.FunctionDef) -> bool:
+    """Ends in PUBLIC_URL_RETURN over its own three parameters, which nothing rebinds."""
+    body = _body(func)
+    rebinds = any(
+        isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load)
+        for stmt in body
+        for n in ast.walk(stmt)
+    )
+    return (
+        _params(func) == ["market", "endpoint", "query"]
+        and bool(body)
+        and ast.unparse(body[-1]) == PUBLIC_URL_RETURN
+        and not rebinds
+    )
+
+
+def rule_lab_fetch(files: Files) -> list[str]:
+    """LAB_FETCH sends only ``API/<market>/<candles|trades>?<query>``: exactly two
+    ``get_json_and_headers`` calls (``PublicApi._request`` and ``LabTransport``), each passing
+    ``checked_url(...)``; ``checked_url`` tests ``_PUBLIC_URL`` and returns its argument;
+    ``public_url`` joins exactly the parts above; ``_PUBLIC_URL``, ``re`` and ``API`` are bound
+    once, as pinned. The run-time half: ``tests/lab/test_archive.py``."""
+    out = []
+    for path, text in files.items():
+        tree = ast.parse(text)
+        if path != LAB_FETCH:
+            # ``archive.checked_url = lambda u: u`` from another module would empty the check.
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Attribute)
+                    and node.attr in LAB_FUNCTIONS | set(LAB_PINS)
+                    and not isinstance(node.ctx, ast.Load)
+                ):
+                    out.append(f"{path}:{node.lineno}: {node.attr} rebound from outside")
+            continue
+        out += _pinned(path, tree, LAB_PINS, LAB_IMPORTS, functions=LAB_FUNCTIONS)
+        defs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        if "checked_url" in defs and not _checked_url_ok(defs["checked_url"]):
+            out.append(f"{path}: checked_url is not the plain _PUBLIC_URL test")
+        if "public_url" in defs and not _public_url_ok(defs["public_url"]):
+            out.append(f"{path}: public_url does not end in {PUBLIC_URL_RETURN!r}")
+        senders = [c for c in _calls(tree) if _name(c.func) == HEADERS_METHOD]
+        if len(senders) != len(LAB_SENDERS):
+            out.append(f"{path}: {len(senders)} {HEADERS_METHOD} calls, {len(LAB_SENDERS)} allowed")
+        for call in senders:
+            arg = call.args[0] if len(call.args) == 1 else None
+            if (
+                _enclosing(tree, call) not in LAB_SENDERS
+                or call.keywords
+                or not isinstance(arg, ast.Call)
+                or not isinstance(arg.func, ast.Name)
+                or arg.func.id != "checked_url"
+            ):
+                out.append(f"{path}:{call.lineno}: {HEADERS_METHOD} without checked_url(...)")
+    return out
+
+
+# Names that start a process (os, pty, asyncio, _winapi, multiprocessing), matched in full:
+# ``execute`` (sqlite) or ``spawned`` are not among them.
+PROCESS_STARTS = re.compile(
+    r"system|popen|startfile|fork|forkpty|spawn[lv]?p?e?|exec[lv]p?e?|posix_spawnp?"
+    r"|create_subprocess_(exec|shell)|CreateProcess\w*|ShellExecute\w*|WinExec"
+    r"|set_executable|Popen"
+)
+# Modules whose purpose is starting a program; ``os`` stays allowed, its starters are names.
+PROCESS_MODULES = (
+    "multiprocessing",
+    "pty",
+    "_posixsubprocess",
+    "_winapi",
+    "ctypes",
+    "_ctypes",
+    "webbrowser",
+    "posix",
+    "nt",
+    "concurrent.futures.process",
+)
+POOL = "ProcessPoolExecutor"
+POOL_KEYWORDS = frozenset({"max_workers"})
+"""``mp_context`` (start method, executable) and ``initializer`` stay out."""
+MODULE_HANDLES = frozenset({"os", "sys", "pty", "asyncio", "posix", "nt"})
+"""``getattr(os, name)`` with a computed ``name`` could reach a starter unseen."""
+
+
+def rule_process_starts(files: Files) -> list[str]:
+    """No src module starts a program, except GIT_MODULE (rule_subprocess_calls) and the
+    worker pool in PROCESS_POOL_MODULE: a starter called or taken as a value, imported by
+    name, named in a string, or reached through ``getattr`` on a module; no PROCESS_MODULES;
+    ``sys.executable`` never rebound (the pool starts whatever it names)."""
+    out = []
+    for path, text in files.items():
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            name = ""
+            if isinstance(node, ast.Attribute):
+                name = node.attr
+                if name in ("executable", "_executable") and not isinstance(node.ctx, ast.Load):
+                    out.append(f"{path}:{node.lineno}: {name} rebound")
+            elif isinstance(node, ast.Name):
+                name = node.id
+            elif isinstance(node, ast.alias):
+                name = node.name.rsplit(".", 1)[-1]
+            if PROCESS_STARTS.fullmatch(name):
+                out.append(f"{path}:{getattr(node, 'lineno', 0)}: process start {name}")
+            if name == POOL and path != PROCESS_POOL_MODULE:
+                out.append(f"{path}:{getattr(node, 'lineno', 0)}: {POOL} outside the backtest")
+            if isinstance(node, ast.Call) and _name(node.func) == POOL:
+                extra = {str(k.arg) for k in node.keywords} - POOL_KEYWORDS
+                if node.args or extra:
+                    out.append(f"{path}:{node.lineno}: {POOL} beyond max_workers")
+            if (
+                isinstance(node, ast.Call)
+                and _name(node.func) == "getattr"
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in MODULE_HANDLES
+                and not (
+                    len(node.args) > 1
+                    and isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)
+                )  # a literal name is checked as a string below (``getattr(os, "O_BINARY", 0)``)
+            ):
+                out.append(f"{path}:{node.lineno}: computed getattr on {node.args[0].id}")
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                modules = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                modules = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+            for module in modules:
+                if any(module == m or module.startswith(m + ".") for m in PROCESS_MODULES):
+                    out.append(f"{path}:{getattr(node, 'lineno', 0)}: import {module}")
+        for line, value in _strings(tree):
+            if PROCESS_STARTS.fullmatch(value.strip()) or value.strip() in PROCESS_MODULES:
+                out.append(f"{path}:{line}: string {value!r} names a process start")
     return out
 
 
@@ -409,6 +742,8 @@ REAL: list[tuple[str, Rule, Callable[[], Files]]] = [
     ("http", rule_http, src_files),
     ("imports", rule_imports, src_files),
     ("subprocess_calls", rule_subprocess_calls, src_files),
+    ("lab_fetch", rule_lab_fetch, src_files),
+    ("process_starts", rule_process_starts, src_files),
     ("secrets", rule_secrets, src_files),
     ("exchange_shape", rule_exchange_shape, src_files),
     ("exchange_shape_tests_tools", rule_exchange_shape, files_in_tests_and_tools),
@@ -428,9 +763,10 @@ def test_the_scans_see_the_files_they_are_about() -> None:
     assert {HTTP_MODULE, BITVAVO_MODULE, "web/auth.py", "broker/contract.py"} <= set(src)
     # The named exceptions point at real files that really use them (a renamed file would
     # otherwise leave a dead exemption behind, ready for whatever takes its name).
-    assert {LAB_FETCH, GIT_MODULE} <= set(src)
-    assert 'f"/{_market_segment(market)}/trades?{query}"' in src[LAB_FETCH]
+    assert {LAB_FETCH, GIT_MODULE, PROCESS_POOL_MODULE} <= set(src)
+    assert "def public_url(" in src[LAB_FETCH] and "def checked_url(" in src[LAB_FETCH]
     assert "import subprocess" in src[GIT_MODULE]
+    assert f"{POOL}(max_workers=" in src[PROCESS_POOL_MODULE]
     assert LAB_FETCH_IN_REPO in python_files()
     assert any(p.startswith("tests/") for p in python_files())
     assert any(p.startswith("tools/") for p in python_files())
@@ -473,7 +809,6 @@ BAD: list[tuple[str, Rule, str, str]] = [
     ("trades f-string", rule_literals, "lab/x.py", 'u = f"{base}/trades"'),
     ("trades no market", rule_literals, "lab/x.py", 'u = f"/trades?{q}"'),
     ("trades with prefix", rule_literals, "lab/x.py", 'u = f"/{m}/trades?{q}/order"'),
-    # The public-trades shape is exempt in LAB_FETCH_IN_REPO only (wave-1 check of Spec 016).
     (
         "trades shape in broker",
         rule_literals,
@@ -489,6 +824,8 @@ BAD: list[tuple[str, Rule, str, str]] = [
     ("trades shape in tests", rule_literals, "tests/lab/x.py", 'u = f"/{m}/trades?{q}"'),
     ("trades shape in tools", rule_literals, "tools/x.py", 'u = f"/{m}/trades?{q}"'),
     ("trades shape, package key", rule_literals, LAB_FETCH, 'u = f"/{m}/trades?{q}"'),
+    # Final review of Spec 016: no longer exempt in the lab downloader either.
+    ("trades shape in lab fetch", rule_literals, LAB_FETCH_IN_REPO, 'u = f"/{m}/trades?{q}"'),
     ("private trades in lab fetch", rule_literals, LAB_FETCH_IN_REPO, 'P = "/trades?market=X"'),
     ("trades no market in lab fetch", rule_literals, LAB_FETCH_IN_REPO, 'u = f"/trades?{q}"'),
     ("order in lab fetch", rule_literals, LAB_FETCH_IN_REPO, 'u = f"/{m}/order?{q}"'),
@@ -516,65 +853,12 @@ BAD: list[tuple[str, Rule, str, str]] = [
     ("from subprocess in git", rule_imports, GIT_MODULE, "from subprocess import run"),
     ("subprocess alias in git", rule_imports, GIT_MODULE, "import subprocess as sp"),
     ("requests in git", rule_imports, GIT_MODULE, "import requests"),
-    ("popen in git", rule_subprocess_calls, GIT_MODULE, 'subprocess.Popen(["git"])'),
-    ("check_output in git", rule_subprocess_calls, GIT_MODULE, "subprocess.check_output(a)"),
-    ("getattr in git", rule_subprocess_calls, GIT_MODULE, 'getattr(subprocess, "Popen")(a)'),
-    ("module alias in git", rule_subprocess_calls, GIT_MODULE, "p = subprocess\np.Popen(a)"),
-    (
-        "shell in git",
-        rule_subprocess_calls,
-        GIT_MODULE,
-        "subprocess.run(a, shell=True, timeout=1)",
-    ),
-    ("shell missing in git", rule_subprocess_calls, GIT_MODULE, "subprocess.run(a, timeout=1)"),
-    ("no timeout in git", rule_subprocess_calls, GIT_MODULE, "subprocess.run(a, shell=False)"),
-    (
-        "kwargs in git",
-        rule_subprocess_calls,
-        GIT_MODULE,
-        "subprocess.run(a, shell=False, timeout=1, **kw)",
-    ),
     (
         "run elsewhere",
         rule_subprocess_calls,
         "lab/register.py",
         "subprocess.run(a, shell=False, timeout=1)",
     ),
-    # Wave-2 check of Spec 016: run stored or wrapped, so its call goes unchecked.
-    (
-        "run aliased in git",
-        rule_subprocess_calls,
-        GIT_MODULE,
-        'import subprocess\nf = subprocess.run\nf(["sh", "-c", "x"], shell=True)',
-    ),
-    (
-        "run in partial in git",
-        rule_subprocess_calls,
-        GIT_MODULE,
-        "functools.partial(subprocess.run, shell=True)(a)",
-    ),
-    ("run walrus in git", rule_subprocess_calls, GIT_MODULE, "(f := subprocess.run)(a)"),
-    ("run in a list in git", rule_subprocess_calls, GIT_MODULE, "[subprocess.run][0](a)"),
-    ("run reassigned in git", rule_subprocess_calls, GIT_MODULE, "subprocess.run = g"),
-    (
-        "executable in git",
-        rule_subprocess_calls,
-        GIT_MODULE,
-        'subprocess.run(["x"], shell=False, timeout=1, executable="cmd.exe")',
-    ),
-    (
-        "preexec_fn in git",
-        rule_subprocess_calls,
-        GIT_MODULE,
-        "subprocess.run(a, shell=False, timeout=1, preexec_fn=f)",
-    ),
-    (
-        "star args in git",
-        rule_subprocess_calls,
-        GIT_MODULE,
-        "subprocess.run(*a, shell=False, timeout=1)",
-    ),
-    ("dunder import", rule_subprocess_calls, GIT_MODULE, '__import__("subprocess").Popen(a)'),
     (
         "importlib subprocess",
         rule_subprocess_calls,
@@ -588,6 +872,63 @@ BAD: list[tuple[str, Rule, str, str]] = [
         "x.py",
         'importlib.import_module("_posixsubprocess")',
     ),
+    # Final review of Spec 016: gitstate's pinned names reached from another module.
+    ("via gitstate", rule_subprocess_calls, "lab/x.py", 'gitstate.subprocess.Popen(["sh"])'),
+    ("pin patched", rule_subprocess_calls, "lab/x.py", 'gitstate.REV_PARSE_HEAD = ("curl",)'),
+    ("pin by name", rule_subprocess_calls, "lab/x.py", 'setattr(g, "STATUS_PORCELAIN", x)'),
+    ("lab check patched", rule_lab_fetch, "lab/x.py", "archive.checked_url = str"),
+    ("lab regex patched", rule_lab_fetch, "lab/x.py", "archive._PUBLIC_URL = re.compile('.*')"),
+    # Final review of Spec 016: every way to start a program, outside the two named ones.
+    ("os.spawnv", rule_process_starts, "paper/x.py", 'os.spawnv(os.P_WAIT, "c.exe", ["c"])'),
+    ("os.spawnlp", rule_process_starts, "paper/x.py", 'os.spawnlp(os.P_WAIT, "c", "c")'),
+    ("os.execv", rule_process_starts, "paper/x.py", 'os.execv("/bin/sh", ["sh"])'),
+    ("os.execlpe", rule_process_starts, "paper/x.py", 'os.execlpe("sh", "sh", env)'),
+    ("os.posix_spawn", rule_process_starts, "paper/x.py", 'os.posix_spawn("/bin/sh", a, {})'),
+    ("os.posix_spawnp", rule_process_starts, "paper/x.py", 'os.posix_spawnp("sh", a, {})'),
+    ("os.startfile", rule_process_starts, "paper/x.py", 'os.startfile("x.exe")'),
+    ("os.system", rule_process_starts, "paper/x.py", 'os.system("curl")'),
+    ("os.popen", rule_process_starts, "paper/x.py", 'os.popen("curl")'),
+    ("os.fork", rule_process_starts, "paper/x.py", "pid = os.fork()"),
+    ("os.forkpty", rule_process_starts, "paper/x.py", "pid, fd = os.forkpty()"),
+    ("pty.spawn", rule_process_starts, "paper/x.py", 'pty.spawn("sh")'),
+    ("import pty", rule_process_starts, "paper/x.py", "import pty"),
+    ("from os import", rule_process_starts, "paper/x.py", "from os import spawnv as s"),
+    ("starter as value", rule_process_starts, "paper/x.py", "f = os.execv"),
+    ("starter by string", rule_process_starts, "paper/x.py", 'getattr(os, "spawnv")(a)'),
+    ("computed getattr", rule_process_starts, "paper/x.py", "getattr(os, name)(a)"),
+    ("asyncio exec", rule_process_starts, "llm/x.py", 'asyncio.create_subprocess_exec("c")'),
+    ("asyncio shell", rule_process_starts, "llm/x.py", 'asyncio.create_subprocess_shell("c")'),
+    ("winapi", rule_process_starts, "x.py", "_winapi.CreateProcess(None, c, None)"),
+    ("import winapi", rule_process_starts, "x.py", "import _winapi"),
+    ("import ctypes", rule_process_starts, "x.py", "import ctypes"),
+    ("import webbrowser", rule_process_starts, "x.py", "import webbrowser"),
+    ("import posix", rule_process_starts, "x.py", "import posix"),
+    ("import multiprocessing", rule_process_starts, "x.py", "import multiprocessing"),
+    ("from multiprocessing", rule_process_starts, "x.py", "from multiprocessing import Process"),
+    ("mp by string", rule_process_starts, "x.py", 'importlib.import_module("multiprocessing")'),
+    ("set_executable", rule_process_starts, "x.py", 'ctx.set_executable("curl")'),
+    ("Popen by name", rule_process_starts, "x.py", "Popen(a)"),
+    ("sys.executable", rule_process_starts, PROCESS_POOL_MODULE, 'sys.executable = "curl"'),
+    (
+        "pool internals",
+        rule_process_starts,
+        PROCESS_POOL_MODULE,
+        "from concurrent.futures.process import _ExecutorManagerThread",
+    ),
+    ("pool elsewhere", rule_process_starts, "paper/x.py", f"from concurrent.futures import {POOL}"),
+    (
+        "pool mp_context",
+        rule_process_starts,
+        PROCESS_POOL_MODULE,
+        f"{POOL}(max_workers=2, mp_context=ctx)",
+    ),
+    (
+        "pool initializer",
+        rule_process_starts,
+        PROCESS_POOL_MODULE,
+        f"{POOL}(max_workers=2, initializer=f)",
+    ),
+    ("pool positional", rule_process_starts, PROCESS_POOL_MODULE, f"{POOL}(2, ctx)"),
     ("http.client import", rule_imports, "x.py", "from http.client import HTTPSConnection"),
     ("websockets", rule_imports, "x.py", "import websockets.sync.client"),
     ("hmac elsewhere", rule_imports, "market/x.py", "import hmac"),
@@ -610,6 +951,281 @@ def test_each_rule_catches_its_pattern(case: str, rule: Rule, path: str, source:
     assert rule({path: source}), case
 
 
+# ------------------------------------------------------------------ GIT_MODULE, check by check
+
+# A minimal GIT_MODULE that passes rule_subprocess_calls; each case below changes one thing,
+# and the test asserts the message of the check it is about (any GIT_MODULE snippet without
+# the pins would be flagged anyway, which would prove nothing about the other checks).
+GIT_HEAD = (
+    "import os\nimport subprocess\n\n"
+    "REV_PARSE_HEAD = ('git', 'rev-parse', 'HEAD')\n"
+    "STATUS_PORCELAIN = ('git', 'status', '--porcelain')\n\n\n"
+    "def git(wanted, t):\n"
+)
+GIT_RUN = "subprocess.run(list(REV_PARSE_HEAD), stdin=subprocess.DEVNULL, shell=False, timeout=t)"
+
+
+def git_module(*body: str, tail: str = "", head: str = GIT_HEAD) -> str:
+    return head + "".join(f"    {line}\n" for line in body) + tail
+
+
+def run_with(args: str) -> str:
+    return f"return subprocess.run({args})"
+
+
+GIT_BAD: list[tuple[str, str, str]] = [
+    ("shell in git", git_module(run_with("list(REV_PARSE_HEAD), shell=True, timeout=t")), "shell"),
+    ("shell missing in git", git_module(run_with("list(REV_PARSE_HEAD), timeout=t")), "shell"),
+    ("no timeout in git", git_module(run_with("list(REV_PARSE_HEAD), shell=False")), "timeout"),
+    (
+        "kwargs in git",
+        git_module(run_with("list(REV_PARSE_HEAD), shell=False, timeout=t, **kw")),
+        "shell=False",
+    ),
+    (
+        "star args in git",
+        git_module(run_with("*a, shell=False, timeout=t")),
+        "shell=False",
+    ),
+    (
+        "executable in git",
+        git_module(run_with("list(REV_PARSE_HEAD), shell=False, timeout=t, executable='c.exe'")),
+        "keyword",
+    ),
+    (
+        "preexec_fn in git",
+        git_module(run_with("list(REV_PARSE_HEAD), shell=False, timeout=t, preexec_fn=f")),
+        "keyword",
+    ),
+    ("popen in git", git_module(GIT_RUN, 'subprocess.Popen(["git"])'), "beyond run"),
+    ("check_output in git", git_module(GIT_RUN, "subprocess.check_output(a)"), "beyond run"),
+    ("getattr in git", git_module(GIT_RUN, 'getattr(subprocess, "Popen")(a)'), "beyond run"),
+    ("module alias in git", git_module(GIT_RUN, "p = subprocess", "p.Popen(a)"), "beyond run"),
+    ("run aliased in git", git_module("f = subprocess.run", "f(['sh'], shell=True)"), "beyond"),
+    ("run in partial in git", git_module("partial(subprocess.run, shell=True)(a)"), "beyond"),
+    ("run walrus in git", git_module("(f := subprocess.run)(a)"), "beyond run"),
+    ("run in a list in git", git_module("[subprocess.run][0](a)"), "beyond run"),
+    ("run reassigned in git", git_module(GIT_RUN, "subprocess.run = g"), "beyond run"),
+    ("dunder import in git", git_module(GIT_RUN, '__import__("subprocess")'), "module"),
+    # Final review of Spec 016: what the one run call starts is pinned, not only its shape.
+    (
+        "curl probe in git",
+        git_module(run_with("['curl', '-s', '-X', 'POST', u, '-d', b], shell=False, timeout=5")),
+        "not list(",
+    ),
+    ("caller's list in git", git_module(run_with("wanted, shell=False, timeout=t")), "not list("),
+    (
+        "copy of caller's list in git",
+        git_module(run_with("list(wanted), shell=False, timeout=t")),
+        "not list(",
+    ),
+    (
+        "variable in git",
+        git_module("fixed = REV_PARSE_HEAD", run_with("list(fixed), shell=False, timeout=t")),
+        "not list(",
+    ),
+    (
+        "other branch in git",
+        git_module(run_with("list(REV_PARSE_HEAD if w else other), shell=False, timeout=t")),
+        "not list(",
+    ),
+    ("second run in git", git_module(GIT_RUN, "return " + GIT_RUN), "exactly one"),
+    (
+        "run outside def git",
+        git_module("return 1", tail=f"\n\ndef other(t):\n    return {GIT_RUN}\n"),
+        "outside the module-level def git",
+    ),
+    (
+        "run nested in git",
+        git_module("def inner():", f"    return {GIT_RUN}", "return inner()"),
+        "outside the module-level def git",
+    ),
+    (
+        "pin changed in git",
+        git_module("return " + GIT_RUN).replace("('git', 'rev-parse', 'HEAD')", "('curl', 'x')"),
+        "REV_PARSE_HEAD must be bound once",
+    ),
+    (
+        "pin rebound locally in git",
+        git_module("REV_PARSE_HEAD = ['curl']", "return " + GIT_RUN),
+        "REV_PARSE_HEAD must be bound once",
+    ),
+    (
+        "pin rebound at module level",
+        git_module("return " + GIT_RUN, tail="STATUS_PORCELAIN = ('sh',)\n"),
+        "STATUS_PORCELAIN must be bound once",
+    ),
+    (
+        "pin as argument in git",
+        git_module("return " + GIT_RUN).replace("def git(wanted, t)", "def git(REV_PARSE_HEAD, t)"),
+        "REV_PARSE_HEAD must be bound once",
+    ),
+    (
+        "pin via global in git",
+        git_module("global REV_PARSE_HEAD", "return " + GIT_RUN),
+        "REV_PARSE_HEAD must be bound once",
+    ),
+    (
+        "pin via for in git",
+        git_module("for REV_PARSE_HEAD in x: pass", "return " + GIT_RUN),
+        "REV_PARSE_HEAD must be bound once",
+    ),
+    (
+        "pin via import in git",
+        git_module("return " + GIT_RUN, tail="from x import y as STATUS_PORCELAIN\n"),
+        "STATUS_PORCELAIN must be bound once",
+    ),
+    (
+        "list shadowed in git",
+        git_module("return " + GIT_RUN, tail="list = lambda a: ['curl']\n"),
+        "list rebound",
+    ),
+    (
+        "list as def in git",
+        git_module("return " + GIT_RUN, tail="def list(a):\n    return ['curl']\n"),
+        "list rebound",
+    ),
+    (
+        "list imported in git",
+        git_module("return " + GIT_RUN, tail="from x import y as list\n"),
+        "list rebound",
+    ),
+    ("os rebound in git", git_module("os = fake", "return " + GIT_RUN), "os must be bound once"),
+    (
+        "os aliased in git",
+        git_module("return " + GIT_RUN).replace("import os\n", "import posixpath as os\n"),
+        "os must be bound once",
+    ),
+    (
+        "env with PATH in git",
+        git_module(
+            run_with(
+                "list(REV_PARSE_HEAD), shell=False, timeout=t, env={**os.environ, 'PATH': 'C:/x'}"
+            )
+        ),
+        "env other",
+    ),
+    ("star import in git", git_module("return " + GIT_RUN, tail="from x import *\n"), "star"),
+    (
+        "globals in git",
+        git_module("globals()['REV_PARSE_HEAD'] = ('curl',)", "return " + GIT_RUN),
+        "globals",
+    ),
+    ("setattr in git", git_module("setattr(m, n, v)", "return " + GIT_RUN), "setattr"),
+    ("__dict__ in git", git_module("m.__dict__[n] = v", "return " + GIT_RUN), "__dict__"),
+]
+
+
+def test_minimal_git_module_is_clean() -> None:
+    assert rule_subprocess_calls({GIT_MODULE: git_module("return " + GIT_RUN)}) == []
+
+
+@pytest.mark.parametrize(("case", "source", "message"), GIT_BAD, ids=[b[0] for b in GIT_BAD])
+def test_git_module_checks_catch_their_case(case: str, source: str, message: str) -> None:
+    found = rule_subprocess_calls({GIT_MODULE: source})
+    assert any(message in line for line in found), (case, found)
+
+
+# ------------------------------------------------------------------ review probes, real files
+
+# The three probes of the final review of Spec 016, appended to the real files, exactly as
+# they slipped through every rule before.
+GIT_PROBE = (
+    "\nfrom llm_trading_bot.market.bitvavo import API\n\n\n"
+    "def ping(path, body):\n"
+    '    return subprocess.run(["curl", "-s", "-X", "POST", API + path, "-d", body],'
+    " shell=False, timeout=5)\n"
+)
+LAB_PROBE = (
+    "\n\ndef private_trades(t: LabTransport, ver, q):\n"
+    '    base = API.rsplit("/", 1)[0]\n'
+    '    return t.get_json_and_headers(base + f"/{ver}/trades?{q}")\n'
+)
+PROCESS_PROBE = (
+    "import os\n"
+    'os.spawnv(os.P_WAIT, "C:/curl.exe", ["curl", "-d", "x"])\n'
+    'os.execv("/bin/sh", ["sh"])\n'
+    'os.startfile("x.exe")\n'
+    'os.posix_spawn("/bin/sh", ["sh"], {})\n'
+)
+
+
+def test_git_probe_on_the_real_module_is_caught() -> None:
+    real = src_files()[GIT_MODULE]
+    assert rule_subprocess_calls({GIT_MODULE: real}) == []
+    found = rule_subprocess_calls({GIT_MODULE: real + GIT_PROBE})
+    assert any("not list(" in line for line in found), found
+    assert any("exactly one" in line for line in found), found
+    assert any("outside the module-level def git" in line for line in found), found
+
+
+def test_lab_probe_on_the_real_module_is_caught() -> None:
+    real = src_files()[LAB_FETCH]
+    probed = real + LAB_PROBE
+    assert rule_lab_fetch({LAB_FETCH: real}) == []
+    found = rule_lab_fetch({LAB_FETCH: probed})
+    assert any("without checked_url" in line for line in found), found
+    assert rule_literals({LAB_FETCH_IN_REPO: probed}), "the /trades? literal is not exempt"
+
+
+def test_process_probe_is_caught_line_by_line() -> None:
+    found = rule_process_starts({"paper/x.py": PROCESS_PROBE})
+    assert sorted(line.split(": ")[-1] for line in found) == [
+        "process start execv",
+        "process start posix_spawn",
+        "process start spawnv",
+        "process start startfile",
+    ]
+
+
+# Changes to the real LAB_FETCH, each of which would let a URL out unchecked.
+LAB_MUTATIONS: list[tuple[str, str, str, str]] = [
+    (
+        "request without check",
+        "self._transport.get_json_and_headers(checked_url(url))",
+        "self._transport.get_json_and_headers(url)",
+        "without checked_url",
+    ),
+    (
+        "transport without check",
+        "self._http.get_json_and_headers(checked_url(url))",
+        "self._http.get_json_and_headers(url)",
+        "without checked_url",
+    ),
+    (
+        "check by match only",
+        "if not _PUBLIC_URL.fullmatch(url):",
+        "if not _PUBLIC_URL.match(url):",
+        "checked_url is not",
+    ),
+    ("check returns other", "    return url\n", "    return url + q\n", "checked_url is not"),
+    ("pattern widened", "(candles|trades)", "(candles|trades|order)", "_PUBLIC_URL must be"),
+    (
+        "url built otherwise",
+        '"/" + endpoint + "?" + query',
+        '"/" + endpoint + "/" + query',
+        "public_url does not end",
+    ),
+    (
+        "check rebound",
+        "\nclass LabTransport:",
+        "\nchecked_url = str\n\n\nclass LabTransport:",
+        "once",
+    ),
+    ("re rebound", "\nclass LabTransport:", "\nre = fake\n\n\nclass LabTransport:", "re must be"),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "old", "new", "message"), LAB_MUTATIONS, ids=[m[0] for m in LAB_MUTATIONS]
+)
+def test_lab_fetch_mutations_are_caught(case: str, old: str, new: str, message: str) -> None:
+    real = src_files()[LAB_FETCH]
+    assert real.count(old) == 1, f"{case}: mutation no longer applies"
+    found = rule_lab_fetch({LAB_FETCH: real.replace(old, new)})
+    assert any(message in line for line in found), (case, found)
+
+
 @pytest.mark.parametrize(
     ("rule", "path", "source"),
     [
@@ -618,27 +1234,34 @@ def test_each_rule_catches_its_pattern(case: str, rule: Rule, path: str, source:
         (rule_http, HTTP_MODULE, "urllib.request.urlopen(request, timeout=5)"),
         (rule_public_paths, BITVAVO_MODULE, 'self._get("/ticker/book")'),
         (rule_public_paths, BITVAVO_MODULE, 'self._get(f"/{m}/candles?{q}")'),
-        (rule_public_paths, LAB_FETCH, "self._transport.get_json_and_headers(API + path)"),
-        (rule_literals, LAB_FETCH_IN_REPO, 'p = f"/{m}/trades?{q}"'),
+        (rule_public_paths, LAB_FETCH, "self._transport.get_json_and_headers(checked_url(u))"),
         (rule_imports, GIT_MODULE, "import subprocess"),
         (
             rule_subprocess_calls,
             GIT_MODULE,
-            "subprocess.run(list(f), stdin=subprocess.DEVNULL, shell=False, timeout=5)",
+            git_module(
+                "return subprocess.run(list(REV_PARSE_HEAD if wanted == REV_PARSE_HEAD else"
+                " STATUS_PORCELAIN), cwd=d, stdin=subprocess.DEVNULL, capture_output=True,"
+                ' text=True, encoding="utf-8", errors="replace", timeout=t, check=True,'
+                " shell=False, env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})"
+            ),
         ),
         (
             rule_subprocess_calls,
             GIT_MODULE,
-            "done = subprocess.run(list(f), cwd=d, stdin=subprocess.DEVNULL, capture_output=True,"
-            ' text=True, encoding="utf-8", errors="replace", timeout=t, check=True, shell=False,'
-            " env=e)",
+            '"""Starts git via subprocess."""\n' + git_module("return " + GIT_RUN),
         ),
-        (rule_subprocess_calls, GIT_MODULE, '"""Starts git via subprocess."""'),
         (
             rule_subprocess_calls,
             "lab/register.py",
             'R = 1\n"""Starts nothing (no ``subprocess``)."""',
         ),
+        (rule_process_starts, PROCESS_POOL_MODULE, f"from concurrent.futures import {POOL}"),
+        (rule_process_starts, PROCESS_POOL_MODULE, f"{POOL}(max_workers=min(w, n))"),
+        (rule_process_starts, "llm/x.py", "from concurrent.futures import ThreadPoolExecutor"),
+        (rule_process_starts, LAB_FETCH, 'con.execute("x"); con.executescript(s)'),
+        (rule_process_starts, "web/x.py", 'f = os.O_RDONLY | getattr(os, "O_BINARY", 0)'),
+        (rule_process_starts, "x.py", "spawned = 1\nexecutor = 2\nsys.executable"),
         (rule_imports, "web/auth.py", "import hmac"),
         (rule_imports, HTTP_MODULE, "import http.client"),
         (rule_scripts, "deploy/web.service", "ExecStart=x web --data-dir /var/lib/x"),

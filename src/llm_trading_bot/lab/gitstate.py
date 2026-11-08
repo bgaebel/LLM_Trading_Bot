@@ -2,14 +2,17 @@
 
 ``register.code_state`` needs ``git rev-parse HEAD`` and ``git status --porcelain`` to prove a
 clean tree; reading ``.git`` files cannot show uncommitted changes. This is the only module in
-``src`` that may start a process (named exception in ``tests/broker/test_no_order_path.py``),
-and it is kept as small as the guard can check by eye:
+``src`` that may start a program (named exception in ``tests/broker/test_no_order_path.py``;
+the backtest's process pool only starts this same Python again), and it is kept as small as
+the guard can check by eye:
 
 - exactly the two argument lists in ``ALLOWED``, compared as a whole; anything else is refused
   before a process starts;
-- the fixed constant from ``ALLOWED`` is what runs, never the caller's list; no shell, no
-  stdin, a timeout, and ``GIT_OPTIONAL_LOCKS=0`` so ``git status`` never writes the index while
-  the developer works in the same checkout.
+- one ``subprocess.run`` call, and its argument names the constants themselves
+  (``list(REV_PARSE_HEAD if ... else STATUS_PORCELAIN)``), never the caller's list or a
+  variable: the guard pins that shape and that both names are bound once, to these literals;
+- no shell, no stdin, a timeout, and ``GIT_OPTIONAL_LOCKS=0`` so ``git status`` never writes
+  the index while the developer works in the same checkout.
 """
 
 import os
@@ -42,9 +45,8 @@ def git(argv: Sequence[str], *, cwd: Path | None = None, timeout: float = TIMEOU
     wanted = tuple(argv)
     if wanted not in ALLOWED:
         raise GitRefused(f"git command not allowed: {list(wanted)!r}")
-    fixed = ALLOWED[ALLOWED.index(wanted)]
     done = subprocess.run(
-        list(fixed),
+        list(REV_PARSE_HEAD if wanted == REV_PARSE_HEAD else STATUS_PORCELAIN),
         cwd=cwd if cwd is not None else _package_dir(),
         stdin=subprocess.DEVNULL,
         capture_output=True,

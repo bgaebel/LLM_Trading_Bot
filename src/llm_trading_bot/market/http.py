@@ -121,4 +121,10 @@ class UrllibTransport:
             result: object = json.loads(body.decode("utf-8"))
         except RecursionError:
             raise TransportError("response JSON nested too deeply") from None
+        except ValueError:
+            # JSONDecodeError and UnicodeDecodeError: a 200 with an HTML maintenance or proxy
+            # page is a broken answer, not data, so the lab retries it like a dropped
+            # connection and then names it in German instead of a traceback. Lab only: the
+            # bot's ``get_json`` keeps raising ValueError, which its callers already map.
+            raise TransportError("Antwort war kein JSON (etwa eine Wartungsseite)") from None
         return result, headers

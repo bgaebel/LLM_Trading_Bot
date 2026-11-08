@@ -1,6 +1,7 @@
 """Spec 016 AK1: candle archive - windows by open time, only settled bars, resume, rate limit."""
 
 import hashlib
+import io
 import json
 import math
 import sqlite3
@@ -511,9 +512,119 @@ def test_public_api_only_builds_public_paths() -> None:
     with pytest.raises(ValueError):
         api.candles("BTC-EUR/../x", 1, D0, D0 + 86_400)
     with pytest.raises(ValueError):
-        api._request("/ticker/book", weight=1)
+        api._request("BTC-EUR", "book", "", weight=1)
     with pytest.raises(ValueError):
         api.trades("BTC-EUR", D0, D0 + 86_400)  # Bitvavo wants less than 24 h
+
+
+@pytest.mark.parametrize(
+    ("market", "endpoint", "query"),
+    [
+        ("BTC-EUR", "order", "a=1"),
+        ("BTC-EUR", "book", ""),
+        ("v2", "trades", "a=1"),  # no market segment: the private /trades
+        ("BTC-EUR/../x", "candles", ""),
+        ("BTC-EUR\n", "candles", ""),
+        ("BTC-EUR", "trades", "/".join(["a=1", "..", "..", "order"])),
+        ("BTC-EUR", "trades", "a=1\n"),
+    ],
+)
+def test_public_url_refuses_everything_but_market_candles_and_trades(
+    market: str, endpoint: str, query: str
+) -> None:
+    with pytest.raises(ValueError):
+        archive_mod.public_url(market, endpoint, query)
+
+
+def test_public_url_builds_the_market_path() -> None:
+    url = archive_mod.public_url("ETH-EUR", "trades", "start=1&end=2")
+    assert url == "/".join([API, "ETH-EUR", "trades?start=1&end=2"])
+    assert archive_mod.checked_url(url) == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        # The final-review probe: API's host plus the private account trades. The private
+        # paths are joined, so the repository's literal scan (ADR-0004) stays clean.
+        "/".join([API.rsplit("/", 1)[0], "v2", "trades?market=BTC-EUR"]),
+        "/".join([API, "trades?market=BTC-EUR"]),
+        "/".join([API, "order"]),
+        "/".join([API, "account"]),
+        API + "/BTC-EUR/book?depth=1",
+        API + "/BTC-EUR/candles?interval=1m\n",
+        "https://example.invalid/v2/BTC-EUR/candles?interval=1m",
+        "http://api.bitvavo.com/v2/BTC-EUR/candles?interval=1m",
+    ],
+)
+def test_lab_transport_refuses_other_urls_before_sending(
+    monkeypatch: pytest.MonkeyPatch, url: str
+) -> None:
+    sent: list[object] = []
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **_k: sent.append(a))
+    with pytest.raises(ValueError, match="not a public market URL"):
+        LabTransport().get_json_and_headers(url)
+    assert sent == []
+
+
+class HtmlResponse:
+    """A 200 whose body is a maintenance page (or not even UTF-8), as a proxy might send."""
+
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.headers = Message()
+
+    def read(self, _limit: int) -> bytes:
+        return self.body
+
+    def __enter__(self) -> "HtmlResponse":
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+@pytest.mark.parametrize("body", [b"<html>maintenance</html>", b"\xff\xfe<html>"])
+def test_lab_fetch_names_a_non_json_answer_in_german(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: bytes
+) -> None:
+    calls: list[str] = []
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> HtmlResponse:
+        calls.append(request.full_url)
+        return HtmlResponse(body)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    api = PublicApi(LabTransport(), clock=Clock(D0 + 5 * 86_400), sleep=lambda _s: None)
+    out = io.StringIO()
+    code = archive_mod.cli_main(
+        "fetch",
+        ["--dir", str(tmp_path), "--start", "2023-11-15", "--end", "2023-11-16"],
+        out,
+        api=api,
+    )
+    assert code == archive_mod.EXIT_ERROR == 1
+    assert len(calls) == archive_mod.ATTEMPTS  # retried like a dropped connection
+    assert "Abruf fehlgeschlagen: Antwort war kein JSON" in out.getvalue()
+    assert "Ein weiterer Aufruf setzt fort." in out.getvalue()
+
+
+def test_lab_spread_names_a_non_json_answer_in_german(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from llm_trading_bot.lab import spread
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: HtmlResponse(b"<html>"))
+    api = PublicApi(LabTransport(), clock=Clock(D0 + 5 * 86_400), sleep=lambda _s: None)
+    out = io.StringIO()
+    code = spread.cli_main(
+        "spread",
+        ["--dir", str(tmp_path), "--start", "2023-11-13", "--end", "2023-11-20"],
+        out,
+        api=api,
+    )
+    assert code == archive_mod.EXIT_ERROR
+    assert "Abruf fehlgeschlagen: Antwort war kein JSON" in out.getvalue()
 
 
 def test_lab_transport_is_the_live_get_with_headers(monkeypatch: pytest.MonkeyPatch) -> None:

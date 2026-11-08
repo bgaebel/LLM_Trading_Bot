@@ -123,6 +123,22 @@ def test_http_error_without_headers_still_gives_http_failure(
     assert exc.value.retry_after is None
 
 
+@pytest.mark.parametrize("body", [b"<html>maintenance</html>", b"\xff\xfe[]", b""])
+def test_non_json_200_becomes_transport_error_on_the_lab_path(
+    monkeypatch: pytest.MonkeyPatch, body: bytes
+) -> None:
+    class WithHeaders(FakeResponse):
+        headers = Message()
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: WithHeaders(body))
+    with pytest.raises(TransportError, match="kein JSON") as exc:
+        UrllibTransport().get_json_and_headers("https://example.invalid")
+    assert exc.value.__cause__ is None and exc.value.__suppress_context__
+    # The bot's own path stays as it was: callers there map ValueError themselves.
+    with pytest.raises(ValueError):
+        UrllibTransport().get_json("https://example.invalid")
+
+
 def test_deeply_nested_json_becomes_transport_error(monkeypatch: pytest.MonkeyPatch) -> None:
     nested = b"[" * 200_000 + b"]" * 200_000
     monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: FakeResponse(nested))
