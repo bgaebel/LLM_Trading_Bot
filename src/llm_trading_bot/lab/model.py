@@ -204,3 +204,39 @@ class QuarterResult:
             seconds=data["seconds"],
             dataset_sha256=data["dataset_sha256"],
         )
+
+
+FIDELITY_MIN = 300
+"""Comparisons per market below which fidelity counts as not established (AK5)."""
+
+
+@dataclass
+class FidelitySummary:
+    """What the fidelity check against live found (AK5); the report shows it as it is."""
+
+    compared: dict[str, int] = field(default_factory=dict)
+    """Market -> live decisions rebuilt and compared."""
+    equal_action: dict[str, int] = field(default_factory=dict)
+    """Market -> comparisons with equal action and target."""
+    indicators_ok: dict[str, int] = field(default_factory=dict)
+    """Market -> comparisons whose indicators match within one rounding step."""
+    deviations: list[dict[str, Any]] = field(default_factory=list)
+    """Each with market, utc, agent, field, live, rebuilt and cause."""
+    with_observations: bool = False
+    note: str = ""
+
+    @property
+    def established(self) -> dict[str, bool]:
+        """Never "100 %" below FIDELITY_MIN; an unexplained deviation also fails."""
+        unexplained = {d["market"] for d in self.deviations if not d.get("cause")}
+        return {
+            m: n >= FIDELITY_MIN and self.equal_action.get(m, 0) == n and m not in unexplained
+            for m, n in self.compared.items()
+        }
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def from_json(cls, text: str) -> "FidelitySummary":
+        return cls(**json.loads(text))

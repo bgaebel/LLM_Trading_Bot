@@ -1,6 +1,7 @@
 """Command line entry point (`uv run trading-bot ...`)."""
 
 import argparse
+import importlib
 import io
 import os
 import sqlite3
@@ -368,6 +369,18 @@ def run_restore(backup: Path, db: Path, *, out: TextIO, profile: Profile = BOT) 
     return EXIT_OK
 
 
+LAB_COMMANDS = {
+    "fetch": "archive",
+    "check": "archive",
+    "spread": "spread",
+    "backtest": "backtest",
+    "fidelity": "fidelity",
+    "report": "report",
+}
+"""``trading-bot lab <command>`` -> module in ``llm_trading_bot.lab`` with
+``cli_main(command: str, argv: Sequence[str], out: TextIO) -> int`` (Spec 016)."""
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="trading-bot")
     commands = parser.add_subparsers(dest="command")
@@ -433,11 +446,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="Impressum file shown at /impressum (Spec 014); may be missing (then 503)",
     )
+    lab = commands.add_parser(
+        "lab",
+        help="strategy lab on the PC (Spec 016): fetch, check, spread, backtest, fidelity, report",
+    )
+    lab.add_argument("lab_command", choices=sorted(LAB_COMMANDS))
+    lab.add_argument("lab_args", nargs=argparse.REMAINDER, help="options of the lab command")
     args = parser.parse_args(argv)
     # LEARNING(#windows): Umlaute in der Konsolenausgabe kaputt unter Windows
     # The Windows console defaults to cp1252; strategy reasons contain German umlauts.
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    if args.command == "lab":
+        # Spec 016 AK11: loaded only here, so --help and the service never import the lab.
+        module = importlib.import_module(f"llm_trading_bot.lab.{LAB_COMMANDS[args.lab_command]}")
+        code: int = module.cli_main(args.lab_command, args.lab_args, sys.stdout)
+        return code
 
     mode = parse_mode(os.environ.get("TRADING_MODE"))
     if args.command == "market":
