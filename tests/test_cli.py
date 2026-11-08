@@ -101,7 +101,8 @@ def test_signals_report_exit_2_when_no_market_is_usable() -> None:
 
 def run_cycle(db: Path, client: ScenarioClient, **env: str) -> tuple[int, str]:
     out = io.StringIO()
-    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": "", **env}
+    # Written before Spec 021: with the euro buy & hold depot, which is off by default since.
+    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": "", "BOT_BUYHOLD": "1", **env}
     code = run_paper_cycle(db, client, env=env, out=out, clock=lambda: GOLDEN_NOW)
     return code, out.getvalue()
 
@@ -123,6 +124,22 @@ def test_paper_cycle_twice_in_one_bar_reports_already_decided(tmp_path: Path) ->
     assert code == EXIT_OK
     assert "buy & hold: already invested" in text
     assert text.count("already decided") == 2
+
+
+def test_paper_cycle_says_buy_and_hold_is_off(tmp_path: Path) -> None:
+    """Spec 021 AK2: without BOT_BUYHOLD the euro buy & hold depot neither buys nor is valued;
+    any value other than 1 or 0 is a configuration error, nothing is opened."""
+    out = io.StringIO()
+    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": ""}
+    db = tmp_path / "bot.db"
+    code = run_paper_cycle(db, ScenarioClient(), env=env, out=out, clock=lambda: GOLDEN_NOW)
+    text = out.getvalue()
+    assert code == EXIT_OK and "buy & hold: off (BOT_BUYHOLD)" in text
+    assert "equity trend" in text and "buyhold" not in text.replace("BOT_BUYHOLD", "")
+    code, text = run_cycle(tmp_path / "other.db", ScenarioClient(), BOT_BUYHOLD="yes")
+    assert code == EXIT_INVALID
+    assert "paper-cycle configuration error: BOT_BUYHOLD must be 1 or 0: 'yes'" in text
+    assert not (tmp_path / "other.db").exists()
 
 
 def test_paper_cycle_uses_configured_agent_and_costs(tmp_path: Path) -> None:

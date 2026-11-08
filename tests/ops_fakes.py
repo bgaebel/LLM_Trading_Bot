@@ -27,7 +27,7 @@ def bot_db(path: Path, cycles: int = 2) -> Path:
             paper_cycle(
                 con,
                 ScenarioClient(),
-                BotConfig(("trend",), None),
+                BotConfig(("trend",), None, buyhold=True),
                 costs=Costs(),
                 clock=at(NOW + 60 * n),
             )

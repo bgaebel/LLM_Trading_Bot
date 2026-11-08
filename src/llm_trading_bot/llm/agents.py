@@ -29,6 +29,10 @@ USDC_FIELD = "BOT_USDC_AGENTS"
 before Spec 020 (rollback) still reads ``BOT_AGENTS`` and simply ignores this field. Missing
 means all of them (AK4: on by default, also on a server with an explicit ``BOT_AGENTS``);
 empty means none."""
+BUYHOLD_FIELD = "BOT_BUYHOLD"
+"""Spec 021 (ADR-0031): the euro buy & hold depot runs only with exactly ``1`` here; missing
+means off. Set in the service's environment (drop-in), not in ``secrets.env``, which keeps only
+the fields the web UI knows. A release from before Spec 021 always runs it (rollback)."""
 MAX_OUTPUT_TOKENS = 8000
 
 
@@ -61,6 +65,9 @@ class BotConfig:
     llm: LlmSettings | None
     usdc: tuple[str, ...] = ()
     """Selected USDC depots (Spec 020); empty: the bot runs exactly as before."""
+    buyhold: bool = False
+    """Spec 021 (ADR-0031): run the euro buy & hold depot. Off unless asked for, so nothing
+    that builds a config by hand starts it by accident; the strategy lab switches it on."""
 
     @property
     def agents(self) -> tuple[str, ...]:
@@ -70,8 +77,11 @@ class BotConfig:
 
     @property
     def benchmarks(self) -> tuple[str, ...]:
-        """Buy & hold always; its USDC twin whenever a USDC depot runs (Spec 020)."""
-        return (BUYHOLD, BUYHOLD_USDC) if self.usdc else (BUYHOLD,)
+        """Buy & hold only when switched on (Spec 021); its USDC twin whenever a USDC depot runs
+        (Spec 020). Opening, valuing and creating depots all go through ``depots``, so a depot
+        left out here is not touched by a round at all."""
+        euro = (BUYHOLD,) if self.buyhold else ()
+        return euro + ((BUYHOLD_USDC,) if self.usdc else ())
 
     @property
     def depots(self) -> tuple[str, ...]:
@@ -112,8 +122,17 @@ def _names(env: Mapping[str, str], field: str, default: str, known: tuple[str, .
     return names
 
 
+def _switch(env: Mapping[str, str], field: str) -> bool:
+    """Exactly ``1`` or ``0``; missing is off. Anything else is refused rather than guessed."""
+    raw = env.get(field, "0")
+    if raw not in ("0", "1"):
+        raise ValueError(f"{field} must be 1 or 0: {raw[:20]!r}")
+    return raw == "1"
+
+
 def load_config(env: Mapping[str, str]) -> BotConfig:
     """Raises ValueError for anything unclear; nothing is opened or written before this passes."""
+    buyhold = _switch(env, BUYHOLD_FIELD)
     names = _names(env, "BOT_AGENTS", DEFAULT_AGENTS, (*CLASSIC_AGENTS, *LLM_DEFAULTS))
     if not names:
         # Also with USDC depots chosen: a release from before Spec 020 needs one here.
@@ -122,7 +141,7 @@ def load_config(env: Mapping[str, str]) -> BotConfig:
     usdc = tuple(_names(env, USDC_FIELD, ",".join(USDC_AGENTS), USDC_AGENTS))
     llm_names = [n for n in LLM_DEFAULTS if n in names]
     if not llm_names:
-        return BotConfig(classic, None, usdc)
+        return BotConfig(classic, None, usdc, buyhold)
     api_key = env.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise ValueError(f"OPENAI_API_KEY is required for the GPT depots {llm_names}")
@@ -137,4 +156,4 @@ def load_config(env: Mapping[str, str]) -> BotConfig:
         Cadence.from_env(env),
         api_key,
     )
-    return BotConfig(classic, settings, usdc)
+    return BotConfig(classic, settings, usdc, buyhold)

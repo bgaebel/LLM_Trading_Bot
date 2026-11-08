@@ -27,7 +27,8 @@ SHARES: dict[str, Decimal] = {}
 
 def write(path: Path, usdc: str, client: ScenarioClient, at: float = NOW) -> None:
     """One round of trend and the USDC depots ``usdc`` (BOT_USDC_AGENTS) at ``at``."""
-    config = load_config({"BOT_AGENTS": "trend", USDC_FIELD: usdc})
+    # Written before Spec 021: with the euro buy & hold depot (off by default since).
+    config = load_config({"BOT_AGENTS": "trend", USDC_FIELD: usdc, "BOT_BUYHOLD": "1"})
     con = open_db(path, agents=config.depots)
     try:
         paper_cycle(con, client, config, costs=Costs(), clock=lambda: at)

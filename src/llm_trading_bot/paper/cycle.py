@@ -2,8 +2,9 @@
 # Origin: LLM-Trading-Arena@7563724 apps/arena/strategies.py (adapted) - STRATEGY_TIMEFRAME
 """One live paper cycle: quotes, buy & hold, classic and GPT depots, equity points.
 
-ADR-0004: virtual orders only. ADR-0012: GPT depots (luna trades, sol cross-checks) plus buy & hold;
-classic depots are optional. All depots of a cycle see the same snapshot.
+ADR-0004: virtual orders only. ADR-0012: GPT depots (luna trades, sol cross-checks); classic depots
+are optional. ADR-0031: the euro buy & hold depot runs only when switched on (``BOT_BUYHOLD``).
+All depots of a cycle see the same snapshot.
 
 Spec 020 (ADR-0030): the optional USDC depots decide like their classic twins on the same
 snapshots; only their BTC costs, quotes and execution follow the USDC route (``paper.usdc``).
@@ -231,7 +232,7 @@ def paper_cycle(
     obs = observations
     note(obs, lambda b: b.begin(at))
     controls = controls or Controls()
-    report = CycleReport(at, config.agents, paused=controls.paused)
+    report = CycleReport(at, config.agents, paused=controls.paused, buyhold=config.buyhold)
     feed = _Feed(con, client, clock, obs, markets=QUOTED if config.usdc else SYMBOLS)
     # Also depots switched off meanwhile: the web offers the release for every stopped depot,
     # and a refusal must be reported, not skipped (Spec 011 AK5).
@@ -250,7 +251,8 @@ def paper_cycle(
         report.quotes_error = report.quotes_error or "stored quotes missing or stale"
         note(obs, lambda b: _observe_no_quotes(b, report.quotes_error, feed))
         return report
-    if set(qs) == set(SYMBOLS) and not controls.paused:
+    # Spec 021: switched off, buy & hold must not buy into the dormant depot of an old database.
+    if config.buyhold and set(qs) == set(SYMBOLS) and not controls.paused:
         # Arena: the benchmark buys only on fresh quotes of both markets.
         report.buyhold_bought = initialize_buyhold(con, qs, costs, when=now)
     if config.usdc and not controls.paused:

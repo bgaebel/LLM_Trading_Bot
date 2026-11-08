@@ -71,6 +71,8 @@ class CycleReport:
     """Trading was paused in this cycle (Spec 011 AK6): no trades except forced sales."""
     released: list[str] = field(default_factory=list)
     """Depots released from their drawdown stop at the start of this cycle."""
+    buyhold: bool = True
+    """The euro buy & hold depot ran in this cycle (Spec 021: off unless ``BOT_BUYHOLD=1``)."""
     refused: list[tuple[str, str]] = field(default_factory=list)
     """Release requests for stopped depots that were not acted on, with the reason."""
 

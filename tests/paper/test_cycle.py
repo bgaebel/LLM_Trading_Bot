@@ -22,8 +22,14 @@ from llm_trading_bot.paper.execution import BUYHOLD, Costs
 from llm_trading_bot.paper.risk import Controls
 from llm_trading_bot.strategy.signals import Signal
 
-TREND = BotConfig(("trend",), None)
-GPT_LUNA = {"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna", "BOT_USDC_AGENTS": ""}
+# Written before Spec 021: these rounds include the euro buy & hold depot (off by default since).
+TREND = BotConfig(("trend",), None, buyhold=True)
+GPT_LUNA = {
+    "OPENAI_API_KEY": KEY,
+    "BOT_AGENTS": "gpt-luna",
+    "BOT_USDC_AGENTS": "",
+    "BOT_BUYHOLD": "1",
+}
 
 
 @pytest.fixture
@@ -190,7 +196,7 @@ def test_stop_request_skips_gpt_but_still_values_the_depots(tmp_path: Path) -> N
     con = open_db(tmp_path / "bot.db", agents=("gpt-luna", "gpt-sol", BUYHOLD))
     try:
         model = FakeModel()
-        config = load_config({"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": ""})
+        config = load_config({"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": "", "BOT_BUYHOLD": "1"})
         report = paper_cycle(
             con,
             ScenarioClient(),
