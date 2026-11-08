@@ -1232,7 +1232,12 @@ def _fidelity(doc: Doc, f: FidelitySummary | None) -> None:
             verdict = "belegt"
         elif n < FIDELITY_MIN:
             verdict = f"Treue nicht belegt (unter {FIDELITY_MIN} Vergleiche)"
-        elif f.established[m]:
+        elif (
+            f.equal_action.get(m, 0) == n
+            and f.indicators_ok.get(m, 0) < n
+            and not any(d.get("market") == m and not d.get("cause") for d in f.deviations)
+        ):
+            # Only the indicator condition of AK5 fails: say so instead of a vague "Abweichungen".
             verdict = "Treue nicht belegt (Indikatoren weichen ab)"
         else:
             verdict = "Treue nicht belegt (Abweichungen)"

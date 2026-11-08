@@ -375,7 +375,8 @@ def test_newest_result_per_quarter_and_variant(tmp_path: Path) -> None:
         reg.record(recordable("2022Q1", SMALL, drift=0.001))
         reg.record(recordable("2022Q1", SMALL, drift=0.002))
         reg.record(recordable("2022Q2", SMALL))
-        reg.record(recordable("2025Q4", SMALL, status="sealed"))
+        # A sealed quarter is recorded without any numbers (register rule, ADR-0026).
+        reg.record(QuarterResult(Quarter.parse("2025Q4"), Variant(), "sealed"))
         results, used = newest_results(reg)
     assert list(results) == ["base"]
     assert [r.quarter.label for r in results["base"]] == ["2022Q1", "2022Q2"]
