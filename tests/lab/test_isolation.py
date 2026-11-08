@@ -28,4 +28,3 @@ def test_lab_command_names_the_lab_modules() -> None:
 
     assert set(LAB_COMMANDS) == {"fetch", "check", "spread", "backtest", "fidelity", "report"}
     assert set(LAB_COMMANDS.values()) <= {"archive", "spread", "backtest", "fidelity", "report"}
-

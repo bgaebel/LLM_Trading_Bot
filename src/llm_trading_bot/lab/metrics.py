@@ -10,10 +10,18 @@ Conventions the report relies on:
 - Returns are fractions (0.01 = 1 %). ``START_CAPITAL`` is each quarter's fresh capital (AK4).
 - **Daily returns** of a depot: day 1 against the start capital, every later day against the
   previous day's value (``DayPoint`` = value at the day's last round, at mid).
-- **Benchmark days:** ``QuarterResult.daily_mid`` gives one mid per day; a day's market return is
-  ``mid_day / mid_previous_entry - 1``. The first entry is only the base. To compare day 1 too,
-  the backtest puts the mid at the quarter's first round in front, labelled with the previous
-  day (e.g. ``2021-03-31``). Strategy and benchmark are compared on the days both have.
+- **Benchmark days (``daily_mid`` convention):** ``QuarterResult.daily_mid`` gives one mid per
+  day in increasing day order; a day's market return is ``mid_day / mid_previous_entry - 1`` and
+  counts only if the previous entry is labelled with exactly the previous calendar day. The first
+  entry is only the base and never a benchmark day itself: the backtest puts the mid at the
+  quarter's first round in front, labelled with the previous day (e.g. ``2021-03-31`` for
+  2021Q2), so day 1 has a return too. The benchmark runs on the depot's own days.
+- **Fail loud on gaps:** a depot day without a one-day return (its own series skips a day, or an
+  exposed market's ``daily_mid`` lacks the day or its predecessor) is left out of benchmark and
+  bootstrap and recorded as a ``DataIssue``; the report must list every one. A two-day move is
+  never booked under one day's label.
+- **Max drawdown** is measured on end-of-day values (``DRAWDOWN_BASIS``): falls within a day are
+  not seen, so a depot can hit the intraday drawdown stop (ADR-0021) with a smaller figure.
 - **Gross** = net plus the fees and slippage the trades paid (slippage rebuilt from the fill:
   ``notional * s / (1 + s)`` for a buy, ``notional * s / (1 - s)`` for a sell). The spread stays
   inside gross. Decisions and quantities are held fixed (first order, no new run).
@@ -29,7 +37,8 @@ import random
 from bisect import insort
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, date, datetime, timedelta
 from itertools import pairwise
 from typing import Any
 
@@ -55,7 +64,12 @@ UNKNOWN = "n/a"
 NO_VERDICT = "kein Urteil"
 INDICATIVE = "indikativ"
 RELIABLE = "belastbar"
+DRAWDOWN_BASIS = "Tagesende"
+"""What max_drawdown is measured on; the report states it next to the figure."""
+DEPOT_SERIES = "Depot"
+"""``DataIssue.market`` when the gap is in the depot's own value series."""
 _SELLS = ("SELL", "RISK_SELL")
+_ONE_DAY = timedelta(days=1)
 
 
 # --- small statistics helpers -------------------------------------------------------------
@@ -130,7 +144,8 @@ class Fifo:
     """None if a sell found no opening lot: no invented profit (Arena)."""
     sell_events: int
     opening_inventory_unknown: bool
-    open_lots: dict[str, OpenLots]
+    open_lots: dict[tuple[str, str], OpenLots]
+    """(agent, market) -> what is still held; only pairs with an open quantity appear."""
 
 
 def fifo(trades: Iterable[Trade]) -> Fifo:
@@ -185,10 +200,13 @@ def fifo(trades: Iterable[Trade]) -> Fifo:
                 queue.popleft()
         if qty > QTY_EPS:
             missing = True
-    open_lots = {
-        market: OpenLots(sum(lot[0] for lot in q), sum(lot[0] * lot[1] for lot in q))
-        for (_, market), q in sorted(lots.items())
-    }
+    # Keyed by agent too: with a market key alone one agent's (possibly empty) queue would
+    # overwrite another agent's open position in the same market.
+    open_lots: dict[tuple[str, str], OpenLots] = {}
+    for key, queue in sorted(lots.items()):
+        held = sum(lot[0] for lot in queue)
+        if held > QTY_EPS:
+            open_lots[key] = OpenLots(held, sum(lot[0] * lot[1] for lot in queue))
     return Fifo(trips, None if missing else realized, sells, missing, open_lots)
 
 
@@ -213,7 +231,11 @@ def daily_returns(depot: DepotResult, capital: float = START_CAPITAL) -> list[tu
 
 
 def max_drawdown(values: Iterable[float]) -> float:
-    """Largest fall from a running peak as a fraction; a full loss is 1.0 (Arena)."""
+    """Largest fall from a running peak as a fraction; a full loss is 1.0 (Arena).
+
+    Only as fine as the values given: ``depot_metrics`` passes end-of-day values
+    (``DRAWDOWN_BASIS``), so an intraday low that triggered the drawdown stop can be missed.
+    """
     peak = 0.0
     worst = 0.0
     for v in values:
@@ -235,6 +257,24 @@ def mean_weights(depot: DepotResult) -> dict[str, float]:
 
 
 @dataclass(frozen=True)
+class DataIssue:
+    """Depot days without a one-day return: left out of benchmark and bootstrap.
+
+    Fail loud instead of silently shrinking the sample: the report lists every issue, and a
+    depot with issues has ``DepotMetrics.benchmark_complete == False``.
+    """
+
+    quarter: str
+    agent: str
+    market: str
+    """The exposed market whose ``daily_mid`` lacks the days, or ``DEPOT_SERIES``."""
+    missing_days: list[str]
+    depot_days: int
+    text: str
+    """German line for the report."""
+
+
+@dataclass(frozen=True)
 class Benchmark:
     """Buy & hold with the strategy's mean quote, rebalanced daily (AK7); cash returns 0."""
 
@@ -244,20 +284,66 @@ class Benchmark:
     cost_per_side: dict[str, float]
     """fee + slippage + half the assumed spread, per market."""
     days: list[str]
+    """The depot's days that have a one-day return in the depot and every exposed market."""
     returns: list[float]
     returns_cost: list[float]
     total: float
     total_cost: float
     cash: float = 0.0
+    issues: list[DataIssue] = field(default_factory=list)
+
+
+def _one_day_steps(labels: Sequence[str]) -> set[str]:
+    """Labels whose predecessor in ``labels`` is exactly the previous calendar day.
+
+    A longer step is a gap: the move spans several days and must not count as one day's return.
+    Days that do not increase are broken input, not a gap, and raise.
+    """
+    out: set[str] = set()
+    for before, after in pairwise(labels):
+        a, b = date.fromisoformat(before), date.fromisoformat(after)
+        if b <= a:
+            raise ValueError(f"days must increase: {before!r} then {after!r}")
+        if b - a == _ONE_DAY:
+            out.add(after)
+    return out
 
 
 def _market_returns(rows: Sequence[tuple[str, float]]) -> dict[str, float]:
-    out: dict[str, float] = {}
-    for (_, before), (day, after) in pairwise(rows):
-        if before <= 0:
-            raise ValueError(f"invalid mid before {day}: {before!r}")
-        out[day] = after / before - 1
-    return out
+    """One-day returns of a ``daily_mid`` list; the first entry is only the base."""
+    for day, mid in rows:
+        if not math.isfinite(mid) or mid <= 0:
+            raise ValueError(f"invalid mid on {day}: {mid!r}")
+    valid = _one_day_steps([day for day, _ in rows])
+    return {day: after / before - 1 for (_, before), (day, after) in pairwise(rows) if day in valid}
+
+
+def _depot_steps(result: QuarterResult, depot: DepotResult) -> set[str]:
+    """Depot days with a one-day return. The first point is measured against the start capital
+    (the end of the day before the quarter), so it counts only if it is the quarter's first day;
+    otherwise it is a gap, not an error, and shows up as a ``DataIssue``."""
+    labels = [p.day for p in depot.days]
+    steps = _one_day_steps(labels)
+    start = datetime.fromtimestamp(result.quarter.start, UTC).date().isoformat()
+    if labels and labels[0] == start:
+        steps.add(start)
+    return steps
+
+
+def _issue(result: QuarterResult, agent: str, market: str, missing: list[str]) -> DataIssue:
+    n = len(result.depots[agent].days)
+    span = missing[0] if len(missing) == 1 else f"{missing[0]} bis {missing[-1]}"
+    if market == DEPOT_SERIES:
+        what = "Depotwert ohne Vortag"
+    elif not result.daily_mid.get(market):
+        what = f"keine Tageskurse für {market}"
+    else:
+        what = f"Tageskurs {market} ohne Vortag"
+    text = (
+        f"{result.quarter.label} {agent}: {what} an {len(missing)} von {n} Tagen ({span}); "
+        "Benchmark und Unsicherheit ohne diese Tage"
+    )
+    return DataIssue(result.quarter.label, agent, market, missing, n, text)
 
 
 def benchmark(result: QuarterResult, agent: str) -> Benchmark:
@@ -267,16 +353,30 @@ def benchmark(result: QuarterResult, agent: str) -> Benchmark:
     ``ē_m (1 + r_m) / (1 + R)``; restoring it trades ``ē_m |r_m - R|`` of the start-of-day value
     per market. The first day also pays the entry ``Σ_m c_m ē_m``; the exit is not charged (the
     mid valuation of the strategy does not pay one either).
+
+    ``daily_mid[m]`` convention: ``[(day_before_quarter, mid at the first round), (day_1, mid
+    at day 1's last round), ...]``. The first entry is only the base for day 1 and never a
+    benchmark day. The benchmark runs on the depot's own days; a day without a one-day return
+    in the depot or in an exposed market is left out and recorded in ``issues``. A depot
+    without exposure is cash and needs no ``daily_mid``.
     """
     v = result.variant
-    weights = mean_weights(result.depots[agent])
+    depot = result.depots[agent]
+    weights = mean_weights(depot)
     exposure = {m: w for m, w in weights.items() if w > 0}
     cost = {m: v.fee_rate + v.slippage + result.spread.get(m, 0.0) / 2 for m in exposure}
     per_market = {m: _market_returns(result.daily_mid.get(m, [])) for m in exposure}
-    if exposure:
-        days = sorted(set.intersection(*(set(r) for r in per_market.values())))
-    else:
-        days = sorted({d for rows in result.daily_mid.values() for d, _ in rows[1:]})
+    own_days = [p.day for p in depot.days]
+    own_steps = _depot_steps(result, depot)
+    issues: list[DataIssue] = []
+    gaps = [d for d in own_days if d not in own_steps]
+    if gaps:
+        issues.append(_issue(result, agent, DEPOT_SERIES, gaps))
+    for m in sorted(exposure):
+        missing = [d for d in own_days if d not in per_market[m]]
+        if missing:
+            issues.append(_issue(result, agent, m, missing))
+    days = [d for d in own_days if d in own_steps and all(d in r for r in per_market.values())]
     plain: list[float] = []
     costed: list[float] = []
     for i, day in enumerate(days):
@@ -297,6 +397,7 @@ def benchmark(result: QuarterResult, agent: str) -> Benchmark:
         costed,
         math.prod(1 + x for x in plain) - 1,
         math.prod(1 + x for x in costed) - 1,
+        issues=issues,
     )
 
 
@@ -323,6 +424,8 @@ class DepotMetrics:
     round_trips: int
     realized_pnl: float | None
     max_drawdown: float
+    drawdown_basis: str
+    """``DRAWDOWN_BASIS``: the report says the drawdown is measured at the end of each day."""
     mean_quote: float
     """Mean of the summed market weights over the days (mean investment quote)."""
     mean_weights: dict[str, float]
@@ -330,6 +433,11 @@ class DepotMetrics:
     benchmark_cost: float
     excess: float
     """net_return_mid - benchmark_cost."""
+    benchmark_days: int
+    benchmark_complete: bool
+    """False if the benchmark misses depot days; then benchmark and excess cover fewer days than
+    net_return_mid and the report must say so (see data_issues)."""
+    data_issues: list[DataIssue]
     halted_at: int | None
     days: int
 
@@ -368,11 +476,15 @@ def depot_metrics(
         round_trips=len(acc.round_trips),
         realized_pnl=acc.realized_pnl,
         max_drawdown=max_drawdown([capital, *(p.value for p in depot.days)]),
+        drawdown_basis=DRAWDOWN_BASIS,
         mean_quote=quote,
         mean_weights=weights,
         benchmark=bench.total,
         benchmark_cost=bench.total_cost,
         excess=net_mid - bench.total_cost,
+        benchmark_days=len(bench.days),
+        benchmark_complete=not bench.issues,
+        data_issues=bench.issues,
         halted_at=depot.halted_at,
         days=days,
     )
@@ -475,6 +587,8 @@ class Uncertainty:
     """Annualised mean daily return over the benchmark with costs."""
     excess_no_cost: Band
     """Same against the benchmark without costs."""
+    excluded_days: int
+    """Graded depot days left out for lack of a one-day return (see ``DataIssue``)."""
 
 
 class TooFewDays(ValueError):
@@ -535,31 +649,54 @@ def uncertainty_all(
     mean_block: int = BOOTSTRAP_BLOCK,
     seed: int = BOOTSTRAP_SEED,
 ) -> dict[str, Uncertainty]:
-    """All depots resampled with the same day indices, so their bands are comparable.
+    """Each depot over its own valid graded days (the days ``pooled_days`` returns for it).
 
-    Days are the graded days every given depot has (in a backtest they all share them).
-    Raises TooFewDays below two days.
+    Depots with the same valid days are resampled together with the same day indices, so their
+    bands are directly comparable; in a clean backtest that is every depot. Each such group
+    starts its own ``Random(seed)``: a depot's band never depends on which other depots are
+    passed, and one depot with missing days (a ``DataIssue``) can neither remove nor shift the
+    bands of the others. Depots with fewer than two valid days are left out of the result;
+    ``uncertainty()`` raises TooFewDays for them.
     """
-    per_agent = {a: {d[0]: d[1:] for d in pooled_days(results, a, capital)} for a in agents}
-    days = sorted(set.intersection(*(set(v) for v in per_agent.values()))) if agents else []
-    n = len(days)
-    if n < 2:
-        raise TooFewDays(f"bootstrap needs at least two graded days, got {n}")
-    cols: dict[str, tuple[list[float], list[float], list[float], list[float]]] = {}
-    for a in agents:
-        own = [per_agent[a][d][0] for d in days]
-        cols[a] = (
+    groups: dict[tuple[str, ...], list[str]] = {}
+    rows: dict[str, dict[str, tuple[float, float, float]]] = {}
+    for a in dict.fromkeys(agents):
+        rows[a] = {d[0]: d[1:] for d in pooled_days(results, a, capital)}
+        groups.setdefault(tuple(sorted(rows[a])), []).append(a)
+    result: dict[str, Uncertainty] = {}
+    for days, members in sorted(groups.items()):
+        if len(days) < 2:
+            continue
+        cols = {a: [rows[a][d] for d in days] for a in members}
+        for a, u in _bootstrap(cols, draws, mean_block, seed).items():
+            graded = sum(len(r.depots[a].days) for r in results if r.graded and a in r.depots)
+            result[a] = replace(u, excluded_days=graded - len(days))
+    return {a: result[a] for a in agents if a in result}
+
+
+def _bootstrap(
+    cols: Mapping[str, Sequence[tuple[float, float, float]]],
+    draws: int,
+    mean_block: int,
+    seed: int,
+) -> dict[str, Uncertainty]:
+    """Stationary bootstrap of depots that share their days: one index stream for all of them
+    (comparable bands, and the indices are drawn only once per group)."""
+    n = len(next(iter(cols.values())))
+    prepared: dict[str, tuple[list[float], list[float], list[float], list[float]]] = {}
+    for a, rows in cols.items():
+        own = [r[0] for r in rows]
+        prepared[a] = (
             own,
             [x * x for x in own],
-            [per_agent[a][d][0] - per_agent[a][d][2] for d in days],
-            [per_agent[a][d][0] - per_agent[a][d][1] for d in days],
+            [r[0] - r[2] for r in rows],
+            [r[0] - r[1] for r in rows],
         )
-    sampled: dict[str, list[list[float]]] = {a: [[], [], [], []] for a in agents}
+    sampled: dict[str, list[list[float]]] = {a: [[], [], [], []] for a in cols}
     rng = random.Random(seed)
     for _ in range(draws):
         pick = operator.itemgetter(*stationary_indices(n, mean_block, rng))
-        for a in agents:
-            own, sq, ex, ex0 = cols[a]
+        for a, (own, sq, ex, ex0) in prepared.items():
             s = sum(pick(own))
             out = sampled[a]
             out[0].append(s / n * DAYS_PER_YEAR)
@@ -567,8 +704,7 @@ def uncertainty_all(
             out[2].append(sum(pick(ex)) / n * DAYS_PER_YEAR)
             out[3].append(sum(pick(ex0)) / n * DAYS_PER_YEAR)
     result: dict[str, Uncertainty] = {}
-    for a in agents:
-        own, sq, ex, ex0 = cols[a]
+    for a, (own, sq, ex, ex0) in prepared.items():
         out = sampled[a]
         result[a] = Uncertainty(
             a,
@@ -580,12 +716,18 @@ def uncertainty_all(
             _band(_sharpe(sum(own), sum(sq), n), out[1]),
             _band(sum(ex) / n * DAYS_PER_YEAR, out[2]),
             _band(sum(ex0) / n * DAYS_PER_YEAR, out[3]),
+            0,
         )
     return result
 
 
 def uncertainty(results: Sequence[QuarterResult], agent: str, **kwargs: Any) -> Uncertainty:
-    return uncertainty_all(results, [agent], **kwargs)[agent]
+    """One depot's bands; raises TooFewDays below two valid graded days."""
+    found = uncertainty_all(results, [agent], **kwargs)
+    if agent not in found:
+        n = len(pooled_days(results, agent, kwargs.get("capital", START_CAPITAL)))
+        raise TooFewDays(f"bootstrap needs at least two graded days, got {n}")
+    return found[agent]
 
 
 # --- per-quarter spread ------------------------------------------------------------------
@@ -828,10 +970,17 @@ class LabMetrics:
     """Every quarter with depot results, graded or not, in time order."""
     spreads: dict[str, QuarterSpread]
     uncertainty: dict[str, Uncertainty]
-    """Empty if fewer than two graded days exist."""
+    """Per depot over its own valid graded days; a depot below two such days is missing here
+    and listed in ``uncertainty_missing`` instead."""
+    uncertainty_missing: dict[str, str]
+    """Depot -> German reason why it has no bands (the report shows it instead of the bands)."""
     break_even: dict[str, BreakEven]
     cells: dict[str, list[Cell]]
     quality: list[QualityRow]
+    data_issues: list[DataIssue]
+    """Every depot day left out of benchmark and bootstrap, all quarters; the report lists each."""
+    drawdown_basis: str
+    """``DRAWDOWN_BASIS`` for the report's drawdown column."""
     round_trips: dict[str, int]
     """Over the graded quarters."""
     labels: dict[str, str]
@@ -856,20 +1005,26 @@ def summarize(
     trips = {
         a: sum(m.round_trips for m in rows if m.agent == a and m.graded) for a in graded_agents
     }
-    try:
-        unc = uncertainty_all(
-            ordered, graded_agents, capital=capital, draws=draws, mean_block=mean_block, seed=seed
-        )
-    except TooFewDays:
-        unc = {}
+    unc = uncertainty_all(
+        ordered, graded_agents, capital=capital, draws=draws, mean_block=mean_block, seed=seed
+    )
+    missing = {
+        a: "keine Bänder: weniger als zwei gewertete Tage mit Benchmark "
+        f"({len(pooled_days(ordered, a, capital))})"
+        for a in graded_agents
+        if a not in unc
+    }
     return LabMetrics(
         variant=variant.name if variant else "",
         depots=rows,
         spreads={a: quarter_spread(rows, a) for a in agents},
         uncertainty=unc,
+        uncertainty_missing=missing,
         break_even={a: break_even(ordered, a, capital) for a in graded_agents},
         cells={a: market_cells(ordered, a, min_history=min_history) for a in graded_agents},
         quality=quality(ordered),
+        data_issues=[i for m in rows for i in m.data_issues],
+        drawdown_basis=DRAWDOWN_BASIS,
         round_trips=trips,
         labels={a: verdict(n) for a, n in trips.items()},
     )
