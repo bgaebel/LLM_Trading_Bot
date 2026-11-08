@@ -11,14 +11,19 @@ What the report deliberately never does:
   dropped before any number is computed, and only their count is mentioned;
 - overwrite: each report gets its own directory under ``<lab>/reports/<run id>/``, created
   exclusively, and every file inside is opened with ``x``;
+- write into the register: ``runs.db`` is opened with ``mode=ro`` and an empty file is refused,
+  never initialised;
 - load anything external: the HTML has inline CSS, no scripts, no links off the page, so it
   works offline and can be attached anywhere.
 """
 
 import argparse
+import dataclasses
 import html
+import json
 import math
 import re
+import sqlite3
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -48,9 +53,19 @@ from llm_trading_bot.lab.model import (
     Variant,
 )
 from llm_trading_bot.lab.paths import CANDLES_FILE, CHAIN_FILE, REPORTS_DIR, RUNS_FILE, lab_dir
-from llm_trading_bot.lab.register import ChainCheck, Register, RegisterError, RunRow
-from llm_trading_bot.lab.spread import DEFAULT_SPREAD, FLOOR
+from llm_trading_bot.lab.register import (
+    BUSY_TIMEOUT_MS,
+    ChainCheck,
+    CodeState,
+    Register,
+    RegisterError,
+    RunRow,
+    check_register_schema,
+    code_state,
+)
+from llm_trading_bot.lab.spread import DEFAULT_SPREAD, FLOOR, QuarterSpreads
 from llm_trading_bot.lab.spread import METHOD as SPREAD_METHOD
+from llm_trading_bot.paper.db import SchemaError
 from llm_trading_bot.paper.execution import BUYHOLD
 
 BASE_VARIANT = "base"
@@ -314,6 +329,8 @@ class SpreadSource:
 
     source: str
     """``sampled`` or ``default`` (``QuarterSpreads.source``)."""
+    value: float
+    """The spread this source gives today; a run only "used" it if its stored spread matches."""
     hours: int | None = None
     """Hours with a median behind a sampled value."""
 
@@ -322,6 +339,23 @@ _SOURCE_TEXT = {
     "sampled": "Stichprobe öffentlicher Trades",
     "default": "vorsichtiger Standardwert",
 }
+CHANGED_SOURCE = "Quelle geändert seit dem Lauf"
+NO_ARCHIVE = "unbekannt (Kerzenarchiv nicht gelesen)"
+
+
+def _source_matches(src: SpreadSource, used: float) -> bool:
+    # The run stores the spread it used; the archive can gain or recompute samples afterwards,
+    # and labelling today's source next to yesterday's value would misstate where it came from.
+    return math.isclose(src.value, used, rel_tol=1e-9, abs_tol=1e-12)
+
+
+@dataclass(frozen=True)
+class UsedRun:
+    """A register run the report is built from, with when it was last produced."""
+
+    row: RunRow
+    last_recorded: str
+    """Time of the latest recording of this outcome, merged repeats included."""
 
 
 # --- the report ----------------------------------------------------------------------------
@@ -373,6 +407,12 @@ def _not_graded_reason(r: QuarterResult) -> str:
         return f"abgebrochen: {r.error or 'unbekannter Fehler'}"
     if r.status == "sealed":
         return "versiegelter Zeitraum"
+    if r.status == "incomplete":
+        detail = f" ({r.error})" if r.error else ""
+        return (
+            "Kerzenarchiv für dieses Quartal noch unvollständig (Abruf nicht fertig); nicht "
+            f"gerechnet, weil fehlende Zeilen wie Börsenlücken aussähen{detail}"
+        )
     if r.status != "ok":
         return f"Status {r.status}: {r.error}".rstrip(": ")
     if r.quarter.start < Quarter.parse(FIRST_GRADED).start:
@@ -400,7 +440,7 @@ def build_report(
     spread_sources: Mapping[tuple[str, str], SpreadSource] | None = None,
     runtime: Mapping[str, float] | None = None,
     config_count: int | None = None,
-    runs: Sequence[RunRow] = (),
+    runs: Sequence[UsedRun] = (),
     base_variant: str = BASE_VARIANT,
     draws: int = metrics.BOOTSTRAP_DRAWS,
     clock: Callable[[], float] = time.perf_counter,
@@ -421,8 +461,11 @@ def build_report(
         sealed += dropped
         visible[name] = shown
     kinds = _classify(visible, base_variant)
+    # Diagnostic runs are summarised only over the quarters they share with the base run.
     summaries = {
-        name: metrics.summarize(rows, draws=draws) for name, rows in visible.items() if rows
+        name: metrics.summarize(rows, draws=draws)
+        for name, rows in visible.items()
+        if rows and name not in kinds.diagnostic
     }
     base_rows = visible.get(kinds.base, []) if kinds.base else []
     base = summaries.get(kinds.base) if kinds.base else None
@@ -443,7 +486,7 @@ def build_report(
     _cells(doc, base)
     _uncertainty(doc, base)
     _quality(doc, base)
-    _diagnosis(doc, kinds, summaries, base)
+    _diagnosis(doc, kinds, visible, base_rows, draws)
     _fidelity(doc, fidelity)
     _assumptions(doc)
     _trials(doc, trial_count, config_count, runs, kinds, visible)
@@ -488,6 +531,7 @@ def _summary(
         f"({_span(graded) or 'keines'}); die übrigen stehen unter „Quartale“ mit Grund."
     ]
     beats: list[str] = []
+    banded: list[str] = []
     for agent in _ordered(base.round_trips):
         if agent == BUYHOLD:
             continue
@@ -496,6 +540,7 @@ def _summary(
         if u is None:
             items.append(f"{agent}: zu wenige gewertete Tage für ein Band; {count(n)} Round-Trips.")
             continue
+        banded.append(agent)
         if u.excess.low > 0:
             beats.append(agent)
         items.append(
@@ -510,11 +555,17 @@ def _summary(
             + f". Das ist noch kein Beleg: {count(trial_count)} Versuche stehen im Register, "
             "und die beste von vielen Varianten sieht schon zufällig gut aus."
         )
-    else:
+    elif banded:
+        strategies = [a for a in base.round_trips if a != BUYHOLD]
+        tested = "" if len(banded) == len(strategies) else f" (geprüft: {', '.join(banded)})"
         items.append(
-            "Keine Strategie schlägt Buy & Hold gleicher Quote nachweisbar: Jedes Band enthält "
-            "null oder liegt darunter. Das ist ein gültiges Ergebnis."
+            f"Keine Strategie{tested} schlägt Buy & Hold gleicher Quote nachweisbar: Jedes Band "
+            "enthält null oder liegt darunter. Das ist ein gültiges Ergebnis."
         )
+    else:
+        # Without a single band nothing was tested; "no strategy beats B&H" would read as a
+        # tested negative result.
+        items.append("Kein Urteil möglich: " + _no_band_reason(graded, base) + ".")
     items.append(_fidelity_short(fidelity))
     if sealed:
         items.append(
@@ -532,6 +583,17 @@ def _summary(
     )
 
 
+def _no_band_reason(graded: Sequence[QuarterResult], base: LabMetrics) -> str:
+    if not graded:
+        return "Kein Quartal ist gewertet, es wurde also nichts geprüft"
+    if not any(a != BUYHOLD for a in base.round_trips):
+        return "Die gewerteten Quartale enthalten kein Strategie-Depot"
+    return (
+        "Für keine Strategie gibt es ein Unsicherheitsband (zu wenige gewertete Tage, mindestens "
+        "zwei nötig), es wurde also nichts geprüft"
+    )
+
+
 def _span(graded: Sequence[QuarterResult]) -> str:
     if not graded:
         return ""
@@ -539,10 +601,16 @@ def _span(graded: Sequence[QuarterResult]) -> str:
     return first if first == last else f"{first} bis {last}"
 
 
+def _established(f: FidelitySummary) -> dict[str, bool]:
+    """``FidelitySummary.established`` plus AK5's indicator condition, which it does not check:
+    "belegt" next to "350 von 400" indicators would contradict itself."""
+    return {m: ok and f.indicators_ok.get(m, 0) == f.compared[m] for m, ok in f.established.items()}
+
+
 def _fidelity_short(f: FidelitySummary | None) -> str:
     if f is None or not f.compared:
         return "Treue zum Live-Bot: Treue nicht belegt (kein Treue-Test beigefügt)."
-    est = f.established
+    est = _established(f)
     parts = [
         f"{m}: {'belegt' if est[m] else 'Treue nicht belegt'} ({count(n)} Vergleiche)"
         for m, n in sorted(f.compared.items())
@@ -803,21 +871,27 @@ def _costs(
         "sonst ein bewusst vorsichtiger Standardwert."
     )
     rows = []
+    changed = False
     for r in base_rows:
         for m in sorted(r.spread):
             src = sources.get((r.quarter.label, m))
-            rows.append(
-                [
-                    r.quarter.label,
-                    m,
-                    pct(r.spread[m], 3, sign=False),
-                    _SOURCE_TEXT.get(src.source, src.source)
-                    if src
-                    else "unbekannt (Kerzenarchiv nicht gelesen)",
-                    count(src.hours) if src and src.hours is not None else NOT_SHOWN,
-                ]
-            )
+            if src is None:
+                text, hours = NO_ARCHIVE, NOT_SHOWN
+            elif not _source_matches(src, r.spread[m]):
+                text, hours, changed = CHANGED_SOURCE, NOT_SHOWN, True
+            else:
+                text = _SOURCE_TEXT.get(src.source, src.source)
+                hours = count(src.hours) if src.hours is not None else NOT_SHOWN
+            rows.append([r.quarter.label, m, pct(r.spread[m], 3, sign=False), text, hours])
     doc.table(["Quartal", "Markt", "Spread", "Quelle", "Stunden in der Stichprobe"], rows)
+    if changed:
+        doc.p(
+            f"„{CHANGED_SOURCE}“: Das Kerzenarchiv liefert für dieses Quartal heute einen anderen "
+            "Spread als den, mit dem der Lauf gerechnet hat (zum Beispiel weil später Stichproben "
+            "dazukamen). Der Lauf rechnete mit dem Wert in der Spalte „Spread“; woher er stammte, "
+            "lässt sich nicht mehr sicher sagen.",
+            "note",
+        )
 
 
 def _break_even_row(b: BreakEven) -> list[str]:
@@ -843,8 +917,18 @@ def _break_even_row(b: BreakEven) -> list[str]:
     ]
 
 
-_VOL = {"low": "niedrig", "mid": "mittel", "high": "hoch"}
-_DIRECTION = {"up": "steigend", "down": "fallend", "flat": "seitwärts"}
+_VOL = {"low": "niedrig", "mid": "mittel", "high": "hoch", metrics.UNKNOWN: "unbekannt"}
+_DIRECTION = {
+    "up": "steigend",
+    "down": "fallend",
+    "flat": "seitwärts",
+    metrics.UNKNOWN: "unbekannt",
+}
+
+
+def _label(names: Mapping[str, str], value: str) -> str:
+    # A label metrics adds later must stay visible: "unbekannt" would merge it with real gaps.
+    return names.get(value, value)
 
 
 def _cells(doc: Doc, base: LabMetrics | None) -> None:
@@ -867,8 +951,8 @@ def _cells(doc: Doc, base: LabMetrics | None) -> None:
                 [
                     depot_name(a),
                     c.regime if c.regime != metrics.UNKNOWN else "unbekannt",
-                    _VOL.get(c.vol, "unbekannt"),
-                    _DIRECTION.get(c.direction, "unbekannt"),
+                    _label(_VOL, c.vol),
+                    _label(_DIRECTION, c.direction),
                     count(c.count),
                     f"{pct(c.mean)} [{pct(c.low)} bis {pct(c.high)}]",
                     eur(c.pnl),
@@ -995,8 +1079,16 @@ def _quality(doc: Doc, base: LabMetrics | None) -> None:
     doc.table(_QUALITY_HEADERS, _quality_rows(base.quality), marked)
 
 
+def _labels(labels: Iterable[str]) -> str:
+    return ", ".join(sorted(labels, key=_quarter_start)) or "keines"
+
+
 def _diagnosis(
-    doc: Doc, kinds: _Variants, summaries: Mapping[str, LabMetrics], base: LabMetrics | None
+    doc: Doc,
+    kinds: _Variants,
+    visible: Mapping[str, Sequence[QuarterResult]],
+    base_rows: Sequence[QuarterResult],
+    draws: int,
 ) -> None:
     doc.section("Diagnose: Was kosten die Sperrzeiten?", "diagnose")
     if not kinds.diagnostic:
@@ -1004,7 +1096,7 @@ def _diagnosis(
         return
     for name in kinds.diagnostic:
         spec = kinds.specs[name]
-        s = summaries.get(name)
+        diag_rows = visible.get(name, [])
         doc.sub(f"Variante {name}")
         tolerance = (
             f"Lücken-Toleranz in höheren Intervallen: {spec.gap_window}"
@@ -1017,23 +1109,62 @@ def _diagnosis(
             "seinem Code.",
             "warn",
         )
-        if s is None:
+        if not diag_rows:
             doc.p("Keine Ergebnisse.", "note")
             continue
+        _diagnosis_variant(doc, diag_rows, base_rows, draws)
+
+
+def _diagnosis_variant(
+    doc: Doc,
+    diag_rows: Sequence[QuarterResult],
+    base_rows: Sequence[QuarterResult],
+    draws: int,
+) -> None:
+    # A wider gap tolerance lifts the decision share, so the diagnosis can grade quarters the
+    # base run left out. Pooling each run over its own quarters would credit that different
+    # period to the blocked times; only quarters graded in both runs are compared.
+    diag_graded = {r.quarter.label for r in diag_rows if r.graded}
+    base_graded = {r.quarter.label for r in base_rows if r.graded}
+    if base_rows:
+        common = diag_graded & base_graded
+        text = (
+            "Verglichen werden nur Quartale, die in beiden Läufen gewertet sind: "
+            f"{_labels(common)}."
+        )
+        if only_diag := diag_graded - base_graded:
+            text += (
+                f" Nur in der Diagnose gewertet und deshalb nicht verglichen: {_labels(only_diag)}"
+                " (dort fielen mit der anderen Lücken-Toleranz genug Entscheidungen)."
+            )
+        if only_base := base_graded - diag_graded:
+            text += f" Nur im Basislauf gewertet, nicht verglichen: {_labels(only_base)}."
+        doc.p(text)
+    else:
+        common = diag_graded
+        doc.p("Kein Basislauf vorhanden: nur die Zahlen der Diagnose, ohne Vergleich.", "note")
+    if not common:
+        doc.p(
+            "Kein Quartal ist in beiden Läufen gewertet; ein Vergleich der Renditen entfällt."
+            if base_rows
+            else "Kein Quartal der Diagnose ist gewertet; es gibt keine Renditen."
+        )
+    else:
+        s = metrics.summarize([r for r in diag_rows if r.quarter.label in common], draws=draws)
+        compared_base = [r for r in base_rows if r.quarter.label in common]
+        b = metrics.summarize(compared_base, draws=draws) if compared_base else None
         rows = []
         for a in _ordered(s.round_trips):
             u = s.uncertainty.get(a)
-            ub = base.uncertainty.get(a) if base else None
-            diff = (
-                u.mean_return.estimate - ub.mean_return.estimate if u is not None and ub else None
-            )
+            ub = b.uncertainty.get(a) if b else None
+            diff = u.mean_return.estimate - ub.mean_return.estimate if u and ub else None
             rows.append(
                 [
                     depot_name(a),
                     pct(ub.mean_return.estimate) if ub else NOT_SHOWN,
                     band_pct(u.mean_return if u else None),
                     pct(diff),
-                    count(base.round_trips.get(a, 0)) if base else NOT_SHOWN,
+                    count(b.round_trips.get(a, 0)) if b else NOT_SHOWN,
                     count(s.round_trips[a]),
                 ]
             )
@@ -1048,46 +1179,61 @@ def _diagnosis(
             ],
             rows,
         )
-        totals = {q.market: q for q in s.quality if q.quarter == "all"}
-        base_totals = {q.market: q for q in base.quality if q.quarter == "all"} if base else {}
-        qrows = [
-            [
-                m,
-                num(base_totals[m].blocked_hours, 1) if m in base_totals else NOT_SHOWN,
-                num(totals[m].blocked_hours, 1),
-                pct(base_totals[m].share, 1, sign=False) if m in base_totals else NOT_SHOWN,
-                pct(totals[m].share, 1, sign=False),
-            ]
-            for m in sorted(totals)
-        ]
-        doc.table(
-            [
-                "Markt",
-                "gesperrte Stunden Basis",
-                "gesperrte Stunden Diagnose",
-                "Entscheidungen Basis",
-                "Entscheidungen Diagnose",
-            ],
-            qrows,
+    base_labels = {r.quarter.label for r in base_rows}
+    shared = {r.quarter.label for r in diag_rows}
+    if base_rows:
+        shared &= base_labels
+        doc.p(
+            "Gesperrte Stunden und Entscheidungen über die Quartale, die in beiden Läufen "
+            f"vorliegen (gewertet oder nicht): {_labels(shared)}."
         )
+    totals = _quality_totals([r for r in diag_rows if r.quarter.label in shared])
+    base_totals = _quality_totals([r for r in base_rows if r.quarter.label in shared])
+    qrows = [
+        [
+            m,
+            num(base_totals[m].blocked_hours, 1) if m in base_totals else NOT_SHOWN,
+            num(totals[m].blocked_hours, 1),
+            pct(base_totals[m].share, 1, sign=False) if m in base_totals else NOT_SHOWN,
+            pct(totals[m].share, 1, sign=False),
+        ]
+        for m in sorted(totals)
+    ]
+    doc.table(
+        [
+            "Markt",
+            "gesperrte Stunden Basis",
+            "gesperrte Stunden Diagnose",
+            "Entscheidungen Basis",
+            "Entscheidungen Diagnose",
+        ],
+        qrows,
+    )
+
+
+def _quality_totals(rows: Sequence[QuarterResult]) -> dict[str, QualityRow]:
+    return {q.market: q for q in metrics.quality(rows) if q.quarter == "all"}
 
 
 def _fidelity(doc: Doc, f: FidelitySummary | None) -> None:
     doc.section("Treue zum Live-Bot", "treue")
     doc.p(
         "Der Treue-Test baut aufgezeichnete Live-Entscheidungen mit dem Labor nach. Erst ab "
-        f"{FIDELITY_MIN} Vergleichen je Markt ohne ungeklärte Abweichung gilt die Treue als belegt."
+        f"{FIDELITY_MIN} Vergleichen je Markt mit gleicher Aktion, gleichen Indikatoren "
+        "(± 1 Stelle) und ohne ungeklärte Abweichung gilt die Treue als belegt."
     )
     if f is None:
         doc.p("Kein Treue-Test beigefügt: Treue nicht belegt.", "warn")
         return
-    est = f.established
+    est = _established(f)
     rows = []
     for m, n in sorted(f.compared.items()):
         if est[m]:
             verdict = "belegt"
         elif n < FIDELITY_MIN:
             verdict = f"Treue nicht belegt (unter {FIDELITY_MIN} Vergleiche)"
+        elif f.established[m]:
+            verdict = "Treue nicht belegt (Indikatoren weichen ab)"
         else:
             verdict = "Treue nicht belegt (Abweichungen)"
         rows.append(
@@ -1187,7 +1333,7 @@ def _trials(
     doc: Doc,
     trial_count: int,
     config_count: int | None,
-    runs: Sequence[RunRow],
+    runs: Sequence[UsedRun],
     kinds: _Variants,
     visible: Mapping[str, Sequence[QuarterResult]],
 ) -> None:
@@ -1206,17 +1352,40 @@ def _trials(
         "nicht korrigiert; die Hürden für neue Strategieversionen (Deflated Sharpe Ratio, "
         "Holm/BHY) legt Spec 018 mit dieser Zahl fest."
     )
-    used = list(runs)
+    used = [u for u in runs if not Quarter.parse(u.row.quarter).sealed]
     if used:
         commits: dict[str, int] = {}
-        for r in used:
-            commits[r.commit[:12]] = commits.get(r.commit[:12], 0) + 1
-        clean = sum(1 for r in used if r.clean)
+        for u in used:
+            commits[u.row.commit[:12]] = commits.get(u.row.commit[:12], 0) + 1
+        clean = sum(1 for u in used if u.row.clean)
         doc.p(
-            f"Dem Bericht liegen {count(len(used))} Läufe zugrunde (je Quartal und Variante der "
-            "neueste); Code-Commits: "
+            f"Dem Bericht liegen {count(len(used))} Läufe zugrunde: je Quartal und Variante der "
+            "zuletzt aufgezeichnete, gleiche Wiederholungen eingeschlossen. Code-Commits: "
             + ", ".join(f"{c} ({count(n)})" for c, n in sorted(commits.items()))
             + f"; mit sauberem Arbeitsbaum: {count(clean)} von {count(len(used))}."
+        )
+        doc.table(
+            [
+                "Variante",
+                "Quartal",
+                "Lauf",
+                "Code-Commit",
+                "zuletzt aufgezeichnet",
+                "Ausführungen",
+                "sauberer Arbeitsbaum",
+            ],
+            [
+                [
+                    u.row.variant,
+                    u.row.quarter,
+                    count(u.row.run_id),
+                    u.row.commit[:12],
+                    u.last_recorded,
+                    count(u.row.repeats),
+                    "ja" if u.row.clean else "nein",
+                ]
+                for u in sorted(used, key=lambda u: (u.row.variant, _quarter_start(u.row.quarter)))
+            ],
         )
     rows = [
         [
@@ -1316,20 +1485,32 @@ def write_report(
 # --- loading from the register -------------------------------------------------------------
 
 
-def newest_results(register: Register) -> tuple[dict[str, list[QuarterResult]], list[RunRow]]:
-    """The newest run per quarter and variant (recording order), grouped by variant name.
+def newest_results(register: Register) -> tuple[dict[str, list[QuarterResult]], list[UsedRun]]:
+    """Per quarter and variant the run recorded last, grouped by variant name.
 
-    Sealed quarters are skipped before their result is even loaded."""
-    newest: dict[tuple[str, str], RunRow] = {}
+    "Last" goes by the chain's events, not the run id: an identical rerun is merged into its
+    older run as a repeat, so the highest id can be an outcome that was superseded later (for
+    example a test on a discarded branch, then the same quarter again on main). Sealed quarters
+    are skipped before their result is even loaded."""
+    last: dict[int, tuple[int, str]] = {}
+    for seq, run_id, created in register.con.execute(
+        "SELECT seq, run_id, created_at FROM events ORDER BY seq"
+    ):
+        last[int(run_id)] = (int(seq), str(created))
+    newest: dict[tuple[str, str], tuple[tuple[int, int], RunRow]] = {}
     for row in register.list_runs():
-        newest[(row.quarter, row.variant)] = row
+        order = (last.get(row.run_id, (0, ""))[0], row.run_id)
+        key = (row.quarter, row.variant)
+        if key not in newest or order > newest[key][0]:
+            newest[key] = (order, row)
     out: dict[str, list[QuarterResult]] = {}
-    used: list[RunRow] = []
-    for (label, variant), row in sorted(newest.items()):
+    used: list[UsedRun] = []
+    for (label, variant), (_, row) in sorted(newest.items()):
         if Quarter.parse(label).sealed:
             continue
         out.setdefault(variant, []).append(register.result(row.run_id))
-        used.append(row)
+        recorded = last.get(row.run_id, (0, row.created_at))[1]
+        used.append(UsedRun(row, recorded))
     return out, used
 
 
@@ -1342,12 +1523,17 @@ def spread_sources_from_archive(path: Path) -> dict[tuple[str, str], SpreadSourc
     try:
         with Archive.open_readonly(path) as archive:
             rows = archive.db.execute(
-                "SELECT market, quarter, samples FROM spreads WHERE method=?", (SPREAD_METHOD,)
+                "SELECT market, quarter, spread, samples FROM spreads WHERE method=?",
+                (SPREAD_METHOD,),
             ).fetchall()
     except ArchiveError:
         return {}
-    sampled = {(str(q), str(m)): SpreadSource("sampled", int(n)) for m, q, n in rows}
-    return sampled
+    return {
+        (str(q), str(m)): SpreadSource("sampled", float(s), int(n))
+        for m, q, s, n in rows
+        # The backtest never uses a sealed quarter's row either (ADR-0026).
+        if not Quarter.parse(str(q)).sealed
+    }
 
 
 def _with_defaults(
@@ -1359,11 +1545,79 @@ def _with_defaults(
     out = dict(sampled)
     if not known:
         return out
+    # The same fallback the backtest takes, so a default is only claimed where it was used.
+    model = QuarterSpreads({})
     for rows in results.values():
         for r in rows:
             for m in r.spread:
-                out.setdefault((r.quarter.label, m), SpreadSource("default"))
+                default = model.spread(m, r.quarter.start)
+                out.setdefault((r.quarter.label, m), SpreadSource("default", default))
     return out
+
+
+class FidelityUnreadable(ReportError):
+    """The fidelity JSON is not a fidelity summary; the message is German, for the CLI."""
+
+
+_INT_MAPS = ("compared", "equal_action", "indicators_ok")
+
+
+def load_fidelity(text: str) -> FidelitySummary:
+    """A FidelitySummary from JSON, checked field by field.
+
+    ``FidelitySummary.from_json`` trusts its input; a hand-edited or truncated file would crash
+    the report later (e.g. ``established`` on a deviation without ``market``) instead of being
+    refused here with a reason."""
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise FidelityUnreadable(f"kein gültiges JSON ({exc})") from exc
+    if not isinstance(data, dict):
+        raise FidelityUnreadable("erwartet ein JSON-Objekt")
+    known = {f.name for f in dataclasses.fields(FidelitySummary)}
+    if unknown := sorted(set(data) - known):
+        raise FidelityUnreadable("unbekannte Felder: " + ", ".join(map(str, unknown)))
+    for name in _INT_MAPS:
+        value = data.get(name, {})
+        if not isinstance(value, dict) or not all(
+            isinstance(m, str) and type(n) is int and n >= 0 for m, n in value.items()
+        ):
+            raise FidelityUnreadable(f"„{name}“ muss je Markt eine ganze Zahl ab 0 sein")
+    deviations = data.get("deviations", [])
+    if not isinstance(deviations, list) or not all(
+        isinstance(d, dict) and isinstance(d.get("market"), str) for d in deviations
+    ):
+        raise FidelityUnreadable("„deviations“ muss eine Liste mit je einem Feld „market“ sein")
+    if not isinstance(data.get("with_observations", False), bool):
+        raise FidelityUnreadable("„with_observations“ muss true oder false sein")
+    if not isinstance(data.get("note", ""), str):
+        raise FidelityUnreadable("„note“ muss ein Text sein")
+    return FidelitySummary(**data)
+
+
+def open_register_readonly(
+    db_path: Path, chain_path: Path, *, code: CodeState | None = None
+) -> Register:
+    """The register for reading only (ADR-0016's rule: one writer, readers with ``mode=ro``).
+
+    ``Register.open`` creates the schema in a blank file; a report must never do that, nor
+    write anything else into ``runs.db``. An empty file is refused instead of initialised."""
+    if not db_path.is_file():
+        raise ReportError(f"kein Prüfregister in {db_path.parent}")
+    if db_path.stat().st_size == 0:
+        raise ReportError(f"das Prüfregister {db_path} ist leer")
+    con = sqlite3.connect(
+        db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=20, isolation_level=None
+    )
+    con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA query_only=1")
+        con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+        check_register_schema(con)
+    except BaseException:
+        con.close()
+        raise
+    return Register(con, chain_path, code or code_state())
 
 
 def cli_main(command: str, argv: Sequence[str], out: TextIO) -> int:
@@ -1380,18 +1634,21 @@ def cli_main(command: str, argv: Sequence[str], out: TextIO) -> int:
     if not runs_db.is_file():
         print(f"Kein Prüfregister in {base}: zuerst trading-bot lab backtest.", file=out)
         return EXIT_REFUSED
+    if runs_db.stat().st_size == 0:
+        print(f"Das Prüfregister {runs_db} ist leer: zuerst trading-bot lab backtest.", file=out)
+        return EXIT_REFUSED
     fidelity: FidelitySummary | None = None
     fidelity_json: str | None = None
     if args.fidelity is not None:
         try:
             fidelity_json = args.fidelity.read_text(encoding="utf-8")
-            fidelity = FidelitySummary.from_json(fidelity_json)
-        except (OSError, ValueError, TypeError) as exc:
+            fidelity = load_fidelity(fidelity_json)
+        except (OSError, ValueError, FidelityUnreadable) as exc:
             print(f"Treue-Test nicht lesbar ({args.fidelity}): {exc}", file=out)
             return EXIT_REFUSED
     loading = time.perf_counter()
     try:
-        with Register.open(runs_db, base / CHAIN_FILE) as register:
+        with open_register_readonly(runs_db, base / CHAIN_FILE) as register:
             check = register.verify()
             if not check.ok:
                 print("Prüfregister-Kette fehlerhaft, kein Bericht:", file=out)
@@ -1434,6 +1691,9 @@ def cli_main(command: str, argv: Sequence[str], out: TextIO) -> int:
             )
     except (RegisterError, ReportError, ValueError) as exc:
         print(f"Kein Bericht: {exc}", file=out)
+        return EXIT_REFUSED
+    except (SchemaError, sqlite3.Error) as exc:
+        print(f"Kein Bericht: Das Prüfregister {runs_db} ist nicht lesbar ({exc}).", file=out)
         return EXIT_REFUSED
     print(f"Bericht geschrieben: {written.directory}", file=out)
     for path in written.files:
