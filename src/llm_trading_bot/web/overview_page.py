@@ -200,6 +200,12 @@ def when_epoch(t: float) -> str:
 
 
 def _decisions(rows: Sequence[DecisionRow]) -> str:
+    if not rows:
+        return (
+            '<p class="hint">Noch kein Kauf- oder Verkaufssignal – alle Depots halten. '
+            "Halten wird nicht aufgeführt.</p>"
+        )
+
     def action(d: DecisionRow) -> str:
         return f'<span class="act {escape(d.action.lower())}">{escape(d.action)}</span>'
 
@@ -220,7 +226,10 @@ def _decisions(rows: Sequence[DecisionRow]) -> str:
         for d in rows
     ]
     head = ("Depot", "Markt", "Zeit", "Aktion", "Ziel", "Konf.", "Status", "Begründung")
-    return _table(head, body, "decisions")
+    return _table(head, body, "decisions") + (
+        '<p class="hint">Je Depot und Markt das letzte Kauf- oder Verkaufssignal; '
+        "Halten wird nicht aufgeführt.</p>"
+    )
 
 
 def _llm(rows: Sequence[LlmToday]) -> str:
@@ -379,7 +388,7 @@ def overview_page(
             + equity_chart(view.series)
             + "</section>"
             + '<section class="panel span-12">'
-            + pages._head("05", "Letzte Entscheidungen", "warm")
+            + pages._head("05", "Letzte Signale", "warm")
             + _decisions(view.decisions)
             + "</section>"
             + '<section class="panel span-12">'

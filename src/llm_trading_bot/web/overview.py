@@ -333,10 +333,22 @@ class DecisionRow:
     reason: str
 
 
+DECISION_WINDOW = 50_000
+"""Newest decisions searched for signals: about three months at ~500 decisions a day."""
+
+
 def latest_decisions(con: sqlite3.Connection) -> list[DecisionRow]:
+    """Per depot and market the newest BUY or SELL; holds are the norm and only crowd the table
+    (user 2026-11-08). A signal older than the window is not shown - the trades still are."""
+    # LEARNING(#performance): Sich selbst neu ladende Seite darf nicht die ganze Historie lesen
+    # MATERIALIZED: else SQLite groups over the (agent, symbol, bar_ts) index - the whole table.
     rows = con.execute(
-        "SELECT d.* FROM decisions d JOIN (SELECT agent, symbol, MAX(id) AS id FROM decisions"
-        " GROUP BY agent, symbol) m ON d.id = m.id"
+        "WITH w AS MATERIALIZED (SELECT id, agent, symbol FROM decisions"
+        " WHERE id > (SELECT COALESCE(MAX(id), 0) FROM decisions) - ?"
+        " AND action IN ('BUY', 'SELL'))"
+        " SELECT d.* FROM decisions d JOIN (SELECT MAX(id) AS id FROM w GROUP BY agent, symbol) m"
+        " ON d.id = m.id",
+        (DECISION_WINDOW,),
     ).fetchall()
     out = [
         DecisionRow(
