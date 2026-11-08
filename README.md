@@ -30,7 +30,8 @@ uv run trading-bot signals
 ```
 
 Einen Paper-Zyklus ausführen (virtuelle Orders, Daten in SQLite; die DB liegt außerhalb des Repos). Standard sind
-die GPT-Depots `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprobe) plus Buy & Hold; dafür muss `OPENAI_API_KEY`
+die GPT-Depots `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprobe) plus die USDC-Depots mit Buy & Hold USDC als
+Referenz (Euro-Buy-&-Hold nur mit `BOT_BUYHOLD=1`, ADR-0031); dafür muss `OPENAI_API_KEY`
 in der Shell gesetzt sein (nie in eine Datei im Repo schreiben):
 
 ```bash
