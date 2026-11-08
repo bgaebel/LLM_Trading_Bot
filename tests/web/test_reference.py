@@ -92,6 +92,7 @@ def test_stopped_depot_leaves_every_list(stopped: Path) -> None:
 
 
 def test_a_depot_stays_shown_for_an_hour_after_its_last_valuation(tmp_path: Path) -> None:
+    assert HOUR == 3_600
     trend = [(t, 10_000.0) for t in range(0, HOUR + 1, 60)]
     path = tmp_path / "bot.db"
     history(path, {"trend": trend, "breakout": [(0, 10_000.0)], BUYHOLD: [(0, 10_000.0)]})
