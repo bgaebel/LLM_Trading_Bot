@@ -116,7 +116,7 @@ from llm_trading_bot.lab.model import (
 )
 from llm_trading_bot.lab.paths import CANDLES_FILE, CHAIN_FILE, RUNS_FILE, lab_dir
 from llm_trading_bot.lab.register import Register
-from llm_trading_bot.lab.spread import METHOD, QuarterSpreads
+from llm_trading_bot.lab.spread import QuarterSpreads, stored_quarter_spreads
 from llm_trading_bot.llm.agents import BotConfig
 from llm_trading_bot.market import snapshot
 from llm_trading_bot.market.models import SYMBOLS, Quote, Symbol
@@ -540,6 +540,15 @@ def run_quarter(
     ``quarter`` may be any span (tests use a few hours); rounds run at ``start + k*60 + 5`` for
     every time before ``end``. Raises on a bug; the orchestrator records that as aborted.
     """
+    if quarter.sealed:
+        # No number at all, not even the assumed spread: the register refuses a sealed entry
+        # with any (ADR-0026), and the refusal must still be recorded.
+        return QuarterResult(
+            quarter,
+            variant,
+            status="sealed",
+            error="reicht in den versiegelten Prüfzeitraum ab 2025-10-01 (ADR-0026)",
+        )
     began = time.perf_counter()
     model = QuarterSpreads(spreads or {})
     result = QuarterResult(
@@ -547,10 +556,6 @@ def run_quarter(
         variant,
         spread={m: model.spread(m, quarter.start) for m in MARKETS},
     )
-    if quarter.sealed:
-        result.status = "sealed"
-        result.error = "reicht in den versiegelten Prüfzeitraum ab 2025-10-01 (ADR-0026)"
-        return result
     if quarter.start % MINUTE or quarter.end <= quarter.start:
         raise ValueError(f"quarter must start on a minute and not be empty: {quarter}")
     with Archive.open_readonly(archive_path) as arch:
@@ -736,15 +741,18 @@ def describe(result: QuarterResult) -> str:
 
 
 def _spreads_of(path: Path) -> dict[tuple[str, str], float]:
+    """The sampled spread of every whole quarter before the seal, read-only.
+
+    Through ``stored_quarter_spreads``, not the ``spreads`` table itself: a row left by older
+    code, or by a sampling run that stopped early, may stand for a partly sampled quarter.
+    """
     with Archive.open_readonly(path) as arch:
-        rows = arch.db.execute(
-            "SELECT market, quarter, spread FROM spreads WHERE method=?", (METHOD,)
-        ).fetchall()
+        stored = stored_quarter_spreads(arch)
     out = {}
-    for market, label, value in rows:
+    for (market, label), (value, _hours) in stored.items():
         # The seal also holds for the spread samples (ADR-0026): never use a value from there.
-        if not Quarter.parse(str(label)).sealed and math.isfinite(float(value)):
-            out[(str(market), str(label))] = float(value)
+        if not Quarter.parse(label).sealed and math.isfinite(value):
+            out[(market, label)] = value
     return out
 
 

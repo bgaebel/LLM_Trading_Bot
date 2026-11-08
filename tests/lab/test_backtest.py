@@ -42,7 +42,12 @@ from llm_trading_bot.lab.model import (
     Variant,
 )
 from llm_trading_bot.lab.register import Register
-from llm_trading_bot.lab.spread import DEFAULT_SPREAD
+from llm_trading_bot.lab.spread import (
+    DEFAULT_SPREAD,
+    METHOD,
+    build_quarter_spreads,
+    sample_hours,
+)
 from llm_trading_bot.market import snapshot
 from llm_trading_bot.market.models import Candle, MarketDataError, Quote, Symbol
 from llm_trading_bot.market.snapshot import MarketSnapshot
@@ -349,11 +354,58 @@ def test_sealed_period_refused(tmp_path: Path) -> None:
     assert recorded.status == "sealed"
     assert [r.status for _, r in spy.recorded] == ["sealed"]
 
+    # Review finding: the assumed spread was filled in before the seal check, so the register
+    # refused the sealed entry and run_quarters crashed instead of recording the refusal.
+    sealed_q = Quarter.parse("2025Q4")
+    sealed = run_quarter(missing, sealed_q, BASE, {("BTC-EUR", "2025Q4"): 0.002})
+    assert (sealed.spread, sealed.quality, sealed.rounds, sealed.depots) == ({}, {}, 0, {})
+    assert not any(sealed.daily_mid.values())
+    reg_dir = tmp_path / "reg"
+    reg_dir.mkdir()
+    with Register.open(reg_dir / "runs.db", reg_dir / "register.jsonl") as register:
+        results = run_quarters(missing, [sealed_q], [BASE], workers=1, register=register)
+        assert [r.status for r in results] == ["sealed"]
+        (run,) = register.list_runs()
+        assert (run.quarter, run.status) == ("2025Q4", "sealed")
+        assert register.result(run.run_id).spread == {}
+        assert register.verify().ok
+
     out = io.StringIO()
     code = cli_main("backtest", ["--from", "2025Q3", "--to", "2025Q4", "--dir", str(tmp_path)], out)
     assert code == EXIT_REFUSED
     assert "versiegelten Prüfzeitraum" in out.getvalue() and "2025Q4" in out.getvalue()
     assert not (tmp_path / "runs.db").exists()
+
+
+def test_spreads_only_from_whole_quarters(tmp_path: Path) -> None:
+    # Review finding: _spreads_of trusted every ``spreads`` row; one left by older code for a
+    # partly sampled quarter put an optimistic 1 bp into the backtest.
+    q = Quarter.parse("2022Q3")
+    planned = sample_hours("BTC-EUR", q.start, q.end)
+
+    def sample(arch: Archive, hour: int, median: float) -> None:
+        arch.db.execute(
+            "INSERT INTO spread_samples(market, method, hour, trades, pairs, median, fetched_at) "
+            "VALUES (?, ?, ?, 4, 3, ?, 1)",
+            ("BTC-EUR", METHOD, hour, median),
+        )
+
+    path = tmp_path / "candles.db"
+    with Archive(path) as arch:
+        sample(arch, planned[0], 0.0001)
+        arch.db.execute(
+            "INSERT INTO spreads(market, quarter, method, spread, samples, computed_at) "
+            "VALUES ('BTC-EUR', '2022Q3', ?, 0.0001, 1, 1)",
+            (METHOD,),
+        )
+    before = tree_digest(tmp_path)
+    assert backtest._spreads_of(path) == {}
+    assert tree_digest(tmp_path) == before  # read-only
+    with Archive(path) as arch:
+        for hour in planned[1:]:
+            sample(arch, hour, 0.0003)
+        build_quarter_spreads(arch, now=1)
+    assert backtest._spreads_of(path) == {("BTC-EUR", "2022Q3"): pytest.approx(0.0003)}
 
 
 def test_workers_do_not_write(tmp_path: Path) -> None:

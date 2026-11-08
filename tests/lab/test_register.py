@@ -424,6 +424,10 @@ def test_stop_and_numbers_checked(tmp_path: Path) -> None:
         changed(trades=[dataclasses.replace(good, notional=-math.inf)]),
         changed(trades=[dataclasses.replace(good, fee=math.nan)]),
         changed(trades=[dataclasses.replace(good, context={"vol": math.nan})]),
+        # Review finding: only the top level of a context was checked.
+        changed(trades=[dataclasses.replace(good, context={"x": {"vol": math.nan}})]),
+        changed(trades=[dataclasses.replace(good, context={"x": [1.0, math.inf]})]),
+        changed(trades=[dataclasses.replace(good, context={"x": [{"y": (-math.inf,)}]})]),
         changed(end_mid=math.nan),
         changed(end_liquidated=math.inf),
         changed(point=dataclasses.replace(first, cash=math.nan)),
@@ -435,7 +439,12 @@ def test_stop_and_numbers_checked(tmp_path: Path) -> None:
             with pytest.raises(RegisterError, match=r"outside|not finite"):
                 reg.record(res)
         assert_nothing_written(reg)
-        context = {"vol": 0.01, "regime": "TREND", "direction": None}
+        context = {
+            "vol": 0.01,
+            "regime": "TREND",
+            "direction": None,
+            "levels": [1.5, {"atr": 2.0}],
+        }
         reg.record(
             changed(
                 spread={"BTC-EUR": 0.001},
@@ -443,6 +452,24 @@ def test_stop_and_numbers_checked(tmp_path: Path) -> None:
                 trades=[dataclasses.replace(good, context=context)],
             )
         )
+        assert reg.verify().ok
+
+
+def test_runtime_must_be_finite(tmp_path: Path) -> None:
+    # Review finding: seconds was never checked; to_json would write a non-standard NaN.
+    sealed_q = Quarter.parse("2025Q4")
+    bad = [
+        result(seconds=math.nan),
+        result(seconds=math.inf),
+        QuarterResult(sealed_q, Variant(), "sealed", seconds=math.nan),
+        QuarterResult(Quarter.parse("2022Q1"), Variant(), "aborted", error="x", seconds=-math.inf),
+    ]
+    with open_reg(tmp_path) as reg:
+        for res in bad:
+            with pytest.raises(RegisterError, match=r"seconds .* not finite"):
+                reg.record(res)
+        assert_nothing_written(reg)
+        reg.record(result(seconds=0.0))
         assert reg.verify().ok
 
 

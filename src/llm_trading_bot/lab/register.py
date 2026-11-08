@@ -318,6 +318,19 @@ def _finite(where: str, values: Mapping[str, object]) -> None:
             raise RegisterError(f"{where}: {name} {value!r} not finite")
 
 
+def _finite_tree(where: str, value: object) -> None:
+    """``_finite`` for a nested context (dicts, lists, tuples): a NaN one level down is as
+    unreadable for ``to_json`` as one at the top. Only floats can be NaN or infinite."""
+    if isinstance(value, float):
+        _finite(where, {"value": value})
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            _finite_tree(f"{where}.{key}", item)
+    elif isinstance(value, list | tuple):
+        for n, item in enumerate(value):
+            _finite_tree(f"{where}[{n}]", item)
+
+
 def _check_sealed(result: QuarterResult) -> None:
     """A sealed entry only records that a run was refused (ADR-0026). Any number in it - even
     a round count or an assumed spread - could only come from running the sealed period, and the
@@ -354,7 +367,8 @@ def check_result(result: QuarterResult) -> None:
       ``[start, end)``, strictly increasing, with finite values; a daily mid's first entry may
       instead be the day before the quarter (the base of day 1, see ``lab.metrics``);
     - every trade and a drawdown stop must lie in ``[start, end)``; trade, cash, weight, end
-      value and spread numbers must be finite;
+      value, spread and runtime (``seconds``) numbers must be finite, floats in a trade's
+      context too, at any depth;
     - the daily returns must be defined (see ``daily_returns``).
     """
     if not _STATUS.fullmatch(result.status):
@@ -365,6 +379,8 @@ def check_result(result: QuarterResult) -> None:
             f"{q.label} reaches into the sealed period (ADR-0026): only status "
             f"{SEALED_STATUS!r} may be recorded, not {result.status!r}"
         )
+    # Every entry carries its runtime; to_json would write NaN as non-standard JSON.
+    _finite(q.label, {"seconds": result.seconds})
     if result.status == SEALED_STATUS:
         _check_sealed(result)
 
@@ -399,10 +415,8 @@ def check_result(result: QuarterResult) -> None:
                     "fee": trade.fee,
                 },
             )
-            # Context numbers are optional facts; only floats can be NaN or infinite.
-            _finite(
-                f"{at} context", {k: v for k, v in trade.context.items() if isinstance(v, float)}
-            )
+            # Context numbers are optional facts, possibly nested (lists, dicts).
+            _finite_tree(f"{at} context", trade.context)
         if depot.halted_at is not None and not q.start <= depot.halted_at < q.end:
             raise RegisterError(f"{where}: drawdown stop at {depot.halted_at} outside {q.label}")
         _finite(where, {"end_mid": depot.end_mid, "end_liquidated": depot.end_liquidated})
