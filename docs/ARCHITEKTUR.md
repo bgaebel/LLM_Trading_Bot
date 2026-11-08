@@ -9,11 +9,13 @@
 öffentliche Bitvavo-Quotes und abgeschlossene Kerzen, geprüft zu einem Snapshot je Markt. Darauf Indikatoren,
 die fünf klassischen Strategien und der LLM-Kontext (`strategy`, Spec 003, identisch zu Arena v0.3.1).
 Paper-Ausführung mit SQLite (`paper`, Spec 004): virtuelle Orders, Depot, Entscheidungen, Trades, Equity.
-GPT-Depots (`llm`, Spec 005): `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprobe) plus Buy & Hold (ADR-0012),
+GPT-Depots (`llm`, Spec 005): `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprobe) (ADR-0012/0031),
 eine OpenAI-Anfrage für beide Märkte nur bei Bedarf, hartes EUR-Budget, Provenienz je Versuch (ADR-0013).
 USDC-Depots (`paper.usdc`, Spec 020, ADR-0030): `trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc` plus
 `buyhold-usdc` – Regeln und Signale wie v0.3.1 aus den BTC-EUR-/ETH-EUR-Kerzen, BTC aber ausgeführt und bewertet
 über BTC-USDC und USDC-EUR (Bargeld bleibt Euro), Version `v0.3.1-usdc`; standardmäßig an, abwählbar in den Einstellungen (`BOT_USDC_AGENTS`).
+`buyhold-usdc` ist die Referenz aller Depots; das Euro-Depot `buyhold` läuft seit Spec 021 (ADR-0031) nur mit
+`BOT_BUYHOLD=1` (Labor, Rückweg), seine Historie bleibt in der DB.
 Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`. Weboberfläche (`web`, Spec 006/007): Login, Übersicht
 (Depots, Equity-Verlauf, Lebenszeichen, Entscheidungen, GPT-Kosten, Trades; liest die Bot-DB nur lesend, ADR-0016)
 und Eingabe von OpenAI-Key und Einstellungen per `uv run trading-bot web --data-dir <dir> [--db <pfad>]`, nur auf
@@ -115,7 +117,8 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
     `trade_to_target`, `mark(con, agent, qs, now, costs) -> RiskStop | None` (Drawdown-Stopp, `DRAWDOWN_KILL =
     0.10`), `initialize_buyhold`, `record_quotes` (je Markt), `fresh_quotes` (je Markt), `latest_quotes` (beide
     oder None), `value`, `current_weight`, `covers`, `unquoted_holdings`, `initialize_buyhold_usdc`,
-    `BENCHMARKS` (Buy & Hold und Buy & Hold USDC: kaufen einmal, nie gestoppt)
+    `BENCHMARKS` (Buy & Hold und Buy & Hold USDC: kaufen einmal, nie gestoppt; welche laufen, sagt
+    `BotConfig.benchmarks`)
   - `usdc` (Spec 020, ADR-0030, rein, ohne I/O): Kostenweg der USDC-Depots – `buy(spend, qs)` (€ → USDC zum
     USDC-EUR-Brief · (1 + 0,01 %), 0,10 % Gebühr; → BTC zum BTC-USDC-Brief · (1 + 0,05 %), 0,05 % Gebühr),
     `sell(qty, qs)` (umgekehrt zum Geld), `btc_mid` (BTC-USDC-Mitte · USDC-EUR-Mitte), `roundtrip_cost` (0,42 % +
@@ -142,7 +145,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   Equity-Punkt. Vor den klassischen Entscheidungen und vor der Schlussbewertung werden Quotes, die älter als 20 s
   sind, neu geholt. Ein Markt ohne Bestand trägt genau 0,0 bei, deshalb sind Entscheidungen mit Teil-Quotes
   bitgleich zu denen mit beiden (`partial=True` nur aus den Zyklen; Arena-Aufrufe ohne beide Quotes bleiben
-  `STALE_QUOTE`). Buy & Hold kauft je Markt einmal und nur mit beiden Quotes.
+  `STALE_QUOTE`). Buy & Hold kauft je Markt einmal und nur mit beiden Quotes. Ist es aus (Spec 021, Standard),
+  berührt eine Runde `buyhold` nirgends: kein Depot auf einer neuen DB, kein Kauf, keine Bewertung, kein
+  Drawdown; vorhandene Zeilen bleiben, wieder an wird es einfach weiter bewertet.
   Drawdown-Stopp wie Arena (`mark_and_risk`, ADR-0021): Equity < 90 % des Allzeithochs (Mittelkurs) → `halted`,
   Zwangsverkauf aller Bestände als `RISK_SELL` zu `bid × (1 − Slippage)` mit Gebühr (auch unter 50 €), nie für
   Buy & Hold; geprüft bei jeder Bewertung. Freigabe nur auf Anforderung aus der Weboberfläche; dann
@@ -187,7 +192,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `due`: `Cadence.from_env`, `llm_due(con, agent, mids, signals, now, cadence)`, `hourly_limit_reached`
   - `budget`: `Pricing`, `Limits`, `Attempt`, `Usage`, `reserve` (committet vor dem Aufruf), `settle`,
     `charged_today`, `BudgetBlocked`
-  - `agents`: `load_config(env) -> BotConfig` (`classic`, `llm: LlmSettings`), `MODEL_PRICES`
+  - `agents`: `load_config(env) -> BotConfig` (`classic`, `llm: LlmSettings`, `usdc`, `buyhold`; `depots` =
+    gewählte Depots plus `benchmarks`: `buyhold` nur mit `BOT_BUYHOLD=1`, `buyhold-usdc` mit einem USDC-Depot),
+    `MODEL_PRICES`
   - `openai_client`: `SignalModel`-Protocol, `OpenAIResponses` (Responses API, strict `json_schema`, `store=False`,
     60 s je Anfrage, SDK ohne Wiederholung, eigene Wiederholung ≤ 2 nur bei 429/5xx), `ModelReply.problem()`,
     `ModelReply.requests`
@@ -245,7 +252,11 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
     `DbUnavailable`
   - `overview`: `load(con, now, shares, service=)` → `Overview` (Depots, Equity-Reihen über den Index ausgedünnt,
     Lebenszeichen, letzte Kauf-/Verkaufssignale je Depot und Markt ohne HOLD aus den neuesten 50 000
-    Entscheidungen, GPT heute, Trades, Kurse); `service_pulse(status, now)`
+    Entscheidungen, GPT heute, Trades, Kurse, `reference`); `service_pulse(status, now)`. Spec 021: alle Listen
+    nur mit aktiven Depots (neuester Equity-Punkt ≤ `ACTIVE_SECONDS` = 1 h älter als der neueste der DB bzw. als
+    der letzte Kurs eines gehaltenen Markts in `market`, wenn der älter ist; vor der ersten Runde alle); `depots(con)` liefert alle mit `active` (Freigabeliste). Referenz der Spalte „vs.“:
+    `buyhold-usdc`, sonst `buyhold`, falls aktiv; vs = Rendite seit dem ersten Equity-Punkt der Referenz minus
+    deren Rendite seit dort, in Prozentpunkten („–“ ohne Punkt des Depots zu oder vor diesem Zeitpunkt)
   - `auth`: `PasswordStore` (scrypt; neue Passwörter ≥ 12 Zeichen, nicht häufig), `password_problem`,
     `LoginGuard` (5 Fehlversuche → 60 s; öffentlich verdoppelnd bis 1 h), `PublicGuard` (je Client-Adresse, IPv6
     je /64, globale Obergrenze, vergisst 24 h nach dem letzten Fehlversuch bzw. der Sperre), `DeviceKeys` (signiertes Geräte-Cookie, 90 Tage), `Sessions` (12 h, im Speicher)
@@ -268,8 +279,8 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 ## Datenfluss & Nebenläufigkeit
 `build_snapshots` holt je Markt die Kerzen für 1/15/60/240 min, danach einmal die Quotes (sie veralten am
 schnellsten), dann die Prüfung je Markt. `paper_cycle`: Freigaben anwenden → Quotes holen und je Markt speichern →
-frische Quotes aus der DB (ohne jeden Ende ohne Entscheidung) → Buy & Hold initialisieren (beide Quotes, keine
-Pause; mit USDC-Depots auch Buy & Hold USDC auf BTC-USDC, USDC-EUR, ETH-EUR) → Snapshots → Quotes älter als 20 s neu holen → je Markt eine Entscheidung pro neuem abgeschlossenem Bar
+frische Quotes aus der DB (ohne jeden Ende ohne Entscheidung) → Buy & Hold initialisieren (nur mit
+`BOT_BUYHOLD=1`, beide Quotes, keine Pause; mit USDC-Depots Buy & Hold USDC auf BTC-USDC, USDC-EUR, ETH-EUR) → Snapshots → Quotes älter als 20 s neu holen → je Markt eine Entscheidung pro neuem abgeschlossenem Bar
 des Strategie-Zeitrahmens (trend 60 min, sonst 15 min; USDC-Depots wie ihre Basis, mit den Kosten ihres
 Wegs) → GPT-Depots (luna, sol) mit demselben
 Snapshot: je Depot frische Quotes? fällig? (stündlich, Bewegung ≥ 1,8 % oder Wechsel eines Referenzsignals, ≥ 10 min
@@ -295,7 +306,9 @@ Rundenergebnis, nur die Zähler `observations_*` in der Statusdatei.
 ## Build, Konfiguration & Deployment
 Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariablen: `TRADING_MODE`; `BOT_AGENTS`
 (Standard `gpt-luna,gpt-sol`, klassische wählbar); `BOT_USDC_AGENTS` (Spec 020: fehlt = alle vier USDC-Depots,
-leer = keins; nie in `BOT_AGENTS`, damit ein Release vor 020 nach einem Rollback dieselbe Datei liest); `TAKER_FEE` 0,0025 und `SLIPPAGE` 0,0005 je Seite, erlaubt
+leer = keins; nie in `BOT_AGENTS`, damit ein Release vor 020 nach einem Rollback dieselbe Datei liest);
+`BOT_BUYHOLD` (Spec 021: fehlt = Euro-Buy-&-Hold aus, genau `1` an, `0` aus, sonst Konfigurationsfehler; nur in der
+Umgebung, `secrets.env` kennt das Feld nicht); `TAKER_FEE` 0,0025 und `SLIPPAGE` 0,0005 je Seite, erlaubt
 [0, 0,05]; `OPENAI_API_KEY`; `LLM_EFFORT` (`low`); `LLM_DAILY_BUDGET_EUR` (3) und `LLM_DAILY_BUDGET_EUR_GPT_LUNA`/
 `_GPT_SOL` (0,50/2,50); `LLM_MIN_INTERVAL_SECONDS` (3600), `LLM_EVENT_COOLDOWN_SECONDS` (600),
 `LLM_EVENT_MOVE_THRESHOLD` (0,018), `LLM_MAX_CALLS_PER_HOUR` (4); optional `OPENAI_MODEL_<DEPOT>` mit

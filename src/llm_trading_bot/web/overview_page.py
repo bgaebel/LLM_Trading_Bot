@@ -8,7 +8,7 @@ from html import escape
 
 from llm_trading_bot.market.models import QUOTE_MARKETS
 from llm_trading_bot.paper.db import START_CASH
-from llm_trading_bot.paper.execution import BUYHOLD, DRAWDOWN_KILL
+from llm_trading_bot.paper.execution import BENCHMARKS, BUYHOLD, DRAWDOWN_KILL
 from llm_trading_bot.paper.usdc import BUYHOLD_USDC
 from llm_trading_bot.web import pages
 from llm_trading_bot.web.overview import (
@@ -21,6 +21,7 @@ from llm_trading_bot.web.overview import (
     LlmToday,
     Overview,
     Pulse,
+    Reference,
     Series,
     TradeRow,
     epoch,
@@ -32,6 +33,8 @@ Not 60 s: in lockstep with the 60-s rounds every load would show the same age (S
 CHART_W, CHART_H = 800, 260
 PLOT = (64, 16, 788, 222)
 """Left, top, right, bottom of the plot area inside the chart's viewBox."""
+LABELS = {BUYHOLD: "Buy & Hold", BUYHOLD_USDC: "Buy & Hold USDC"}
+"""How the benchmarks are named in the ticker and in the "vs." column."""
 NBSP = " "
 
 
@@ -95,7 +98,7 @@ def _pulses(pulses: Sequence[Pulse]) -> str:
     return f'<div class="pulses">{items}</div>'
 
 
-def _depots(rows: Sequence[DepotRow]) -> str:
+def _depots(rows: Sequence[DepotRow], reference: Reference | None = None) -> str:
     def name(d: DepotRow) -> str:
         badges = ' <span class="badge">Referenz</span>' if d.reference else ""
         if d.usdc:
@@ -135,7 +138,9 @@ def _depots(rows: Sequence[DepotRow]) -> str:
         "Depot",
         "Equity",
         "seit Start",
-        "vs. Buy &amp; Hold",
+        f"vs. {escape(LABELS[reference.agent])} <small>(seit dessen Start)</small>"
+        if reference
+        else "vs. Buy &amp; Hold",
         f"vom Hoch <small>(Stopp bei {signed(-DRAWDOWN_KILL * 100, ' %', 0)})</small>",
         "Cash",
         "BTC",
@@ -166,7 +171,7 @@ def equity_chart(series: Sequence[Series]) -> str:
     lines = []
     legend = []
     for n, s in enumerate(drawn):
-        tone = "bench" if s.agent == BUYHOLD else f"c{n % 4}"
+        tone = "bench" if s.agent in BENCHMARKS else f"c{n % 4}"
         pts = " ".join(f"{x(t)},{y(v)}" for t, v in s.points)
         lines.append(f'<polyline class="eq-line {tone}" points="{pts}"/>')
         last_t, last_v = s.points[-1]
@@ -327,9 +332,21 @@ def ticker(view: Overview) -> list[tuple[str, str]]:
         newest = max(view.quotes, key=lambda q: q.ts)
         items.append(("Kurse", f"{when(newest.ts, seconds=True)} · {newest.source}"))
     for d in view.depots:
-        label = {BUYHOLD: "Buy & Hold", BUYHOLD_USDC: "Buy & Hold USDC"}.get(d.agent, d.agent)
+        label = LABELS.get(d.agent, d.agent)
         items.append((label, f"{money(d.value)} · {signed(d.pnl_pct, ' %')}"))
     return [*items, ("Modus", "Paper – kein Echtgeld")] if items else list(pages.TICKER)
+
+
+def _comparison(reference: Reference | None) -> str:
+    """Footnote of the depot table: against what and since when "vs." is measured (Spec 021)."""
+    if reference is None:
+        return "pp = Prozentpunkte gegenüber Buy &amp; Hold; gerade läuft keine Referenz."
+    name = escape(LABELS[reference.agent])
+    return (
+        f"pp = Prozentpunkte gegenüber {name} seit dessen Start ({escape(when(reference.since))}):"
+        " Rendite des Depots seit diesem Zeitpunkt minus Rendite der Referenz; „–“ bei der "
+        "Referenz selbst und bei Depots, die erst danach begonnen haben."
+    )
 
 
 def _readouts(view: Overview) -> str:
@@ -413,9 +430,10 @@ def overview_page(
             + "</section>"
             + '<section class="panel span-12">'
             + pages._head("03", "Depots", "warm")
-            + _depots(view.depots)
+            + _depots(view.depots, view.reference)
             + '<p class="hint">Startkapital je Depot 10 000 €; Werte nach Gebühren und Slippage. '
-            "pp = Prozentpunkte gegenüber Buy &amp; Hold.</p></section>"
+            + _comparison(view.reference)
+            + "</p></section>"
             + '<section class="panel span-12 real">'
             + pages._head("04", "Equity-Verlauf · echte Paper-Daten")
             + equity_chart(view.series)

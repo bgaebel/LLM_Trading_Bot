@@ -220,7 +220,13 @@ def print_cycle(report: CycleReport, costs: Costs, *, out: TextIO) -> None:
         print("no fresh quotes - no decisions, nothing traded", file=out)
         return
     bought = report.buyhold_bought
-    print(f"buy & hold: {f'bought {bought} market(s)' if bought else 'already invested'}", file=out)
+    if not report.buyhold:
+        print("buy & hold: off (BOT_BUYHOLD)", file=out)
+    else:
+        print(
+            f"buy & hold: {f'bought {bought} market(s)' if bought else 'already invested'}",
+            file=out,
+        )
     if bought_usdc := report.buyhold_usdc_bought:
         print(f"buy & hold USDC: bought {bought_usdc} market(s)", file=out)
     for o in report.llm:

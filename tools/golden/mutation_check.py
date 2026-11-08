@@ -17,8 +17,12 @@ Spec 020 adds the USDC route as group "usdc" (labels starting with "usdc "): fee
 of the books, the cost input of the signals and the fail-closed checks, run against the USDC
 tests only. The v0.3.1 mutants above keep guarding the v0.3.1 path.
 
+Spec 021 adds the switched-off euro buy & hold as group "buyhold" (labels starting with
+"buyhold "): the switch and its default, the skipped purchase, which depots the overview shows,
+the choice of the reference and the "vs." formula, run against the Spec 021 tests only.
+
 Usage: uv run python tools/golden/mutation_check.py [--only] [strategy|paper|llm|service|broker|
-cli|usdc]
+cli|usdc|buyhold]
 """
 
 import os
@@ -1086,8 +1090,8 @@ USDC = [
     (UW, "        if d.usdc:\n", "        if False:\n", "usdc badge shown"),
     (
         UA,
-        "return (BUYHOLD, BUYHOLD_USDC) if self.usdc else (BUYHOLD,)",
-        "return (BUYHOLD,)",
+        "return euro + ((BUYHOLD_USDC,) if self.usdc else ())",
+        "return euro",
         "usdc benchmark runs with the usdc depots",
     ),
     (
@@ -1144,10 +1148,181 @@ USDC = [
 M += USDC
 USDC_LABELS = {label for *_, label in USDC}
 
+# Spec 021 (ADR-0031): the euro buy & hold depot switched off, buy & hold USDC as the reference.
+BA, BC, BV, BW = "llm/agents.py", "paper/cycle.py", "web/overview.py", "web/overview_page.py"
+BUYHOLD_OFF = [
+    (BA, 'raw = env.get(field, "0")', 'raw = env.get(field, "1")', "buyhold off by default"),
+    (
+        BA,
+        "    buyhold: bool = False\n",
+        "    buyhold: bool = True\n",
+        "buyhold off when built by hand",
+    ),
+    (BA, 'if raw not in ("0", "1"):', 'if raw not in ("0", "1", ""):', "buyhold switch strict"),
+    (
+        BA,
+        "return BotConfig(classic, None, usdc, buyhold)",
+        "return BotConfig(classic, None, usdc)",
+        "buyhold switch reaches the classic config",
+    ),
+    (
+        BA,
+        "return BotConfig(classic, settings, usdc, buyhold)",
+        "return BotConfig(classic, settings, usdc)",
+        "buyhold switch reaches the gpt config",
+    ),
+    (
+        BA,
+        "euro = (BUYHOLD,) if self.buyhold else ()",
+        "euro = (BUYHOLD,)",
+        "buyhold left out of the benchmarks",
+    ),
+    (
+        BC,
+        "if config.buyhold and set(qs) == set(SYMBOLS)",
+        "if set(qs) == set(SYMBOLS)",
+        "buyhold purchase skipped when off",
+    ),
+    (
+        BC,
+        "paused=controls.paused, buyhold=config.buyhold)",
+        "paused=controls.paused)",
+        "buyhold off reported",
+    ),
+    (BV, "ACTIVE_SECONDS = DELAYED_SECONDS\n", "ACTIVE_SECONDS = 1800\n", "buyhold active window"),
+    (
+        BV,
+        "(at is not None and at >= since)",
+        "(at is not None and at > since)",
+        "buyhold active window boundary",
+    ),
+    (
+        BV,
+        "since is None or (at is not None",
+        "(at is not None",
+        "buyhold every depot shown before the first round",
+    ),
+    (
+        BV,
+        "        [d for d in rows if d.active],\n",
+        "        rows,\n",
+        "buyhold left out of the table",
+    ),
+    (
+        BV,
+        "equity_series(con, agents=sorted(shown))",
+        "equity_series(con)",
+        "buyhold left out of the chart",
+    ),
+    (
+        BV,
+        "[d for d in decisions if d.agent in shown]",
+        "decisions",
+        "buyhold left out of the signals",
+    ),
+    (
+        BV,
+        "recent_trades(con, agents=shown)",
+        "recent_trades(con)",
+        "buyhold left out of the trades",
+    ),
+    (
+        BV,
+        "REFERENCES = (BUYHOLD_USDC, BUYHOLD)",
+        "REFERENCES = (BUYHOLD, BUYHOLD_USDC)",
+        "buyhold usdc preferred as reference",
+    ),
+    (
+        BV,
+        "for a in REFERENCES if a in shown), None)",
+        "for a in REFERENCES), None)",
+        "buyhold reference must be shown",
+    ),
+    (
+        BV,
+        '"SELECT ts, value FROM equity WHERE agent=? ORDER BY ts LIMIT 1"',
+        '"SELECT ts, value FROM equity WHERE agent=? ORDER BY ts DESC LIMIT 1"',
+        "buyhold reference starts at its first point",
+    ),
+    (
+        BV,
+        '"SELECT value FROM equity WHERE agent=? AND ts<=? ORDER BY ts DESC LIMIT 1"',
+        '"SELECT value FROM equity WHERE agent=? AND ts<? ORDER BY ts DESC LIMIT 1"',
+        "buyhold depot point at the reference start",
+    ),
+    (
+        BV,
+        'return (d.value / float(base["value"]) - 1) * 100',
+        "return (d.value / START_CASH - 1) * 100",
+        "buyhold depot measured since the reference start",
+    ),
+    (
+        BV,
+        "- (ref_now / ref.start - 1) * 100",
+        "- (ref_now / START_CASH - 1) * 100",
+        "buyhold reference measured since its start",
+    ),
+    (
+        BV,
+        "if d.agent == ref.agent or d.at is None",
+        "if d.at is None",
+        "buyhold reference row shows a dash",
+    ),
+    (
+        BV,
+        "bound = min(bound, ts)",
+        "bound = max(bound, ts)",
+        "buyhold active window ends at a held market's last quote",
+    ),
+    (
+        BV,
+        "return None  # never quoted",
+        "continue  # never quoted",
+        "buyhold depot with a never quoted market stays shown",
+    ),
+    (
+        BV,
+        "if held == 0:",
+        "if held != 0:",
+        "buyhold active window looks at held markets only",
+    ),
+    (
+        BV,
+        '(Symbol.BTCEUR, r["p_btc"]), (Symbol.ETHEUR, r["p_eth"])',
+        '(Symbol.BTCEUR, r["p_eth"]), (Symbol.ETHEUR, r["p_btc"])',
+        "buyhold active window reads each market's holding",
+    ),
+    (
+        BV,
+        "for market in route_markets(agent, symbol):",
+        "for market in (symbol,):",
+        "buyhold active window follows the usdc route",
+    ),
+    (
+        BW,
+        'f"vs. {escape(LABELS[reference.agent])} <small>',
+        'f"vs. Buy &amp; Hold <small>',
+        "buyhold header names the reference",
+    ),
+    (
+        BW,
+        "gegenüber {name} seit dessen Start",
+        "gegenüber Buy &amp; Hold seit dessen Start",
+        "buyhold footnote names the reference",
+    ),
+]
+M += BUYHOLD_OFF
+BUYHOLD_LABELS = {label for *_, label in BUYHOLD_OFF}
+
 # Top-level modules and the tests that cover them (Spec 012).
 TOP_LEVEL = {"core.py": "cli", "cli.py": "cli"}
 GROUP_TESTS = {
     "cli": ["tests/test_core.py", "tests/test_cli.py"],
+    "buyhold": [
+        "tests/paper/test_buyhold_off.py",
+        "tests/web/test_reference.py",
+        "tests/test_cli.py",
+    ],
     "usdc": [
         "tests/market/test_usdc_quotes.py",
         "tests/paper/test_usdc_execution.py",
@@ -1176,6 +1351,8 @@ def main() -> int:
         def group_of(fname: str, label: str) -> str:
             if label in USDC_LABELS:
                 return "usdc"
+            if label in BUYHOLD_LABELS:
+                return "buyhold"
             if fname in TOP_LEVEL:
                 return TOP_LEVEL[fname]
             return fname.split("/")[0] if "/" in fname else "strategy"
@@ -1190,7 +1367,7 @@ def main() -> int:
                 print(f"{'PATTERN MISSING':16} {label}")
                 failures.append(label)
                 continue
-            if group == "usdc" and original.count(old) != 1:
+            if group in ("usdc", "buyhold") and original.count(old) != 1:
                 # A docstring repeating the code would take the mutation instead (Spec 020).
                 print(f"{'PATTERN AMBIGUOUS':16} {label}")
                 failures.append(label)

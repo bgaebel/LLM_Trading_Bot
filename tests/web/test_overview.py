@@ -36,7 +36,8 @@ def write(path: Path, *cycles_at: float) -> None:
             paper_cycle(
                 con,
                 ScenarioClient(),
-                load_config({"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": ""}),
+                # Written before Spec 021: with the euro buy & hold depot (off by default since).
+                load_config({"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": "", "BOT_BUYHOLD": "1"}),
                 costs=Costs(),
                 model=FakeModel(),
                 clock=fixed(at),
@@ -82,14 +83,25 @@ def test_depots_show_the_latest_equity_with_buyhold_last(con: sqlite3.Connection
         assert not d.halted
 
 
-def test_depots_compare_against_buyhold_in_percentage_points(con: sqlite3.Connection) -> None:
-    rows = {d.agent: d for d in overview.depots(con)}
+def test_depots_compare_against_buyhold_in_percentage_points(tmp_path: Path) -> None:
+    # Without USDC depots Buy & Hold is the reference (Spec 021): compared since its first
+    # equity point, the purchase in the first round, so a second round is needed.
+    path = tmp_path / "bot.db"
+    write(path, NOW, NOW + 60)
+    with reading(path) as con:
+        rows = {d.agent: d for d in overview.depots(con)}
+        first = {
+            r["agent"]: r["value"]
+            for r in con.execute("SELECT * FROM equity WHERE ts=(SELECT MIN(ts) FROM equity)")
+        }
     bench = rows[BUYHOLD]
     assert bench.reference and bench.vs_buyhold_pp is None
     # The fake GPT buys 25 % of each market, Buy & Hold is fully invested: both paid fees.
     assert bench.pnl_eur < 0 and rows["gpt-luna"].btc > 0
+    bench_pct = (bench.value / first[BUYHOLD] - 1) * 100
     for agent in ("gpt-luna", "gpt-sol"):
-        assert rows[agent].vs_buyhold_pp == pytest.approx(rows[agent].pnl_pct - bench.pnl_pct)
+        own = (rows[agent].value / first[agent] - 1) * 100
+        assert rows[agent].vs_buyhold_pp == pytest.approx(own - bench_pct)
 
 
 def test_depots_before_the_first_cycle_show_the_start_cash(tmp_path: Path) -> None:

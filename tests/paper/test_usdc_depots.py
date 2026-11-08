@@ -34,16 +34,20 @@ from llm_trading_bot.paper.risk import Controls
 from llm_trading_bot.web.credentials import SecretsFile, load_env_file
 
 CLASSIC = ("trend", "breakout", "meanrev", "ensemble")
-ALL_USDC = BotConfig(CLASSIC, None, USDC_AGENTS)
+# Written before Spec 021: with the euro buy & hold depot beside them (off by default since).
+ALL_USDC = BotConfig(CLASSIC, None, USDC_AGENTS, buyhold=True)
+BUYHOLD_ON = {"BOT_BUYHOLD": "1"}
 
 
 def test_config_knows_the_usdc_depots_and_adds_their_benchmark() -> None:
     assert USDC_AGENTS == ("trend-usdc", "breakout-usdc", "meanrev-usdc", "ensemble-usdc")
-    config = load_config({"BOT_AGENTS": "trend", USDC_FIELD: "meanrev-usdc,trend-usdc"})
+    config = load_config(
+        {**BUYHOLD_ON, "BOT_AGENTS": "trend", USDC_FIELD: "meanrev-usdc,trend-usdc"}
+    )
     assert (config.classic, config.usdc) == (("trend",), ("meanrev-usdc", "trend-usdc"))
     assert config.agents == ("trend", "meanrev-usdc", "trend-usdc")
     assert config.depots == (*config.agents, BUYHOLD, usdc.BUYHOLD_USDC)
-    plain = load_config({"BOT_AGENTS": "trend", USDC_FIELD: ""})
+    plain = load_config({**BUYHOLD_ON, "BOT_AGENTS": "trend", USDC_FIELD: ""})
     assert plain.usdc == () and plain.depots == ("trend", BUYHOLD)
     # The benchmark runs by itself and cannot be chosen; nor can a depot of the other list.
     for wrong, message in (
@@ -151,7 +155,7 @@ def test_buyhold_usdc_waits_for_its_quotes_and_for_the_end_of_a_pause(
 
 
 def test_without_usdc_depots_there_is_no_usdc_benchmark(tmp_path: Path) -> None:
-    config = BotConfig(("trend",), None)
+    config = BotConfig(("trend",), None, buyhold=True)
     con = db(tmp_path / "bot.db", config)
     try:
         report = paper_cycle(con, UsdcScenarioClient(), config, costs=Costs(), clock=lambda: NOW)
@@ -186,7 +190,7 @@ def rows_of(con: sqlite3.Connection, agents: tuple[str, ...]) -> dict[str, list[
 def test_v031_depots_and_buyhold_are_byte_identical_with_usdc_depots_beside_them(
     tmp_path: Path, btc: str, eth: str
 ) -> None:
-    v031 = BotConfig(CLASSIC, None)
+    v031 = BotConfig(CLASSIC, None, buyhold=True)
     seen = {}
     for name, config, client in (
         ("alone", v031, ScenarioClient(btc, eth)),
@@ -298,7 +302,7 @@ def test_buyhold_usdc_refuses_missing_or_broken_quotes(con: sqlite3.Connection) 
 
 
 def test_usdc_depots_alone_decide_and_trade(tmp_path: Path) -> None:
-    config = BotConfig((), None, ("trend-usdc",))
+    config = BotConfig((), None, ("trend-usdc",), buyhold=True)
     con = db(tmp_path / "bot.db", config)
     try:
         report = paper_cycle(con, UsdcScenarioClient(), config, costs=Costs(), clock=lambda: NOW)

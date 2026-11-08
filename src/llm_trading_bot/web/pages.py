@@ -35,7 +35,7 @@ TICKER = (
     ("Kerzen", "nur abgeschlossene"),
     ("gpt-luna", "Haupt-Trader"),
     ("gpt-sol", "Gegenprobe"),
-    ("Buy & Hold", "Referenz"),
+    ("Buy & Hold USDC", "Referenz"),
     ("GPT", "nur bei Bedarf · max. 4/h"),
     ("Budget", "hartes EUR-Tageslimit"),
     ("Fail closed", "keine Order ohne frische Kurse"),
@@ -628,8 +628,9 @@ def settings_page(
         '<section class="panel span-12">'
         + _head("03", "Depots", "warm")
         + f'<div class="tiles">{depots}</div>'
-        '<p class="hint">Buy &amp; Hold läuft immer als Referenz mit, Buy &amp; Hold USDC '
-        "dazu, sobald ein USDC-Depot läuft. USDC-Depots handeln BTC über BTC-USDC "
+        '<p class="hint">Buy &amp; Hold USDC läuft als Referenz mit, sobald ein USDC-Depot '
+        "läuft; das Euro-Buy-&amp;-Hold-Depot ist abgeschaltet, seine Historie bleibt "
+        "(ADR-0031). USDC-Depots handeln BTC über BTC-USDC "
         "(0,05 % statt 0,25 % Gebühr) und tauschen je Trade Euro in USDC und zurück.</p>"
         "</section>"
         '<section class="panel span-12">'

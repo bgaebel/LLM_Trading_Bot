@@ -175,9 +175,31 @@ kein Neustart (der Dienst liest die Einstellungen jede Runde).
   Einstellungen, entfernt sie `BOT_USDC_AGENTS`; nach dem nächsten Deploy ab 020 laufen dann wieder alle vier
   (Standard) – bei Bedarf erneut abwählen.
 
+### Euro-Buy-&-Hold abgeschaltet (Spec 021, ADR-0031)
+Seit Spec 021 läuft das Euro-Depot `buyhold` nicht mehr; Referenz der Übersicht („vs. Buy & Hold USDC“) ist
+`buyhold-usdc`. Kein Befehl nötig: Der Deploy allein schaltet es ab (fehlt `BOT_BUYHOLD`, ist es aus).
+
+- Danach steht im Journal kein `trade buyhold bought …` mehr, und die Rundenzeile `round ok … | equity …` nennt
+  `buyhold` nicht mehr. Seine Zeilen in `bot.db` bleiben unverändert (Depot, Entscheidungen, Trades, Equity).
+- Die Übersicht zeigt ein Depot nur, solange sein neuester Equity-Punkt höchstens 1 h älter ist als der neueste
+  der DB – oder als der letzte gespeicherte Kurs eines Markts, den es hält, wenn der älter ist: `buyhold`
+  verschwindet also spätestens 1 h nach dem Deploy (auch aus Laufband, Signalen und Trades, mit und ohne Login),
+  ein Kursausfall eines Markts blendet dagegen kein Depot aus, egal wie lange. Gleiches gilt für ein in den
+  Einstellungen abgewähltes Depot.
+- „vs.“ = Rendite des Depots seit dem ersten Equity-Punkt von `buyhold-usdc` minus dessen Rendite seit dort, in
+  Prozentpunkten; „–“ für die Referenz selbst und für Depots, die erst danach begonnen haben. Ohne USDC-Depots ist
+  `buyhold` die Referenz, falls es läuft, sonst gibt es keine.
+- **Wieder einschalten** (z. B. zum Vergleich): per Drop-in (siehe unten) `Environment=BOT_BUYHOLD=1`, dann
+  `sudo systemctl restart llm-trading-bot`. Das Depot wird ab der nächsten Runde weiter bewertet, ohne erneut zu
+  kaufen; seine Equity-Linie hat eine Lücke. Wieder aus: die Zeile entfernen (oder `BOT_BUYHOLD=0`) und neu starten.
+  Nur genau `1` oder `0` – jeder andere Wert ist ein Konfigurationsfehler, der Dienst startet dann nicht
+  (`configuration error: BOT_BUYHOLD must be 1 or 0: …`).
+- Rollback auf ein Release vor Spec 021 braucht keine Vorbereitung: Es betreibt Buy & Hold immer und bewertet es
+  einfach weiter (kein zweiter Kauf).
+
 ### Variablen außerhalb von `secrets.env`
-In `secrets.env` stehen nur Key, Depots, Effort, Budgets sowie Handelspause und Freigaben (Weboberfläche). Gebühren, Takt-Parameter oder
-`LOG_LEVEL` setzt man per Drop-in; ein Update ändert Drop-ins nie (es prüft das sogar):
+In `secrets.env` stehen nur Key, Depots, Effort, Budgets sowie Handelspause und Freigaben (Weboberfläche). Gebühren, Takt-Parameter,
+`BOT_BUYHOLD` oder `LOG_LEVEL` setzt man per Drop-in; ein Update ändert Drop-ins nie (es prüft das sogar):
 ```bash
 ssh -t <alias> 'sudo systemctl edit llm-trading-bot'
 ```
