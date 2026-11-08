@@ -53,6 +53,7 @@ from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
 from llm_trading_bot.paper.observations import ObservationBuffer, ObservationWriter
+from llm_trading_bot.paper.observations_schema import create
 from llm_trading_bot.paper.risk import Controls
 
 P = 1_793_577_600
@@ -663,6 +664,191 @@ def test_archive_not_covering_is_skipped(live: Live, tmp_path: Path) -> None:
     assert sum(s.compared.values()) + len(skipped) == sum(full.compared.values())
     assert failing(s) == []
     assert "übersprungen" in s.note
+
+
+D = P
+"""The day of the coverage probe (window start of 1m)."""
+DAY = 86_400
+
+
+def coverage_archive(path: Path, *, earlier: str, today: int | None = None) -> Archive:
+    """BTC-EUR rows of every interval up to D + 1 day, all windows complete, except the 1m
+    window of the day before D: ``earlier`` = "done", "open" (a fetch at D-1 12:00 left it
+    with rows up to 11:58) or "missing" (never fetched); ``today``: 1m window D was last
+    fetched then (open, the rows settled by then)."""
+    late = D + 30 * DAY
+    archive = Archive(path)
+    for interval in INTERVALS:
+        step = interval * 60
+        first = D - 2 * DAY if interval == 1 else D - 600 * step
+        by_window: dict[int, list[StoredRow]] = {}
+        for ts in range(first, D + DAY, step):
+            by_window.setdefault(window_start(interval, ts), []).append(
+                (ts, "1.00", "1.00", "1.00", "1.00", "1.00")
+            )
+        for start, rows in sorted(by_window.items()):
+            fetched = late
+            if interval == 1 and start == D and today is not None:
+                fetched = today
+                rows = [r for r in rows if r[0] + step + 60 <= fetched]
+            if interval == 1 and start == D - DAY:
+                if earlier == "missing":
+                    continue
+                if earlier == "open":
+                    fetched = D - DAY + 12 * 3600
+                    rows = [r for r in rows if r[0] + step + 60 <= fetched]
+            archive.store_window("BTC-EUR", interval, start, rows, fetched_at=fetched)
+    return archive
+
+
+@pytest.mark.parametrize("earlier", ["open", "missing"])
+def test_coverage_checks_earlier_windows_the_lead_reaches(tmp_path: Path, earlier: str) -> None:
+    """Review probe: ``lab fetch`` on D-1 at 12:00 left 1m window D-1 open, a later
+    ``lab fetch --start D`` never fetched it again. The 500 rows of a snapshot at D 00:05
+    reach back into that gap: not covered, rather than deviations blamed on the live code."""
+    with coverage_archive(tmp_path / CANDLES_FILE, earlier=earlier) as archive:
+        state = archive.window_state("BTC-EUR", 1, D)
+        assert state is not None and state.status == "done"
+        assert archive.count_before("BTC-EUR", 1, D + 301) >= CANDLE_LIMIT
+        assert fidelity.archive_coverage(archive)("BTC-EUR", D + 300) is False
+        # Once the 500 rows lie inside window D, the gap no longer matters.
+        assert fidelity.archive_coverage(archive)("BTC-EUR", D + 600 * 60) is True
+
+
+def test_coverage_with_complete_windows(tmp_path: Path) -> None:
+    with coverage_archive(tmp_path / CANDLES_FILE, earlier="done") as archive:
+        covered = fidelity.archive_coverage(archive)
+        assert covered("BTC-EUR", D + 300) is True
+        assert covered("ETH-EUR", D + 300) is False  # no rows at all
+
+
+def test_coverage_of_the_forming_window(tmp_path: Path) -> None:
+    """The window of the forming bar may be open if it was fetched after that bar settled."""
+    with coverage_archive(tmp_path / CANDLES_FILE, earlier="done", today=D + 420) as archive:
+        state = archive.window_state("BTC-EUR", 1, D)
+        assert state is not None and state.status == "open"
+        covered = fidelity.archive_coverage(archive)
+        assert covered("BTC-EUR", D + 300) is True  # bar 00:05 closed 00:06, settled 00:07
+        assert covered("BTC-EUR", D + 360) is False  # bar 00:06 was still forming then
+
+
+def old_windows(con: sqlite3.Connection, symbol: Symbol, epoch: int) -> object:
+    """The per-snapshot SQL the lookup replaced: the reference for its answers."""
+    r = con.execute(
+        "SELECT id FROM rounds WHERE ts<=? AND ts>=? ORDER BY id DESC LIMIT 1",
+        (fidelity._iso(epoch), fidelity._iso(epoch - 30)),
+    ).fetchone()
+    if r is None:
+        return None
+    ok = con.execute(
+        "SELECT 1 FROM snapshots WHERE round_id=? AND symbol=? AND status='ok'",
+        (r[0], symbol.name),
+    ).fetchone()
+    if ok is None:
+        return None
+    out = {}
+    for interval in INTERVALS:
+        w = con.execute(
+            "SELECT rows, first_open, last_open, forming, rows_sha256 FROM windows"
+            " WHERE symbol=? AND interval=? AND round_id<=? ORDER BY id DESC LIMIT 1",
+            (symbol.name, interval, r[0]),
+        ).fetchone()
+        if w is None:
+            return None
+        out[interval] = fidelity.ObservedWindow(int(w[0]), w[1], w[2], bool(w[3]), str(w[4]))
+    return out
+
+
+def synthetic_obs(path: Path, rounds: int) -> None:
+    """Rounds every minute (some with fractional seconds, ids not in time order), snapshots
+    mostly ok, windows written when they change, with ids not in round order either."""
+    create(path)
+    rng = random.Random(f"obs/{rounds}")
+    con = sqlite3.connect(path)
+    ids = list(range(1, rounds + 1))
+    for k in range(0, rounds - 1, 7):
+        ids[k], ids[k + 1] = ids[k + 1], ids[k]
+    window_ids = iter(rng.sample(range(1, 10 * rounds), 9 * rounds))
+    with con:
+        for k, rid in enumerate(ids):
+            at = P + k * 60 + rng.randrange(0, 4)
+            ts = fidelity._iso(at) if k % 3 else fidelity._utc(at).replace("+", ".25+")
+            con.execute("INSERT INTO rounds(id, ts, release) VALUES (?, ?, 'r')", (rid, ts))
+            for symbol in (Symbol.BTCEUR, Symbol.ETHEUR):
+                status = "ok" if rng.randrange(10) else "error"
+                con.execute(
+                    "INSERT INTO snapshots(round_id, ts, symbol, status, decided)"
+                    " VALUES (?, ?, ?, ?, 1)",
+                    (rid, ts, symbol.name, status),
+                )
+                for interval in INTERVALS:
+                    if k and rng.randrange(interval) and k % 50:
+                        continue
+                    con.execute(
+                        "INSERT INTO windows(id, round_id, ts, symbol, interval, rows,"
+                        " first_open, last_open, forming, rows_sha256)"
+                        " VALUES (?, ?, ?, ?, ?, 500, ?, ?, ?, ?)",
+                        (
+                            next(window_ids),
+                            rid,
+                            ts,
+                            symbol.name,
+                            interval,
+                            at - 500 * interval * 60,
+                            at,
+                            rng.randrange(2),
+                            f"{rid}/{interval}",
+                        ),
+                    )
+            con.execute(
+                "INSERT INTO decision_meta(ts, agent, symbol, bar_ts, strategy,"
+                " strategy_version, release, indicators) VALUES (?, 'trend', 'BTCEUR', ?,"
+                " 'trend', '1', 'r', '{\"rsi\": 1.0}')",
+                (ts, at),
+            )
+    con.close()
+
+
+def test_observation_lookup_answers_as_the_sql(tmp_path: Path) -> None:
+    path = tmp_path / "observations.db"
+    synthetic_obs(path, 600)
+    con = open_readonly(path)
+    try:
+        obs = fidelity.Observations(con)
+        seen = 0
+        for epoch in range(P - 40, P + 600 * 60 + 40, 13):
+            for symbol in (Symbol.BTCEUR, Symbol.ETHEUR):
+                want = old_windows(con, symbol, epoch)
+                assert obs.windows(symbol, epoch) == want, (symbol, epoch)
+                seen += want is not None
+        assert seen > 1000
+    finally:
+        con.close()
+
+
+def test_observation_lookups_go_through_an_index(tmp_path: Path) -> None:
+    """Review finding: one full read of rounds and windows per snapshot made months of
+    observations take hours. After the one load at the start, every statement per snapshot
+    is an indexed search (no table scan, no sort) and there are at most six of them."""
+    path = tmp_path / "observations.db"
+    synthetic_obs(path, 300)
+    con = open_readonly(path)
+    try:
+        obs = fidelity.Observations(con)
+        traced: list[str] = []
+        con.set_trace_callback(traced.append)
+        calls = 0
+        for k in range(300):
+            calls += 1
+            obs.windows(Symbol.BTCEUR, P + k * 60 + 5)
+            obs.indicators(Symbol.BTCEUR, ("trend", P + k * 60, None))
+        con.set_trace_callback(None)
+        assert 0 < len(traced) <= 6 * calls
+        for sql in set(traced):
+            plan = " | ".join(str(r[3]) for r in con.execute("EXPLAIN QUERY PLAN " + sql))
+            assert "SCAN" not in plan and "TEMP B-TREE" not in plan, (sql, plan)
+    finally:
+        con.close()
 
 
 def digest(path: Path) -> dict[str, str]:
