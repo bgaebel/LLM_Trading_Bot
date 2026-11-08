@@ -2,6 +2,8 @@
 a round never touches it, every other depot writes the same rows as with it, its history stays
 as it is, and switching it back on (or a rollback to a release before 021) values it again."""
 
+import ast
+import inspect
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
@@ -50,10 +52,34 @@ def test_buyhold_switch_is_off_by_default_and_strict() -> None:
             load_config({**base, BUYHOLD_FIELD: wrong})
         with pytest.raises(ValueError, match="BOT_BUYHOLD must be 1 or 0"):
             load_config({**gpt, BUYHOLD_FIELD: wrong})
-    # Built by hand (the strategy lab), it is off unless asked for.
+    # Built by hand (tests, the strategy lab of Spec 016), it is off unless asked for.
     assert BotConfig(("trend",), None).buyhold is False
     # The web UI keeps only its own fields in secrets.env: the switch belongs in the environment.
     assert BUYHOLD_FIELD not in FIELDS and parse("BOT_BUYHOLD=1\n") == {}
+
+
+def test_strategy_lab_asks_for_buyhold_where_it_expects_it() -> None:
+    """Checker defect 2 (Spec 021, Risiken): the lab of Spec 016 opens a buy & hold depot but
+    builds its config by hand, where buy & hold is now off; merged without asking for it, its
+    buy & hold would neither buy nor be valued. A tripwire for that merge: skipped until the lab
+    is on the same branch, then every ``BotConfig`` the backtest builds must name ``buyhold``."""
+    model = pytest.importorskip("llm_trading_bot.lab.model")
+    backtest = pytest.importorskip("llm_trading_bot.lab.backtest")
+    if BUYHOLD not in model.DEPOTS:
+        return
+    tree = ast.parse(inspect.getsource(backtest))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "BotConfig"
+    ]
+    assert calls, "the lab builds no BotConfig - check how it runs buy & hold"
+    for call in calls:
+        assert any(k.arg == "buyhold" for k in call.keywords), (
+            f"lab/backtest.py:{call.lineno}: BotConfig without buyhold= runs no buy & hold"
+        )
 
 
 def test_benchmarks_follow_both_switches() -> None:

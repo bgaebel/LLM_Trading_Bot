@@ -67,7 +67,8 @@ class BotConfig:
     """Selected USDC depots (Spec 020); empty: the bot runs exactly as before."""
     buyhold: bool = False
     """Spec 021 (ADR-0031): run the euro buy & hold depot. Off unless asked for, so nothing
-    that builds a config by hand starts it by accident; the strategy lab switches it on."""
+    that builds a config by hand starts it by accident: also not the strategy lab (Spec 016),
+    which must ask for it with ``buyhold=True`` where it compares with buy & hold."""
 
     @property
     def agents(self) -> tuple[str, ...]:
