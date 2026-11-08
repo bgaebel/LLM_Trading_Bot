@@ -25,7 +25,8 @@ under the old trial would shrink N for the multiple-testing corrections - the da
 
 Because nothing can ever be removed, ``record`` refuses what the register must never hold: any
 quarter reaching into the sealed period (ADR-0026) unless it is a number-free ``sealed`` entry,
-day points or trades outside the quarter, and values whose daily return is undefined.
+day points, trades or stops outside the quarter, non-finite numbers and values whose daily
+return is undefined.
 """
 
 import calendar
@@ -39,7 +40,7 @@ import re
 import shutil
 import sqlite3
 import time
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -309,17 +310,51 @@ def _day_start(day: str) -> int:
     return calendar.timegm(date.timetuple())
 
 
+def _finite(where: str, values: Mapping[str, object]) -> None:
+    """Refuse NaN and infinities: ``to_json`` would write them as non-standard ``NaN`` and every
+    sum or return over them is meaningless."""
+    for name, value in values.items():
+        if not isinstance(value, int | float) or not math.isfinite(value):
+            raise RegisterError(f"{where}: {name} {value!r} not finite")
+
+
+def _check_sealed(result: QuarterResult) -> None:
+    """A sealed entry only records that a run was refused (ADR-0026). Any number in it - even
+    a round count or an assumed spread - could only come from running the sealed period, and the
+    register can never remove it again. ``seconds`` is the refusal's own runtime."""
+    q = result.quarter
+    if not q.sealed:
+        raise RegisterError(f"{q.label} lies before the sealed period: status 'sealed' wrong")
+    numbers = [
+        name
+        for name, present in (
+            ("depot results", any(d != DepotResult(d.agent) for d in result.depots.values())),
+            ("daily mids", any(result.daily_mid.values())),
+            ("quality", bool(result.quality)),
+            ("spread", bool(result.spread)),
+            ("rounds", result.rounds != 0),
+        )
+        if present
+    ]
+    if numbers:
+        raise RegisterError(
+            f"{q.label}: a sealed entry carries no numbers, found {', '.join(numbers)}"
+        )
+
+
 def check_result(result: QuarterResult) -> None:
     """Raise RegisterError for anything the append-only register must never hold.
 
     Runs before anything is written: a wrong row could never be removed again.
 
     - a quarter reaching into the sealed period (ADR-0026) only with status ``sealed``, and then
-      without numbers (no day points, trades or daily mids) - the sealed data stays unseen;
-      ``sealed`` is likewise refused for a quarter outside the sealed period;
+      without any number (``_check_sealed``) - the sealed data stays unseen; ``sealed`` is
+      likewise refused for a quarter outside the sealed period;
     - every day point (depot days, daily mids) must be a UTC day overlapping the quarter
-      ``[start, end)``, depot days strictly increasing, values finite;
-    - every trade must lie in ``[start, end)``;
+      ``[start, end)``, strictly increasing, with finite values; a daily mid's first entry may
+      instead be the day before the quarter (the base of day 1, see ``lab.metrics``);
+    - every trade and a drawdown stop must lie in ``[start, end)``; trade, cash, weight, end
+      value and spread numbers must be finite;
     - the daily returns must be defined (see ``daily_returns``).
     """
     if not _STATUS.fullmatch(result.status):
@@ -331,37 +366,63 @@ def check_result(result: QuarterResult) -> None:
             f"{SEALED_STATUS!r} may be recorded, not {result.status!r}"
         )
     if result.status == SEALED_STATUS:
-        if not q.sealed:
-            raise RegisterError(f"{q.label} lies before the sealed period: status 'sealed' wrong")
-        numbers = any(d.days or d.trades for d in result.depots.values()) or any(
-            result.daily_mid.values()
-        )
-        if numbers:
-            raise RegisterError(
-                f"{q.label}: a sealed entry carries no day points, trades or daily mids"
-            )
+        _check_sealed(result)
 
     def check_day(where: str, day: str) -> None:
-        start = _day_start(day)
+        try:
+            start = _day_start(day)
+        except RegisterError as exc:
+            raise RegisterError(f"{where}: {exc}") from exc
         if not (start < q.end and start + _DAY_SECONDS > q.start):
             raise RegisterError(f"{where}: day {day} outside {q.label} [{q.start}, {q.end})")
 
     for name, depot in sorted(result.depots.items()):
+        where = f"depot {name}"
         prev_day = ""
         for point in depot.days:
-            check_day(f"depot {name}", point.day)
+            check_day(where, point.day)
             if point.day <= prev_day:
-                raise RegisterError(f"depot {name}: day {point.day} not after {prev_day}")
-            if not math.isfinite(point.value):
-                raise RegisterError(f"depot {name} {point.day}: value {point.value} not finite")
+                raise RegisterError(f"{where}: day {point.day} not after {prev_day}")
+            _finite(f"{where} {point.day}", {"value": point.value, "cash": point.cash})
+            _finite(f"{where} {point.day} weight", point.weights)
             prev_day = point.day
         for trade in depot.trades:
             if not q.start <= trade.ts < q.end:
-                raise RegisterError(f"depot {name}: trade at {trade.ts} outside {q.label}")
+                raise RegisterError(f"{where}: trade at {trade.ts} outside {q.label}")
+            at = f"{where} trade at {trade.ts}"
+            _finite(
+                at,
+                {
+                    "qty": trade.qty,
+                    "fill": trade.fill,
+                    "notional": trade.notional,
+                    "fee": trade.fee,
+                },
+            )
+            # Context numbers are optional facts; only floats can be NaN or infinite.
+            _finite(
+                f"{at} context", {k: v for k, v in trade.context.items() if isinstance(v, float)}
+            )
+        if depot.halted_at is not None and not q.start <= depot.halted_at < q.end:
+            raise RegisterError(f"{where}: drawdown stop at {depot.halted_at} outside {q.label}")
+        _finite(where, {"end_mid": depot.end_mid, "end_liquidated": depot.end_liquidated})
         daily_returns(depot)
+    _finite("spread", result.spread)
+    # The backtest labels the base of day 1 with the day before the quarter (lab.metrics).
+    base_day = _iso(q.start - _DAY_SECONDS)[:10]
     for market, rows in sorted(result.daily_mid.items()):
-        for day, _ in rows:
-            check_day(f"mid {market}", day)
+        where = f"mid {market}"
+        prev_day = ""
+        for n, (day, mid) in enumerate(rows):
+            if not (n == 0 and day == base_day):
+                check_day(where, day)
+            if day <= prev_day:
+                raise RegisterError(f"{where}: day {day} not after {prev_day}")
+            _finite(f"{where} {day}", {"mid": mid})
+            if mid <= 0:
+                # lab.metrics refuses such a benchmark; better to refuse it before it is kept.
+                raise RegisterError(f"{where} {day}: mid {mid} not positive")
+            prev_day = day
 
 
 @dataclass(frozen=True)
@@ -479,6 +540,45 @@ def _tx(con: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     con.execute("COMMIT")
 
 
+def _expected_event(
+    run: sqlite3.Row, kind: str, repeat: int, created_at: str, clean: bool, result_sha: str
+) -> dict[str, Any]:
+    """The chain event ``record`` writes for ``run``: a repeat shares every field with its run
+    except when, from which tree and with which runtime (hence result checksum) it ran."""
+    return {
+        "kind": kind,
+        "created_at": created_at,
+        "run_id": run["id"],
+        "repeat": repeat,
+        "trial_key": run["trial_key"],
+        "config_hash": run["config_hash"],
+        "quarter": run["quarter"],
+        "variant": run["variant"],
+        "diagnostic": bool(run["diagnostic"]),
+        "status": run["status"],
+        "error": run["error"],
+        "graded": bool(run["graded"]),
+        "commit": run["code_commit"],
+        "clean": clean,
+        "dataset_sha256": run["dataset_sha256"],
+        "outcome_sha256": run["outcome_sha256"],
+        "result_sha256": result_sha,
+    }
+
+
+def _differing(event: dict[str, Any], expected: dict[str, Any]) -> list[str]:
+    """Fields that differ, including fields only one side has (``bool`` is not ``int`` here:
+    the chain stores JSON booleans)."""
+    return sorted(
+        k
+        for k in set(event) | set(expected)
+        if k not in event
+        or k not in expected
+        or event[k] != expected[k]
+        or type(event[k]) is not type(expected[k])
+    )
+
+
 def _check_run(
     run: sqlite3.Row,
     first: tuple[int, dict[str, Any]] | None,
@@ -492,24 +592,10 @@ def _check_run(
         problems.append(f"run {run_id}: stored result does not match its hash")
     if first is not None:
         n, event = first
-        expected = {
-            "repeat": 1,
-            "created_at": run["created_at"],
-            "trial_key": run["trial_key"],
-            "config_hash": run["config_hash"],
-            "quarter": run["quarter"],
-            "variant": run["variant"],
-            "diagnostic": bool(run["diagnostic"]),
-            "status": run["status"],
-            "error": run["error"],
-            "graded": bool(run["graded"]),
-            "commit": run["code_commit"],
-            "clean": bool(run["clean"]),
-            "dataset_sha256": run["dataset_sha256"],
-            "outcome_sha256": run["outcome_sha256"],
-            "result_sha256": run["result_sha256"],
-        }
-        if differing := sorted(k for k, v in expected.items() if event.get(k) != v):
+        expected = _expected_event(
+            run, "run", 1, run["created_at"], bool(run["clean"]), run["result_sha256"]
+        )
+        if differing := _differing(event, expected):
             problems.append(f"run {run_id}: differs from event {n} in {', '.join(differing)}")
     try:
         result = QuarterResult.from_json(run["result_json"])
@@ -877,12 +963,15 @@ class Register:
             for i, (row, (n, event)) in enumerate(zip(rows, later, strict=False), start=2):
                 if firsts and n < firsts[0][0]:
                     problems.append(f"event {n}: repeat of run {run_id} before the run")
-                if (event.get("result_sha256"), event.get("repeat"), event.get("clean")) != (
-                    row["result_sha256"],
-                    i,
-                    bool(row["clean"]),
-                ) or event.get("created_at") != row["created_at"]:
-                    problems.append(f"run {run_id}: repeat {i} differs from event {n}")
+                # Every field: a repeat naming another commit or outcome, or claiming a clean
+                # tree, would otherwise prove a dirty run and lower trial_count() unnoticed.
+                expected = _expected_event(
+                    run, "repeat", i, row["created_at"], bool(row["clean"]), row["result_sha256"]
+                )
+                if differing := _differing(event, expected):
+                    problems.append(
+                        f"run {run_id}: repeat {i} differs from event {n} in {', '.join(differing)}"
+                    )
         for run_id in sorted(set(by_run) - run_ids, key=str):
             problems.append(f"chain events for run {run_id}, which runs.db does not have")
         for run_id in sorted(repeats):

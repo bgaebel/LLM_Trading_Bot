@@ -31,10 +31,12 @@ from llm_trading_bot.lab.register import (
     GitRunner,
     Register,
     RegisterError,
+    canonical,
     code_state,
     config_hash,
     daily_returns,
     head_from_files,
+    sha256_text,
     trial_key,
     verify_chain,
 )
@@ -288,21 +290,47 @@ def test_sealed_period_refused(tmp_path: Path) -> None:
             reg.record(result("2025Q4"))
         with pytest.raises(RegisterError, match="sealed period"):
             reg.record_aborted(sealed_q, Variant(), "boom")
-        with pytest.raises(RegisterError, match="no day points"):
+        with pytest.raises(RegisterError, match="carries no numbers"):
             reg.record(result("2025Q4", status="sealed"))
-        with pytest.raises(RegisterError, match="no day points"):
+        with pytest.raises(RegisterError, match="carries no numbers"):
             reg.record(
                 QuarterResult(sealed_q, Variant(), "sealed", daily_mid={"BTC-EUR": [("x", 1.0)]})
             )
+        # Review finding: without days and trades, sealed numbers still got in (end values,
+        # stop, decisions, data quality, spreads, rounds). Each one alone is refused.
+        numbers: list[dict[str, object]] = [
+            {"depots": {"trend": DepotResult("trend", end_mid=10_234.5)}},
+            {"depots": {"trend": DepotResult("trend", end_liquidated=10_200.0)}},
+            {"depots": {"trend": DepotResult("trend", halted_at=sealed_q.start + 60)}},
+            {"depots": {"trend": DepotResult("trend", actions={"BUY/OK": 7})}},
+            {"quality": {"BTC-EUR": MarketQuality("BTC-EUR", 8000, 7900, {"gap_1h": 3}, 5)}},
+            {"quality": {"BTC-EUR": MarketQuality("BTC-EUR")}},
+            {"spread": {"BTC-EUR": 0.0012}},
+            {"rounds": 8000},
+        ]
+        for fields in numbers:
+            sealed = QuarterResult(sealed_q, Variant(), "sealed")
+            for name, value in fields.items():
+                setattr(sealed, name, value)
+            with pytest.raises(RegisterError, match="carries no numbers"):
+                reg.record(sealed)
         with pytest.raises(RegisterError, match="before the sealed period"):
             reg.record(QuarterResult(Quarter.parse("2025Q3"), Variant(), "sealed"))
         assert_nothing_written(reg)
-        # The refusal itself is a number-free entry and may be recorded.
-        empty = DepotResult("trend")
-        rec = reg.record(QuarterResult(sealed_q, Variant(), "sealed", depots={"trend": empty}))
+        # The refusal itself is a number-free entry and may be recorded; its runtime may stay.
+        refusal = QuarterResult(
+            sealed_q,
+            Variant(),
+            "sealed",
+            depots={"trend": DepotResult("trend")},
+            daily_mid={"BTC-EUR": []},
+            seconds=0.02,
+        )
+        rec = reg.record(refusal)
         assert (
             reg.returns(rec.run_id) == {} and reg.list_runs(status="sealed")[0].quarter == "2025Q4"
         )
+        assert reg.result(rec.run_id) == refusal
         assert reg.verify().ok
 
 
@@ -338,6 +366,83 @@ def test_day_points_outside_quarter_refused(tmp_path: Path) -> None:
         ok.depots["trend"].trades.append(Trade(q3.end - 1, "trend", "BTC-EUR", "BUY", 1, 1, 1, 0))
         ok.daily_mid = {"BTC-EUR": [("2025-07-01", 1.0), ("2025-09-30", 1.0)]}
         reg.record(ok)
+        assert reg.verify().ok
+
+
+def test_daily_mid_checked_like_depot_days(tmp_path: Path) -> None:
+    # Review finding: only format and quarter were checked; NaN, repeats and disorder got in.
+    def with_mid(*rows: tuple[str, float]) -> QuarterResult:
+        return result("2025Q3", daily_mid={"BTC-EUR": list(rows)})
+
+    with open_reg(tmp_path) as reg:
+        for bad in (
+            [("2025-07-05", math.nan)],
+            [("2025-07-05", math.inf)],
+            [("2025-07-05", 0.0)],  # lab.metrics refuses a mid <= 0
+            [("2025-07-05", 1.0), ("2025-07-02", 1.0)],  # out of order
+            [("2025-07-02", 1.0), ("2025-07-02", 2.0)],  # repeated
+            [("2025-07-01", 1.0), ("2025-06-30", 1.0)],  # base day only as the first entry
+            [("2025-06-29", 1.0), ("2025-07-01", 1.0)],  # two days before the quarter
+            [("2025-6-30", 1.0)],  # malformed
+            [("2025-09-30", 1.0), ("2025-10-01", 1.0)],  # the exclusive end
+        ):
+            with pytest.raises(RegisterError, match="mid BTC-EUR"):
+                reg.record(with_mid(*bad))
+        assert_nothing_written(reg)
+        # The convention of lab.metrics and the backtest: base of day 1 labelled the day before.
+        reg.record(with_mid(("2025-06-30", 1.0), ("2025-07-01", 1.1), ("2025-09-30", 1.2)))
+        # A market quoted only from mid-quarter on: its base lies inside the quarter.
+        reg.record(with_mid(("2025-08-01", 1.0), ("2025-08-02", 1.1)))
+        assert reg.verify().ok and len(reg.list_runs()) == 2
+
+
+def test_stop_and_numbers_checked(tmp_path: Path) -> None:
+    # Review finding: stop time, trade numbers, cash and weights were not checked at all.
+    q3 = Quarter.parse("2025Q3")
+    good = Trade(q3.start + 60, "trend", "BTC-EUR", "BUY", 0.1, 30_000.0, 3_000.0, 7.5)
+
+    def changed(
+        point: DayPoint | None = None,
+        spread: dict[str, float] | None = None,
+        **depot: object,
+    ) -> QuarterResult:
+        res = result("2025Q3", spread=spread or {})
+        trend = res.depots["trend"]
+        if point is not None:
+            trend.days[0] = point
+        for name, value in depot.items():
+            setattr(trend, name, value)
+        return res
+
+    first = result("2025Q3").depots["trend"].days[0]
+    bad = [
+        changed(halted_at=q3.end),
+        changed(halted_at=q3.start - 1),
+        changed(halted_at=10**10),
+        changed(trades=[dataclasses.replace(good, qty=math.nan)]),
+        changed(trades=[dataclasses.replace(good, fill=math.inf)]),
+        changed(trades=[dataclasses.replace(good, notional=-math.inf)]),
+        changed(trades=[dataclasses.replace(good, fee=math.nan)]),
+        changed(trades=[dataclasses.replace(good, context={"vol": math.nan})]),
+        changed(end_mid=math.nan),
+        changed(end_liquidated=math.inf),
+        changed(point=dataclasses.replace(first, cash=math.nan)),
+        changed(point=dataclasses.replace(first, weights={"BTC-EUR": math.inf})),
+        changed(spread={"BTC-EUR": math.nan}),
+    ]
+    with open_reg(tmp_path) as reg:
+        for res in bad:
+            with pytest.raises(RegisterError, match=r"outside|not finite"):
+                reg.record(res)
+        assert_nothing_written(reg)
+        context = {"vol": 0.01, "regime": "TREND", "direction": None}
+        reg.record(
+            changed(
+                spread={"BTC-EUR": 0.001},
+                halted_at=q3.end - 1,
+                trades=[dataclasses.replace(good, context=context)],
+            )
+        )
         assert reg.verify().ok
 
 
@@ -434,6 +539,64 @@ def test_verify_checks_repeat_against_its_event(tmp_path: Path) -> None:
     con.close()
     with open_reg(tmp_path) as reg:
         assert has(reg.verify().problems, "run 1: repeat 2 differs from event 2")
+
+
+def append_event(folder: Path, reg: Register, event: dict[str, object]) -> None:
+    """Append ``event`` to chain and ``events`` table the way ``record`` does, so the chain
+    itself stays intact: only the table check in verify() can see what is wrong."""
+    (head,) = reg.con.execute("SELECT sha256 FROM events ORDER BY seq DESC LIMIT 1").fetchone()
+    seq = 1 + reg.con.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    sha = sha256_text(canonical({"seq": seq, "prev_sha256": head, "event": event}))
+    line = canonical({"seq": seq, "prev_sha256": head, "event": event, "sha256": sha})
+    reg.con.execute(
+        "INSERT INTO events(seq,created_at,kind,run_id,sha256,line) VALUES (?,?,?,?,?,?)",
+        (seq, event["created_at"], event["kind"], event["run_id"], sha, line),
+    )
+    with (folder / CHAIN_FILE).open("a", encoding="utf-8", newline="\n") as f:
+        f.write(line + "\n")
+
+
+def forge_repeat(folder: Path, **fields: object) -> list[str]:
+    """verify() problems after adding a repeat row and a valid chain line for it whose event
+    is the run's own event (as ``record`` writes a repeat) with ``fields`` changed."""
+    with open_reg(folder, clean=False) as reg:
+        reg.record(result())
+        run_event = json.loads((folder / CHAIN_FILE).read_text(encoding="utf-8"))["event"]
+        event = {
+            **run_event,
+            "kind": "repeat",
+            "repeat": 2,
+            "created_at": "x",
+            "clean": True,
+            "result_sha256": "y",
+            **fields,
+        }
+        reg.con.execute(
+            "INSERT INTO repeats(run_id,created_at,clean,seconds,result_sha256) "
+            "VALUES (1,'x',1,0,'y')"
+        )
+        append_event(folder, reg, event)
+        return reg.verify().problems
+
+
+def test_verify_checks_every_field_of_a_repeat(tmp_path: Path) -> None:
+    # Review finding: a repeat event naming another commit, outcome, trial, dataset or status
+    # than its run still verified - only checksum, counter, clean flag and time were compared.
+    assert forge_repeat(tmp_path / "control") == []  # the forgery itself is built correctly
+    for name, value in {
+        "commit": OTHER,
+        "outcome_sha256": "e" * 64,
+        "trial_key": "f" * 64,
+        "dataset_sha256": "e" * 64,
+        "config_hash": "f" * 64,
+        "status": "aborted",
+        "graded": False,
+        "diagnostic": 0,  # an int where the chain holds a JSON boolean
+        "quarter": "2022Q2",
+        "proven": True,  # a field the run event does not have
+    }.items():
+        problems = forge_repeat(tmp_path / name, **{name: value})
+        assert problems == [f"run 1: repeat 2 differs from event 2 in {name}"], name
 
 
 def test_copy_chain_never_overwrites(tmp_path: Path) -> None:
@@ -547,7 +710,13 @@ def git_dir(root: Path, head: str, refs: dict[str, str], packed: str = "") -> Pa
 
 
 def test_head_from_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(CEILING_ENV, raising=False)
+    # Like a dotfiles repo in the home above the temp folder: without the ceiling at the test's
+    # own folder, "nowhere" below would find that checkout (review finding: machine-dependent).
+    home = tmp_path / "home"
+    git_dir(home, "c" * 40, {})
+    tmp_path = home / "tmp"
+    tmp_path.mkdir()
+    monkeypatch.setenv(CEILING_ENV, str(tmp_path))
     loose = tmp_path / "loose"
     git_dir(loose, "ref: refs/heads/main", {"refs/heads/main": COMMIT})
     (loose / "src" / "pkg").mkdir(parents=True)
@@ -577,6 +746,8 @@ def test_head_from_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     git_dir(broken, "ref: refs/heads/gone", {})
     assert head_from_files(broken) == UNKNOWN_COMMIT
     assert head_from_files(tmp_path / "nowhere") == UNKNOWN_COMMIT
+    monkeypatch.delenv(CEILING_ENV)
+    assert head_from_files(tmp_path / "nowhere") == "c" * 40  # the ceiling made it unknown
 
 
 def test_head_from_files_matches_git(monkeypatch: pytest.MonkeyPatch) -> None:
