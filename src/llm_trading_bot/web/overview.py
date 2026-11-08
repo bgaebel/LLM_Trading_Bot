@@ -16,7 +16,7 @@ from llm_trading_bot.llm.due import iso
 from llm_trading_bot.market.models import QUOTE_MARKETS, SYMBOLS, Symbol
 from llm_trading_bot.paper.db import START_CASH
 from llm_trading_bot.paper.execution import BENCHMARKS, BUYHOLD
-from llm_trading_bot.paper.usdc import BUYHOLD_USDC, is_usdc
+from llm_trading_bot.paper.usdc import BUYHOLD_USDC, is_usdc, route_markets
 from llm_trading_bot.service.status import ServiceStatus
 
 MAX_POINTS = 240
@@ -32,9 +32,11 @@ SERVICE_RUNNING_SECONDS = 3 * 60
 SERVICE_DELAYED_SECONDS = 15 * 60
 ACTIVE_SECONDS = DELAYED_SECONDS
 """Spec 021 (ADR-0031): a depot is shown while its newest equity point is at most this much
-older than the newest one of the database. The web cannot see which depots the bot runs
-(ADR-0016), but a running depot gets a point every round; a switched-off one leaves within an
-hour, while a depot that misses some rounds (a held market without a fresh quote) stays."""
+older than the newest round in which it could have been valued: the newest equity point of the
+database, or the latest stored quote of a market it holds if that is older. The web cannot see
+which depots the bot runs (ADR-0016); a running depot gets a point in every round that has fresh
+quotes for all it holds, so a quote outage of one market never hides the depots holding it,
+however long it lasts, while a switched-off depot leaves within an hour."""
 REFERENCES = (BUYHOLD_USDC, BUYHOLD)
 """Spec 021: the reference of the "vs." column, preferred first, among the shown depots."""
 
@@ -129,6 +131,31 @@ def _vs(con: sqlite3.Connection, d: DepotRow, ref: Reference, ref_now: float) ->
     return (d.value / float(base["value"]) - 1) * 100 - (ref_now / ref.start - 1) * 100
 
 
+def _active_since(
+    agent: str, r: sqlite3.Row, newest: str | None, quoted: Mapping[str, str]
+) -> str | None:
+    """Oldest equity stamp that still counts as active (``ACTIVE_SECONDS``); None: shown anyway.
+
+    The bot values a depot only in rounds with a fresh quote for every market it holds
+    (``paper.cycle``, Spec 011 AK8), so the bound is the newest round of the database, or the
+    latest stored quote of a held market if that is older. Without it an outage of one market
+    longer than an hour would hide every depot holding it, the reference included.
+    """
+    if newest is None:
+        return None  # before the first round every depot is shown at its start cash
+    bound = newest
+    for symbol, held in ((Symbol.BTCEUR, r["p_btc"]), (Symbol.ETHEUR, r["p_eth"])):
+        if held == 0:
+            continue
+        for market in route_markets(agent, symbol):
+            ts = quoted.get(market.name)
+            if ts is None:
+                return None  # never quoted: the depot could not have been valued since
+            # Quote and equity stamps are both due.iso: string order is time order.
+            bound = min(bound, ts)
+    return iso(epoch(bound) - ACTIVE_SECONDS)
+
+
 def _depots(con: sqlite3.Connection) -> tuple[list[DepotRow], Reference | None]:
     rows = con.execute(
         "SELECT p.agent, p.halted, p.peak, p.cash AS p_cash, p.btc AS p_btc, p.eth AS p_eth,"
@@ -149,9 +176,10 @@ def _depots(con: sqlite3.Connection) -> tuple[list[DepotRow], Reference | None]:
     # Equity stamps are whole seconds in one ISO format (due.iso): string order is time order.
     stamps: list[str] = [r["ts"] for r in rows if r["ts"] is not None]
     newest = max(stamps, default=None)
-    since = None if newest is None else iso(epoch(newest) - ACTIVE_SECONDS)
+    quoted = {m["symbol"]: m["ts"] for m in con.execute("SELECT symbol, ts FROM market")}
     out = []
     for agent, value, cash, btc, eth, at, r in raw:
+        since = _active_since(agent, r, newest, quoted)
         pct = (value / START_CASH - 1) * 100
         peak = r["peak"]
         out.append(

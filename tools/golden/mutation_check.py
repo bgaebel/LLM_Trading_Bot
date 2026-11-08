@@ -1269,6 +1269,36 @@ BUYHOLD_OFF = [
         "buyhold reference row shows a dash",
     ),
     (
+        BV,
+        "bound = min(bound, ts)",
+        "bound = max(bound, ts)",
+        "buyhold active window ends at a held market's last quote",
+    ),
+    (
+        BV,
+        "return None  # never quoted",
+        "continue  # never quoted",
+        "buyhold depot with a never quoted market stays shown",
+    ),
+    (
+        BV,
+        "if held == 0:",
+        "if held != 0:",
+        "buyhold active window looks at held markets only",
+    ),
+    (
+        BV,
+        '(Symbol.BTCEUR, r["p_btc"]), (Symbol.ETHEUR, r["p_eth"])',
+        '(Symbol.BTCEUR, r["p_eth"]), (Symbol.ETHEUR, r["p_btc"])',
+        "buyhold active window reads each market's holding",
+    ),
+    (
+        BV,
+        "for market in route_markets(agent, symbol):",
+        "for market in (symbol,):",
+        "buyhold active window follows the usdc route",
+    ),
+    (
         BW,
         'f"vs. {escape(LABELS[reference.agent])} <small>',
         'f"vs. Buy &amp; Hold <small>',

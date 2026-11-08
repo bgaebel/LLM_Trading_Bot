@@ -11,6 +11,7 @@ from fakes import FakeClock, UsdcScenarioClient
 from golden_scenarios import NOW
 from llm_trading_bot.llm.agents import BotConfig
 from llm_trading_bot.llm.due import iso
+from llm_trading_bot.market.models import Symbol
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
@@ -111,6 +112,99 @@ def test_a_depot_stays_shown_for_an_hour_after_its_last_valuation(tmp_path: Path
     view = view_of(path)
     assert [d.agent for d in view.depots] == ["trend"]
     assert [s.agent for s in view.series] == ["trend"]
+
+
+def test_a_long_quote_outage_of_one_market_hides_no_depot(tmp_path: Path) -> None:
+    """Checker defect 1: without a fresh ETH quote the bot values no depot holding ETH (Spec 011
+    AK8), while the others keep getting points. Measured against the newest point of the
+    database alone, every depot holding ETH - the reference included - left after an hour."""
+    on = BotConfig(("trend", "meanrev"), None, ("trend-usdc",), True)
+    off = BotConfig(("trend", "meanrev"), None, ("trend-usdc",))
+    stopped = tmp_path / "bot.db"
+    rounds(stopped, on, 0)
+    rounds(stopped, off, 60, HOUR + 1)
+    con = open_db(stopped, agents=off.depots)
+    try:
+        client = UsdcScenarioClient()
+        client.bad_quotes = {Symbol.ETHEUR}
+        clock = FakeClock(NOW)
+        reports = []
+        for step in (HOUR + 120, 2 * HOUR, 3 * HOUR):
+            clock.now = NOW + step
+            reports.append(paper_cycle(con, client, off, costs=Costs(), clock=clock))
+    finally:
+        con.close()
+    # The probe really is an outage: the ETH holders got no point in any of the rounds, while a
+    # depot without ETH did (else the newest point of the database would not move on).
+    holders = {u.agent for r in reports for u in r.unvalued if u.symbol is Symbol.ETHEUR}
+    assert {BUYHOLD_USDC, "trend", "trend-usdc"} <= holders
+    valued = {e.agent for r in reports for e in r.equity}
+    assert valued == {"meanrev"}
+    view = view_of(stopped, NOW + 3 * HOUR + 5)
+    assert [d.agent for d in view.depots] == ["meanrev", "trend", "trend-usdc", BUYHOLD_USDC]
+    assert view.reference is not None and view.reference.agent == BUYHOLD_USDC
+    rows = {d.agent: d for d in view.depots}
+    assert rows["trend"].vs_buyhold_pp is not None
+    assert BUYHOLD_USDC in {s.agent for s in view.series}
+    # The switched-off depot also holds ETH, but its last point is older than the last ETH quote
+    # by more than an hour: it stays hidden.
+    with reading(stopped) as ro:
+        assert not next(d for d in overview.depots(ro) if d.agent == BUYHOLD).active
+
+
+def holdings(path: Path, held: dict[str, tuple[float, float]], quoted: dict[Symbol, int]) -> None:
+    """Depot holdings (btc, eth) and the time of each market's latest stored quote."""
+    con = sqlite3.connect(path)
+    try:
+        with con:
+            con.executemany(
+                "UPDATE portfolios SET btc=?, eth=? WHERE agent=?",
+                [(btc, eth, a) for a, (btc, eth) in held.items()],
+            )
+            con.executemany(
+                "INSERT INTO market(symbol,ts,bar_ts,bid,ask,last_close,source)"
+                " VALUES (?,?,0,1,1,1,'TEST')",
+                [(m.name, iso(T0 + t)) for m, t in quoted.items()],
+            )
+    finally:
+        con.close()
+
+
+def test_the_active_window_ends_at_the_last_quote_of_a_held_market(tmp_path: Path) -> None:
+    path = tmp_path / "bot.db"
+    late = 2 * HOUR
+    old = [(0, 10_000.0), (600, 10_000.0)]
+    history(
+        path,
+        {
+            "meanrev": [(0, 10_000.0), (late, 10_000.0)],  # holds nothing, valued every round
+            "trend": old,  # holds ETH: no ETH quote since 600 s
+            "breakout": old,  # holds nothing: no excuse for missing rounds
+            "ensemble": old,  # holds BTC only, which is quoted
+            "trend-usdc": old,  # its BTC is priced over BTC-USDC, never quoted
+            "meanrev-usdc": old,  # holds ETH, like trend
+        },
+    )
+    holdings(
+        path,
+        {
+            "trend": (0.0, 0.1),
+            "ensemble": (0.1, 0.0),
+            "trend-usdc": (0.1, 0.0),
+            "meanrev-usdc": (0.0, 0.1),
+        },
+        {Symbol.BTCEUR: late, Symbol.ETHEUR: 600, Symbol.USDCEUR: late},
+    )
+    view = view_of(path, T0 + late + 5)
+    assert [d.agent for d in view.depots] == ["meanrev", "meanrev-usdc", "trend", "trend-usdc"]
+    # The bound is the older of the newest point and the held market's last quote, an hour back.
+    holdings(path, {}, {})
+    con = sqlite3.connect(path)
+    with con:
+        con.execute("UPDATE market SET ts=? WHERE symbol='ETHEUR'", (iso(T0 + 601 + HOUR),))
+    con.close()
+    view = view_of(path, T0 + late + 5)
+    assert [d.agent for d in view.depots] == ["meanrev", "trend-usdc"]
 
 
 def test_before_the_first_round_every_depot_is_shown(tmp_path: Path) -> None:
