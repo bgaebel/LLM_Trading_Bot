@@ -772,10 +772,7 @@ def test_usdc_variant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert m.break_even["buyhold"] == plain_m.break_even["buyhold"]
     assert metrics.benchmark(routed, "buyhold") == metrics.benchmark(base, "buyhold")
     assert rows["buyhold"].slippage == pytest.approx(
-        sum(
-            metrics.slippage_cost(t, BASE.slippage)
-            for t in base.depots["buyhold"].trades
-        ),
+        sum(metrics.slippage_cost(t, BASE.slippage) for t in base.depots["buyhold"].trades),
         rel=1e-12,
     )
     bench = metrics.benchmark(routed, usdc.BUYHOLD_USDC)
