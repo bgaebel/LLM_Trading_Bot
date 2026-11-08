@@ -43,6 +43,9 @@ FORBIDDEN_IMPORTS = (
 EXCHANGE_METHODS = {"market_rules", "balances", "submit", "lookup", "cancel_all"}
 ORDER_FUNCTIONS = {"place_order", "create_order", "cancel_order"}
 HTTP_MODULE = "market/http.py"
+# Spec 016: the strategy lab's candle/trade downloader, the only caller of the header variant.
+LAB_FETCH = "lab/archive.py"
+HEADERS_METHOD = "get_json_and_headers"
 BITVAVO_MODULE = "market/bitvavo.py"
 EXCHANGE_PROTOCOL = ("broker/contract.py", "OrderExchange")
 
@@ -88,10 +91,10 @@ def _docstrings(tree: ast.AST) -> set[int]:
     return ids
 
 
-def _strings(tree: ast.AST) -> Iterator[tuple[int, str]]:
-    """Every str and bytes literal except docstrings (bytes: a request line or signing payload
-    is written as bytes just as often)."""
-    skip = _docstrings(tree)
+def _strings(tree: ast.AST, skip: set[int] | None = None) -> Iterator[tuple[int, str]]:
+    """Every str and bytes literal except docstrings and the ``skip`` nodes (bytes: a request
+    line or signing payload is written as bytes just as often)."""
+    skip = _docstrings(tree) | (skip or set())
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or id(node) in skip:
             continue
@@ -118,10 +121,31 @@ def _calls(tree: ast.AST) -> Iterator[ast.Call]:
 # ------------------------------------------------------------------ rules
 
 
+def _public_trades_parts(tree: ast.AST) -> set[int]:
+    """Literal parts of ``f"/{market}/trades?{query}"``: Bitvavo's public market trades (the
+    strategy lab's spread samples, Spec 016 AK6). The private ``/trades`` has no market in the
+    path, so only this exact shape is exempt; any other string with ``/trades`` still fails."""
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr) and len(node.values) == 4:
+            first, market, middle, query = node.values
+            if (
+                isinstance(first, ast.Constant)
+                and first.value == "/"
+                and isinstance(market, ast.FormattedValue)
+                and isinstance(middle, ast.Constant)
+                and middle.value == "/trades?"
+                and isinstance(query, ast.FormattedValue)
+            ):
+                ids.update({id(first), id(middle)})
+    return ids
+
+
 def rule_literals(files: Files) -> list[str]:
     out = []
     for path, text in files.items():
-        for line, value in _strings(ast.parse(text)):
+        tree = ast.parse(text)
+        for line, value in _strings(tree, skip=_public_trades_parts(tree)):
             for bad in FORBIDDEN_LITERALS:
                 if bad in value:
                     out.append(f"{path}:{line}: literal {bad!r}")
@@ -172,10 +196,12 @@ def rule_public_paths(files: Files) -> list[str]:
             if "bitvavo.com" in value and path != BITVAVO_MODULE:
                 out.append(f"{path}:{line}: bitvavo.com outside {BITVAVO_MODULE}")
         for call in _calls(tree):
-            if _name(call.func) in ("_get", "get_json"):
+            if _name(call.func) in ("_get", "get_json", HEADERS_METHOD):
                 if path == BITVAVO_MODULE and _name(call.func) == "_get":
                     if not call.args or not _public_path(call.args[0]):
                         out.append(f"{path}:{call.lineno}: _get with a non-public path")
+                elif path == LAB_FETCH and _name(call.func) == HEADERS_METHOD:
+                    continue  # the lab downloader checks its paths at run time (tests/lab)
                 elif path not in (BITVAVO_MODULE, HTTP_MODULE):
                     out.append(f"{path}:{call.lineno}: {_name(call.func)} outside market/")
     return out
@@ -335,6 +361,12 @@ BAD: list[tuple[str, Rule, str, str]] = [
     ("private _get", rule_public_paths, BITVAVO_MODULE, 'self._get("/markets")'),
     ("odd f-string", rule_public_paths, BITVAVO_MODULE, 'self._get(f"/{m}/book")'),
     ("get_json elsewhere", rule_public_paths, "paper/x.py", 't.get_json("u")'),
+    ("headers elsewhere", rule_public_paths, "lab/x.py", 't.get_json_and_headers("u")'),
+    ("get_json in lab", rule_public_paths, LAB_FETCH, 't.get_json("u")'),
+    ("private trades", rule_literals, "lab/x.py", 'P = "/trades?market=BTC-EUR"'),
+    ("trades f-string", rule_literals, "lab/x.py", 'u = f"{base}/trades"'),
+    ("trades no market", rule_literals, "lab/x.py", 'u = f"/trades?{q}"'),
+    ("trades with prefix", rule_literals, "lab/x.py", 'u = f"/{m}/trades?{q}/order"'),
     ("request elsewhere", rule_http, "paper/x.py", "urllib.request.Request(u)"),
     ("request post", rule_http, HTTP_MODULE, 'urllib.request.Request(u, method="POST")'),
     ("request data", rule_http, HTTP_MODULE, "urllib.request.Request(u, b'x')"),
@@ -376,6 +408,8 @@ def test_each_rule_catches_its_pattern(case: str, rule: Rule, path: str, source:
         (rule_http, HTTP_MODULE, "urllib.request.urlopen(request, timeout=5)"),
         (rule_public_paths, BITVAVO_MODULE, 'self._get("/ticker/book")'),
         (rule_public_paths, BITVAVO_MODULE, 'self._get(f"/{m}/candles?{q}")'),
+        (rule_public_paths, LAB_FETCH, "self._transport.get_json_and_headers(API + path)"),
+        (rule_literals, LAB_FETCH, 'p = f"/{m}/trades?{q}"'),
         (rule_imports, "web/auth.py", "import hmac"),
         (rule_imports, HTTP_MODULE, "import http.client"),
         (rule_scripts, "deploy/web.service", "ExecStart=x web --data-dir /var/lib/x"),

@@ -95,3 +95,30 @@ class UrllibTransport:
             # Absurdly nested JSON is not a ValueError; map it so per-market isolation holds.
             raise TransportError("response JSON nested too deeply") from None
         return result
+
+    def get_json_and_headers(self, url: str) -> tuple[object, dict[str, str]]:
+        """Like ``get_json``, plus the response headers (names in lower case).
+
+        Only the strategy lab's downloader uses this (Spec 016): it paces itself by
+        ``bitvavo-ratelimit-remaining``. A separate method on purpose, so the bot's own path
+        through ``get_json`` stays exactly as it was; the same GET-only request, no auth.
+        """
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": self._user_agent, "Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+                body: bytes = response.read(_MAX_BODY_BYTES)
+                headers = {name.lower(): value for name, value in response.headers.items()}
+        except urllib.error.HTTPError as exc:
+            delay = retry_after_seconds(exc.headers, now=self._clock())
+            raise HTTPFailure(exc.code, delay) from None
+        except http.client.HTTPException as exc:
+            raise TransportError(f"{type(exc).__name__} while reading response") from None
+        try:
+            result: object = json.loads(body.decode("utf-8"))
+        except RecursionError:
+            raise TransportError("response JSON nested too deeply") from None
+        return result, headers
