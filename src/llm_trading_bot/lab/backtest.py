@@ -8,7 +8,15 @@ historical client (``lab.history``) answers like Bitvavo would have at the simul
 Process model: ``run_quarter`` is a top-level function, so a ``ProcessPoolExecutor`` can run
 quarters in parallel. A worker opens the archive read-only and only returns its
 ``QuarterResult``; the main process records every result in the trial register and writes
-nothing else (``run_quarters``).
+nothing else (``run_quarters``). Workers finish in any order, but the register (and the
+progress) gets the results in a fixed order - variant by variant, quarters in time order - so
+the JSONL chain of the same run is the same every time; a crashed quarter is recorded as
+aborted in its own place of that order.
+
+Variants: ``cost-0.6`` (``cost_grid``) has exactly the live costs, so it is the same
+configuration as ``base``. The CLI selections never run it twice: ``base`` is the 0.6 % point
+of the cost grid (``variants``, ``skipped_as_base``); a second, renamed run would cost time and
+count as one more trial in the register without being one.
 
 What a result means (the conventions ``lab.metrics`` and the report rely on):
 
@@ -29,9 +37,19 @@ What a result means (the conventions ``lab.metrics`` and the report rely on):
   - ``no_decision``: rounds in which the market got no snapshot, by the code the live cycle
     gives the failure (``gap_1m``, ``stale``, ``quote_missing`` ...), read through the
     observation hook of ``paper_cycle`` (Spec 015), which never changes what is traded.
-  - ``blocked_rounds``: those rounds whose code is ``gap_15m``, ``gap_60m`` or ``gap_240m``.
-    The snapshot checks the quote first and then the intervals in the order 1m, 15m, 1h, 4h, so
-    such a code means the quote and the 1m bars were fine: only the higher interval blocked.
+    The codes stay exactly the live ones, also where the backtest knows more: a round that
+    fails because the newest 15m/1h/4h bar is missing is counted as ``stale``, like a stale
+    quote or 1m bar, because that is what the live cycle reports.
+  - ``blocked_rounds``: the rounds a higher interval alone blocked. The snapshot checks the
+    quote first and then each interval in the order 1m, 15m, 1h, 4h (count, order, gaps,
+    freshness), so the first failing check names the cause. Blocked are the codes ``gap_15m``,
+    ``gap_60m`` and ``gap_240m`` and the ``stale`` rounds whose failing check was the freshness
+    of a 15m, 1h or 4h bar (read from the live message, ``stale_interval``): in both cases the
+    quote and the 1m bars were fine. One missing 1h bar therefore blocks first as ``stale``
+    (while its slot would be the newest closed bar, about one hour minus the live freshness
+    slack) and then as ``gap_60m`` (while the hole is among the newest 60 bars).
+    ``blocked_rounds`` minus the ``gap_*`` counts of the higher intervals is the part of
+    ``stale`` that came from them; the rest of ``stale`` is quote or 1m staleness.
 - **Depots:** one ``DayPoint`` per UTC day (the depot's last equity point that day, valued at
   mid, weights ``qty * mid / value`` with the mid of that round); ``end_mid`` is the last equity
   value; ``end_liquidated`` sells every holding at ``bid * (1 - slippage)`` minus the fee at the
@@ -57,24 +75,29 @@ only inside the process that runs the quarter, and restored afterwards. Never a 
 version; the register marks the run as diagnostic.
 """
 
-import argparse
 import hashlib
-import importlib
 import json
 import math
 import os
+import re
 import sqlite3
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 
 from llm_trading_bot.lab import archive as archive_mod
-from llm_trading_bot.lab.archive import Archive
+from llm_trading_bot.lab.archive import (
+    Archive,
+    LabArgumentParser,
+    add_dir_option,
+    parse_cli,
+)
+from llm_trading_bot.lab.gitstate import git_runner
 from llm_trading_bot.lab.history import CandleRow, HistoricalClient, MemorySource
 from llm_trading_bot.lab.model import (
     CLASSIC,
@@ -92,7 +115,7 @@ from llm_trading_bot.lab.model import (
     Variant,
 )
 from llm_trading_bot.lab.paths import CANDLES_FILE, CHAIN_FILE, RUNS_FILE, lab_dir
-from llm_trading_bot.lab.register import GitRunner, Register
+from llm_trading_bot.lab.register import Register
 from llm_trading_bot.lab.spread import METHOD, QuarterSpreads
 from llm_trading_bot.llm.agents import BotConfig
 from llm_trading_bot.market import snapshot
@@ -109,8 +132,12 @@ OFFSET = 5
 """Seconds into each minute a round runs, like the service (ADR-0017)."""
 MINUTE = 60
 DAY = 86_400
-BLOCKING_CODES = frozenset({"gap_15m", "gap_60m", "gap_240m"})
+HIGHER_INTERVALS = frozenset(tf for tf in INTERVALS if tf != 1)
+BLOCKING_CODES = frozenset(f"gap_{tf}m" for tf in HIGHER_INTERVALS)
 """Snapshot failures that come only from a gap in a higher interval (see module doc)."""
+_STALE_BARS = re.compile(r"\b(\d+)m data stale or in the future\b")
+"""The live freshness message of one interval (``MarketSnapshot._validate_bars``); a test
+builds it through the live code, so a changed wording fails there instead of undercounting."""
 LIVE_RATIO = (5, 1)
 """Fee : slippage per side in the live defaults (0.25 % : 0.05 %); the cost grid keeps it."""
 COST_GRID = (0.003, 0.006, 0.009, 0.012)
@@ -121,8 +148,12 @@ DIAGNOSTIC_GAP_WINDOW = 4
 60 h, of 4h = 10 days), long enough that the newest bars every signal looks at are contiguous."""
 VARIANT_SETS = ("base", "cost-grid", "diagnostic", "all")
 EXIT_OK = 0
+"""At least one quarter was graded and none aborted."""
 EXIT_ABORTED = 1
+"""A quarter aborted, or no quarter was graded: the run gives the report nothing to show."""
+EXIT_NOT_GRADED = EXIT_ABORTED
 EXIT_REFUSED = 2
+"""Nothing ran: sealed span, bad input or no archive."""
 
 BASE = Variant()
 
@@ -139,15 +170,20 @@ def cost_variant(roundtrip: float) -> Variant:
 
 
 def cost_grid() -> list[Variant]:
+    """The whole grid of AK6, including ``cost-0.6``, which equals ``base`` (``variants``)."""
     return [cost_variant(k) for k in COST_GRID]
+
+
+def same_as_base(variant: Variant) -> bool:
+    """True if ``variant`` runs exactly what ``base`` runs, whatever its name."""
+    return replace(variant, name=BASE.name) == BASE
 
 
 def diagnostic_variant(window: int = DIAGNOSTIC_GAP_WINDOW) -> Variant:
     return Variant(name=f"diagnostic-gap-{window}", gap_window=window, diagnostic=True)
 
 
-def variants(selection: str) -> list[Variant]:
-    """The variants of a CLI selection (``VARIANT_SETS``)."""
+def _selection(selection: str) -> list[Variant]:
     if selection == "base":
         return [BASE]
     if selection == "cost-grid":
@@ -157,6 +193,17 @@ def variants(selection: str) -> list[Variant]:
     if selection == "all":
         return [BASE, *cost_grid(), diagnostic_variant()]
     raise ValueError(f"unknown variant set {selection!r}, expected one of {VARIANT_SETS}")
+
+
+def variants(selection: str) -> list[Variant]:
+    """The variants of a CLI selection (``VARIANT_SETS``), without any that only repeats
+    ``base`` under another name (``skipped_as_base``): base is the grid's 0.6 % point."""
+    return [v for v in _selection(selection) if v is BASE or not same_as_base(v)]
+
+
+def skipped_as_base(selection: str) -> list[str]:
+    """Names ``variants`` leaves out because they equal ``base`` (the CLI says so)."""
+    return [v.name for v in _selection(selection) if v is not BASE and same_as_base(v)]
 
 
 # ---------------------------------------------------------------- one quarter (worker side)
@@ -182,9 +229,11 @@ class _FailureCodes(ObservationBuffer):
     def __init__(self) -> None:
         super().__init__()
         self.codes: dict[str, str] = {}
+        self.blocked: set[str] = set()
 
     def start(self) -> None:
         self.codes = {}
+        self.blocked = set()
 
     def book(self, purpose: str, at: float, book: Mapping[Symbol, Quote]) -> None:
         return None
@@ -200,6 +249,22 @@ class _FailureCodes(ObservationBuffer):
 
     def snapshot(self, symbol: Symbol, status: str, message: str | None, decided: bool) -> None:
         self.codes[symbol.market] = status
+        if blocked_by_higher_interval(status, message):
+            self.blocked.add(symbol.market)
+
+
+def stale_interval(message: str | None) -> int | None:
+    """The interval (minutes) whose newest bar failed the live freshness check, read from the
+    snapshot's failure message; None if the stale check was the quote's (age, clock drift)."""
+    found = _STALE_BARS.search(message or "")
+    return int(found.group(1)) if found else None
+
+
+def blocked_by_higher_interval(code: str, message: str | None) -> bool:
+    """A failure only a 15m/1h/4h bar caused (``blocked_rounds``, module doc)."""
+    if code in BLOCKING_CODES:
+        return True
+    return code == "stale" and stale_interval(message) in HIGHER_INTERVALS
 
 
 @contextmanager
@@ -286,7 +351,7 @@ def _lead_problems(arch: Archive, quarter: Quarter) -> list[str]:
         for interval in INTERVALS:
             n = arch.count_before(market, interval, quarter.start)
             if n < LEAD_ROWS:
-                problems.append(f"{market} {interval}m: {n} rows before the start (< {LEAD_ROWS})")
+                problems.append(f"{market} {interval}m: {n} von {LEAD_ROWS} Kerzen")
     return problems
 
 
@@ -310,7 +375,9 @@ def _preload(arch: Archive, quarter: Quarter) -> tuple[_Preload, list[str]]:
             for w_start, _ in archive_mod.windows(interval, first, quarter.end):
                 state = arch.window_state(market, interval, w_start)
                 if state is None or state.status != "done":
-                    problems.append(f"{market} {interval}m: window {_day(w_start)} not complete")
+                    problems.append(
+                        f"{market} {interval}m: ab {_day(w_start)} noch nicht fertig geladen"
+                    )
                     break
     pre.first_open = min(firsts)
     return pre, problems
@@ -338,14 +405,19 @@ class _Tracker:
     blocked: dict[str, int] = field(default_factory=dict)
 
     def round(
-        self, t: int, report: CycleReport, codes: Mapping[str, str], qs: dict[Symbol, Quote]
+        self,
+        t: int,
+        report: CycleReport,
+        codes: Mapping[str, str],
+        blocked: set[str],
+        qs: dict[Symbol, Quote],
     ) -> None:
         day = t // DAY
         for market, code in codes.items():
             if code != "ok":
                 per = self.no_decision.setdefault(market, {})
                 per[code] = per.get(code, 0) + 1
-                if code in BLOCKING_CODES:
+                if market in blocked:
                     self.blocked[market] = self.blocked.get(market, 0) + 1
         for stop in report.risk_stops:
             self.halted_at.setdefault(stop.agent, t)
@@ -477,7 +549,7 @@ def run_quarter(
     )
     if quarter.sealed:
         result.status = "sealed"
-        result.error = "quarter reaches into the sealed period from 2025-10-01 (ADR-0026)"
+        result.error = "reicht in den versiegelten Prüfzeitraum ab 2025-10-01 (ADR-0026)"
         return result
     if quarter.start % MINUTE or quarter.end <= quarter.start:
         raise ValueError(f"quarter must start on a minute and not be empty: {quarter}")
@@ -512,7 +584,8 @@ def run_quarter(
                     controls=controls,
                     observations=codes,
                 )
-                track.round(t, report, codes.codes, fresh_quotes(con, now_epoch=t))
+                quotes = fresh_quotes(con, now_epoch=t)
+                track.round(t, report, codes.codes, codes.blocked, quotes)
                 result.rounds += 1
         track.finish()
         trades = _trades(con)
@@ -564,42 +637,46 @@ def run_quarters(
     """Every quarter x variant; the results in variant then time order.
 
     Workers (``workers > 1``: separate processes) only compute; this process records each
-    result in ``register`` as it arrives, a crashed quarter with ``record_aborted``. Sealed
-    quarters are refused here without a worker and recorded as such, so the attempt stays
-    visible. ``workers <= 1`` runs in this process, one quarter after another.
+    result in ``register``, a crashed quarter with ``record_aborted``. Results are held back
+    until every earlier one in variant-then-time order is recorded, so the register and
+    ``progress`` always see the same order, however the workers finish. Sealed quarters are
+    refused here without a worker and recorded as such, so the attempt stays visible.
+    ``workers <= 1`` runs in this process, one quarter after another.
     """
+    order = [(i, j) for i in range(len(variant_list)) for j in range(len(quarters))]
+    ready: dict[tuple[int, int], QuarterResult | Exception] = {}
     done: dict[tuple[int, int], QuarterResult] = {}
 
-    def finish(i: int, j: int, result: QuarterResult) -> None:
-        register.record(result)
-        done[(i, j)] = result
-        if progress is not None:
-            progress(result)
-
-    def failed(i: int, j: int, exc: BaseException) -> None:
-        variant, quarter = variant_list[i], quarters[j]
-        error = f"{type(exc).__name__}: {exc}"
-        register.record_aborted(quarter, variant, error)
-        result = QuarterResult(quarter, variant, status="aborted", error=error)
-        done[(i, j)] = result
-        if progress is not None:
-            progress(result)
+    def flush() -> None:
+        while len(done) < len(order) and order[len(done)] in ready:
+            key = order[len(done)]
+            i, j = key
+            item = ready.pop(key)
+            if isinstance(item, Exception):
+                error = f"{type(item).__name__}: {item}"
+                register.record_aborted(quarters[j], variant_list[i], error)
+                result = QuarterResult(quarters[j], variant_list[i], status="aborted", error=error)
+            else:
+                register.record(item)
+                result = item
+            done[key] = result
+            if progress is not None:
+                progress(result)
 
     pending: list[tuple[int, int]] = []
-    for i, variant in enumerate(variant_list):
-        for j, quarter in enumerate(quarters):
-            if quarter.sealed:
-                finish(i, j, run_quarter(archive_path, quarter, variant, spreads))
-            else:
-                pending.append((i, j))
+    for i, j in order:
+        if quarters[j].sealed:
+            ready[(i, j)] = run_quarter(archive_path, quarters[j], variant_list[i], spreads)
+        else:
+            pending.append((i, j))
+    flush()
     if workers <= 1:
         for i, j in pending:
             try:
-                result = run_quarter(archive_path, quarters[j], variant_list[i], spreads)
+                ready[(i, j)] = run_quarter(archive_path, quarters[j], variant_list[i], spreads)
             except Exception as exc:
-                failed(i, j, exc)
-            else:
-                finish(i, j, result)
+                ready[(i, j)] = exc
+            flush()
     elif pending:
         with ProcessPoolExecutor(max_workers=min(workers, len(pending))) as pool:
             futures: dict[Future[QuarterResult], tuple[int, int]] = {}
@@ -607,14 +684,13 @@ def run_quarters(
                 job = pool.submit(run_quarter, archive_path, quarters[j], variant_list[i], spreads)
                 futures[job] = (i, j)
             for future in as_completed(futures):
-                i, j = futures[future]
+                key = futures[future]
                 try:
-                    result = future.result()
+                    ready[key] = future.result()
                 except Exception as exc:
-                    failed(i, j, exc)
-                else:
-                    finish(i, j, result)
-    return [done[key] for key in sorted(done)]
+                    ready[key] = exc
+                flush()
+    return [done[key] for key in order]
 
 
 # ---------------------------------------------------------------- CLI
@@ -628,17 +704,27 @@ def _minutes(seconds: float) -> str:
     return f"{seconds / 60:.1f}".replace(".", ",") + " min"
 
 
+def _brief(error: str) -> str:
+    """The first of the ``; ``-joined parts of an error and how many more there are: a
+    missing lead usually hits all eight series at once, and one line must stay readable."""
+    parts = [p for p in error.split("; ") if p]
+    if len(parts) <= 1:
+        return error
+    return f"{parts[0]} und {len(parts) - 1} weitere"
+
+
 def describe(result: QuarterResult) -> str:
-    """One German progress line per quarter (CLI)."""
+    """One short German progress line per quarter (CLI)."""
     head = f"{result.quarter.label} {result.variant.name}"
     if result.status == "sealed":
         return f"{head}: verweigert - versiegelter Prüfzeitraum ab 2025-10-01"
     if result.status == "no_lead":
-        return f"{head}: nicht gewertet - Datenvorlauf fehlt ({result.error})"
+        why = _brief(result.error)
+        return f"{head}: nicht gewertet - zu wenig Kerzen vor Quartalsbeginn ({why})"
     if result.status == "incomplete":
-        return f"{head}: nicht gewertet - Archiv unvollständig ({result.error})"
+        return f"{head}: nicht gewertet - Kerzenarchiv unvollständig ({_brief(result.error)})"
     if result.status == "aborted":
-        return f"{head}: abgebrochen ({result.error})"
+        return f"{head}: abgebrochen - Programmfehler ({result.error})"
     shares = ", ".join(f"{m} {_percent(q.share)}" for m, q in sorted(result.quality.items()))
     if result.graded:
         verdict = "gewertet"
@@ -647,17 +733,6 @@ def describe(result: QuarterResult) -> str:
     else:
         verdict = "nicht gewertet (unter 90 % der fälligen Entscheidungen)"
     return f"{head}: {verdict}; Entscheidungen {shares}; Laufzeit {_minutes(result.seconds)}"
-
-
-def _runner() -> GitRunner | None:
-    """The runner of ``lab.gitstate`` if that module exists (clean-tree flag, AK8); without it
-    the register reads the commit from the files and records the tree as not clean."""
-    try:
-        module = importlib.import_module("llm_trading_bot.lab.gitstate")
-    except ModuleNotFoundError:
-        return None
-    runner: GitRunner | None = getattr(module, "git", None)
-    return runner
 
 
 def _spreads_of(path: Path) -> dict[tuple[str, str], float]:
@@ -673,30 +748,58 @@ def _spreads_of(path: Path) -> dict[tuple[str, str], float]:
     return out
 
 
-def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+def _parser(out: TextIO) -> LabArgumentParser:
+    p = LabArgumentParser(
+        out=out,
         prog="trading-bot lab backtest",
-        description="Backtest v0.3.1 je Quartal über das Kerzenarchiv (Spec 016).",
+        description="Backtest der Strategien v0.3.1 je Quartal über das Kerzenarchiv (Spec 016).",
     )
     p.add_argument(
         "--from", dest="first", default=FIRST_GRADED, help="erstes Quartal, z. B. 2021Q2"
     )
     p.add_argument("--to", dest="last", default="2025Q3", help="letztes Quartal, z. B. 2025Q3")
-    p.add_argument("--variant", choices=VARIANT_SETS, default="base")
-    p.add_argument("--workers", type=int, default=default_workers())
-    p.add_argument("--dir", type=Path, default=None, help="Labor-Ordner (Standard: lab_dir())")
+    p.add_argument(
+        "--variant",
+        choices=VARIANT_SETS,
+        default="base",
+        help="base = Live-Kosten; cost-grid = andere Kosten; diagnostic = Lückentoleranz; all",
+    )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=default_workers(),
+        help="Quartale, die gleichzeitig rechnen (Standard: Prozessorkerne minus 1)",
+    )
+    add_dir_option(p)
     return p
 
 
+def _skip_note(selection: str, chosen: Sequence[Variant]) -> str | None:
+    skipped = skipped_as_base(selection)
+    if not skipped:
+        return None
+    note = (
+        f"{', '.join(skipped)} entfällt: gleiche Kosten wie base (live); base ist der "
+        "0,6-%-Punkt des Kostenrasters."
+    )
+    if BASE not in chosen:
+        note += " Diesen Punkt liefert ein Lauf mit --variant base."
+    return note
+
+
 def cli_main(command: str, argv: Sequence[str], out: TextIO) -> int:
-    """``trading-bot lab backtest``: run, record in the register, report progress in German."""
+    """``trading-bot lab backtest``: run, record in the register, report progress in German.
+
+    Exit codes: ``EXIT_OK`` (0) only if at least one quarter was graded and none aborted;
+    ``EXIT_ABORTED`` (1) if a quarter aborted or none was graded (the run has nothing for the
+    report, said in one line); ``EXIT_REFUSED`` (2) if nothing ran.
+    """
     if command != "backtest":
         print(f"Unbekannter Befehl für das Backtest-Modul: {command}", file=out)
         return EXIT_REFUSED
-    try:
-        args = _parser().parse_args(list(argv))
-    except SystemExit as exc:
-        return EXIT_OK if exc.code == 0 else EXIT_REFUSED
+    args = parse_cli(_parser(out), argv)
+    if isinstance(args, int):
+        return EXIT_OK if args == 0 else EXIT_REFUSED
     try:
         quarters = Quarter.span(args.first, args.last)
     except ValueError as exc:
@@ -724,17 +827,19 @@ def cli_main(command: str, argv: Sequence[str], out: TextIO) -> int:
     chosen = variants(args.variant)
     spreads = _spreads_of(archive_path)
     print(
-        f"Backtest {quarters[0].label}-{quarters[-1].label}, Varianten "
+        f"Backtest {quarters[0].label} bis {quarters[-1].label}, Varianten "
         f"{', '.join(v.name for v in chosen)}, {args.workers} Prozess(e) ...",
         file=out,
         flush=True,
     )
+    if note := _skip_note(args.variant, chosen):
+        print(note, file=out, flush=True)
 
     def progress(result: QuarterResult) -> None:
         print(describe(result), file=out, flush=True)
 
     started = time.perf_counter()
-    with Register.open(folder / RUNS_FILE, folder / CHAIN_FILE, runner=_runner()) as register:
+    with Register.open(folder / RUNS_FILE, folder / CHAIN_FILE, runner=git_runner) as register:
         results = run_quarters(
             archive_path,
             quarters,
@@ -745,19 +850,34 @@ def cli_main(command: str, argv: Sequence[str], out: TextIO) -> int:
             progress=progress,
         )
         trials = register.trial_count()
+        runs = len(register.list_runs())
         clean = register.code.clean
     graded = sum(r.graded for r in results)
     aborted = sum(r.status == "aborted" for r in results)
     print(
-        f"Fertig: {graded} von {len(results)} Abschnitten gewertet, {aborted} abgebrochen, "
+        f"Fertig: {graded} von {len(results)} Quartalsläufen gewertet, {aborted} abgebrochen, "
         f"Laufzeit {_minutes(time.perf_counter() - started)}.",
         file=out,
     )
+    print(f"Prüfregister: {folder / RUNS_FILE}, Kette {folder / CHAIN_FILE}.", file=out)
+    # Named, because trial_count counts only runs with a result (status ok): a bare number
+    # right after quarters were refused looked as if nothing had been recorded.
     print(
-        f"Ergebnisse im Prüfregister {folder / RUNS_FILE} mit Kette {folder / CHAIN_FILE}; "
-        f"Versuche bisher: {trials}.",
+        f"Im Register: ausgewertete Versuche: {trials}, alle Läufe: {runs} "
+        "(auch nicht gewertete und abgebrochene).",
         file=out,
     )
     if not clean:
-        print("Hinweis: Arbeitsbaum nicht als sauber belegt (im Register vermerkt).", file=out)
+        print(
+            "Hinweis: Der Code war nicht nachweislich unverändert (git); das Register vermerkt "
+            "den Lauf als nicht sauber.",
+            file=out,
+        )
+    if not graded:
+        print(
+            "Kein Quartal gewertet: Dieser Lauf liefert keine Zahlen für den Bericht "
+            "(Gründe in den Zeilen oben).",
+            file=out,
+        )
+        return EXIT_NOT_GRADED
     return EXIT_ABORTED if aborted else EXIT_OK
