@@ -437,7 +437,6 @@ table.data .reason { display: block; min-width: 260px; max-width: 520px; white-s
   .scope { order: 2; }
   .radar { width: min(240px, 70vw); }
   header { padding: 10px 16px; }
-  .status .chip.net { display: none; }
   .readouts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 /* A page that reloads itself (overview): no entrance animation, or it twitches on every reload. */
