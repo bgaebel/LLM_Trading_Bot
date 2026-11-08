@@ -26,6 +26,7 @@ from llm_trading_bot.lab.archive import (
     window_start,
     windows,
 )
+from llm_trading_bot.lab.model import SEAL_EPOCH
 from llm_trading_bot.market import bitvavo
 from llm_trading_bot.market.bitvavo import API
 from llm_trading_bot.market.http import HTTPFailure
@@ -189,6 +190,9 @@ def test_open_window_completed_later(tmp_path: Path) -> None:
     # Rows written at noon keep their first fetch time: completing does not rewrite them.
     stamps = {r[0] for r in archive.db.execute("SELECT DISTINCT fetched_at FROM candles")}
     assert stamps == {D0 + 43_200, D0 + 86_400 + SETTLE_SECONDS}
+    # AK1: every row names where it came from (literal on purpose: a changed SOURCE must fail).
+    sources = [r[0] for r in archive.db.execute("SELECT DISTINCT source FROM candles")]
+    assert sources == ["bitvavo-api"]
 
     exchange.clock.now += 86_400
     third = fetch_archive(
@@ -372,6 +376,80 @@ def test_paces_requests(tmp_path: Path) -> None:
     assert sleeps == [pytest.approx(0.12)]
 
 
+class AnyAnswer:
+    """Answers every URL with an empty list and the given headers; records the URLs."""
+
+    def __init__(self, headers: dict[str, str] | None = None) -> None:
+        self.headers = headers if headers is not None else {}
+        self.urls: list[str] = []
+
+    def get_json_and_headers(self, url: str) -> tuple[object, dict[str, str]]:
+        self.urls.append(url)
+        return [], dict(self.headers)
+
+
+def test_paces_by_request_weight() -> None:
+    # Trades weigh 5: 0.6 s after one, whatever comes next; candles weigh 1: 0.12 s.
+    assert archive_mod.WEIGHTS == {"candles": 1, "trades": 5}
+    assert archive_mod.MIN_INTERVAL == 0.12
+    clock = Clock(D0 + 5 * 86_400)
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock.now += seconds
+
+    api = PublicApi(AnyAnswer(), clock=clock, sleep=sleep)
+    api.trades("BTC-EUR", D0, D0 + 3600)
+    api.trades("BTC-EUR", D0 + 3600, D0 + 7200)
+    api.candles("BTC-EUR", 1, D0, D0 + 86_400)
+    api.candles("BTC-EUR", 1, D0 + 86_400, D0 + 2 * 86_400)
+    assert sleeps == [pytest.approx(0.6), pytest.approx(0.6), pytest.approx(0.12)]
+    # Time already passed counts: no sleep when the gap is over.
+    clock.now += 10
+    api.trades("ETH-EUR", D0, D0 + 3600)
+    assert len(sleeps) == 3
+    # A full minute of trades stays at half the key-less budget of 1000 points.
+    assert pytest.approx(500) == 60 / (5 * archive_mod.MIN_INTERVAL) * 5
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected"),
+    [
+        ({"bitvavo-ratelimit-remaining": "150"}, [60.0]),  # reset time missing
+        # Reset at or before the local clock (a clock ahead of Bitvavo's): one minute, not 1 s.
+        ({"bitvavo-ratelimit-remaining": "150", "bitvavo-ratelimit-resetat": "NOW_MS"}, [60.0]),
+        (
+            {"bitvavo-ratelimit-remaining": "150", "bitvavo-ratelimit-resetat": "PAST_MS"},
+            [60.0],
+        ),
+        ({"bitvavo-ratelimit-remaining": "150", "bitvavo-ratelimit-resetat": "PAST_S"}, [60.0]),
+        ({"bitvavo-ratelimit-remaining": "150", "bitvavo-ratelimit-resetat": "x"}, [60.0]),
+        # A reset in the future: until then plus a second, at most one budget minute.
+        ({"bitvavo-ratelimit-remaining": "0", "bitvavo-ratelimit-resetat": "SOON_MS"}, [3.0]),
+        ({"bitvavo-ratelimit-remaining": "150", "bitvavo-ratelimit-resetat": "FAR_MS"}, [61.0]),
+        # Plenty left, or nothing to react to: weight pacing alone.
+        ({"bitvavo-ratelimit-remaining": "200", "bitvavo-ratelimit-resetat": "FAR_MS"}, []),
+        ({}, []),
+    ],
+)
+def test_low_remaining_waits_for_reset(headers: dict[str, str], expected: list[float]) -> None:
+    now = D0 + 5 * 86_400
+    values = {
+        "NOW_MS": str(now * 1000),
+        "PAST_MS": str((now - 40) * 1000),
+        "PAST_S": str(now - 40),
+        "SOON_MS": str((now + 2) * 1000),
+        "FAR_MS": str((now + 600) * 1000),
+    }
+    resolved = {k: values.get(v, v) for k, v in headers.items()}
+    sleeps: list[float] = []
+    api = PublicApi(AnyAnswer(resolved), clock=Clock(now), sleep=sleeps.append, min_interval=0)
+    api.trades("BTC-EUR", D0, D0 + 3600)
+    assert sleeps == [pytest.approx(s) for s in expected]
+    assert api.slowdowns == len(expected)
+
+
 def test_transient_errors_retried_but_client_errors_not(tmp_path: Path) -> None:
     archive, exchange, api, sleeps = make(tmp_path, D0 + 2 * 86_400, {("BTC-EUR", 1): [bar(D0)]})
     exchange.fail = lambda n: HTTPFailure(502) if n == 1 else None
@@ -433,7 +511,7 @@ def test_public_api_only_builds_public_paths() -> None:
     with pytest.raises(ValueError):
         api.candles("BTC-EUR/../x", 1, D0, D0 + 86_400)
     with pytest.raises(ValueError):
-        api._request("/ticker/book")
+        api._request("/ticker/book", weight=1)
     with pytest.raises(ValueError):
         api.trades("BTC-EUR", D0, D0 + 86_400)  # Bitvavo wants less than 24 h
 
@@ -552,6 +630,52 @@ def test_cross_check_counts(tmp_path: Path) -> None:
     # Restricting the range restricts the comparison.
     [part] = cross_check(archive, start=D0, end=D0 + 900, markets=["BTC-EUR"], intervals=[15])
     assert (part.equal, part.compared) == (1, 1)
+
+
+def store_around_seal(archive: Archive) -> None:
+    """Equal 1m and 15m bars just before and right at the seal, all windows done."""
+    later = SEAL_EPOCH + 30 * 86_400
+    for ts in (SEAL_EPOCH - 900, SEAL_EPOCH):
+        row = (ts, "100", "101", "99", "100.5", "1.5")
+        archive.store_window("BTC-EUR", 1, window_start(1, ts), [row], fetched_at=later)
+    archive.store_window(
+        "BTC-EUR",
+        15,
+        window_start(15, SEAL_EPOCH),
+        [
+            (SEAL_EPOCH - 900, "100", "101", "99", "100.5", "1.5"),
+            (SEAL_EPOCH, "100", "101", "99", "100.5", "1.5"),
+        ],
+        fetched_at=later,
+    )
+
+
+def test_cross_check_clamped_before_seal(tmp_path: Path) -> None:
+    assert window_start(15, SEAL_EPOCH - 900) == window_start(15, SEAL_EPOCH)  # one 15m window
+    with Archive(tmp_path / "candles.db") as archive:
+        store_around_seal(archive)
+        far = SEAL_EPOCH + 60 * 86_400
+        [check] = cross_check(archive, start=0, end=far, markets=["BTC-EUR"], intervals=[15])
+        assert (check.equal, check.compared) == (1, 1)  # only the bar before the seal
+        [opened] = cross_check(
+            archive, start=0, end=far, markets=["BTC-EUR"], intervals=[15], include_sealed=True
+        )
+        assert (opened.equal, opened.compared) == (2, 2)
+
+
+def test_fetch_may_archive_beyond_the_seal(tmp_path: Path) -> None:
+    # The fidelity check rebuilds live decisions from 2026: their candles must be fetchable.
+    rows = [bar(SEAL_EPOCH + 86_400)]
+    archive, _, api, _ = make(tmp_path, SEAL_EPOCH + 3 * 86_400, {("BTC-EUR", 1): rows})
+    result = fetch_archive(
+        archive,
+        api,
+        start=SEAL_EPOCH + 86_400,
+        end=SEAL_EPOCH + 2 * 86_400,
+        markets=["BTC-EUR"],
+        intervals=[1],
+    )
+    assert result.complete and stored(archive) == rows
 
 
 @pytest.mark.net

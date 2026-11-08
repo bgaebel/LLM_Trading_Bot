@@ -12,12 +12,22 @@ Design:
   triggers refuse any update or delete of a stored candle.
 - Every row passes the live client's parser (``_open_time``/``_parse_candle``), so the archive
   holds nothing the live bot would reject; values are kept as the strings Bitvavo sent.
-- Only public GET endpoints without keys (ADR-0004). The downloader paces itself by
-  ``bitvavo-ratelimit-remaining`` and stops at the first 429: a key-less 429 bans the IP for
-  15 minutes, so it never retries one and remembers until when it must wait.
+- Only public GET endpoints without keys (ADR-0004). The downloader paces itself by request
+  weight (``WEIGHTS``) and ``bitvavo-ratelimit-remaining`` and stops at the first 429: a
+  key-less 429 bans the IP for 15 minutes, so it never retries one and remembers until when it
+  must wait.
+- Sealed period (ADR-0026, ``model.SEAL_EPOCH`` = 2025-10-01): ``fetch`` archives candles beyond
+  it on purpose, because the fidelity check (AK5) rebuilds live decisions from 2026 and needs
+  those candles. Storing data is not looking at results; the seal is enforced where numbers
+  come out: ``cross_check`` clamps to before it, the spread model never samples or computes it,
+  and the backtest refuses it.
+
+CLI (``trading-bot lab fetch|check``, German output): see ``cli_main``.
 """
 
+import argparse
 import calendar
+import datetime as dt
 import hashlib
 import json
 import math
@@ -29,11 +39,12 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from types import TracebackType
-from typing import Protocol
+from typing import NoReturn, Protocol, TextIO
 from urllib.parse import quote as url_quote
 from urllib.parse import urlencode
 
-from llm_trading_bot.lab.model import MARKETS
+from llm_trading_bot.lab.model import MARKETS, SEAL_EPOCH
+from llm_trading_bot.lab.paths import CANDLES_FILE, lab_dir
 from llm_trading_bot.market.bitvavo import (
     API,
     DEFAULT_COOLDOWN,
@@ -56,8 +67,15 @@ of a just-closed bar may still change for a few seconds; a stored row is never r
 late revision would otherwise become a permanent conflict."""
 SLOW_BELOW = 200
 """Below this ``bitvavo-ratelimit-remaining`` the downloader waits for the next reset."""
+RESET_WAIT = 60.0
+"""Wait when ``remaining`` is low but the reset time is missing or already past by the local
+clock: the budget refills every minute, and a clock running ahead of Bitvavo's would otherwise
+turn the wait into 1 s per request and walk straight into a 15-minute ban."""
 MIN_INTERVAL = 0.12
-"""Seconds between requests: about 500/min, half of the key-less budget of 1000/min."""
+"""Seconds per weight point: about 500 points/min, half of the key-less budget of 1000/min."""
+WEIGHTS = {"candles": 1, "trades": 5}
+"""Bitvavo's weight per request. Public market trades cost 5, so they wait 5 * MIN_INTERVAL =
+0.6 s: pacing by request count alone would spend 2500 points/min on them (wave-1 check)."""
 ATTEMPTS = 3
 """Tries for a broken connection or a 5xx; a 429 is never retried."""
 
@@ -223,7 +241,8 @@ class PublicApi:
         self._min_interval = min_interval
         self._slow_below = slow_below
         self._attempts = max(1, attempts)
-        self._last: float | None = None
+        self._next_at: float | None = None
+        """Earliest time of the next request: the last one plus its weight's share."""
         self.requests = 0
         """Requests sent (each try counts)."""
         self.slowdowns = 0
@@ -242,23 +261,25 @@ class PublicApi:
                 "end": end * 1000,
             }
         )
-        return self._request(f"/{_market_segment(market)}/candles?{query}")
+        return self._request(
+            f"/{_market_segment(market)}/candles?{query}", weight=WEIGHTS["candles"]
+        )
 
     def trades(self, market: str, start: int, end: int, *, limit: int = 1000) -> tuple[object, int]:
         """Public trades in ``[start, end)`` (epoch s, under 24 h; weight 5 per request)."""
         if not 0 < end - start < 86_400:
             raise ValueError("trades window must be shorter than 24 h")
         query = urlencode({"start": start * 1000, "end": end * 1000, "limit": limit})
-        return self._request(f"/{_market_segment(market)}/trades?{query}")
+        return self._request(f"/{_market_segment(market)}/trades?{query}", weight=WEIGHTS["trades"])
 
-    def _request(self, path: str) -> tuple[object, int]:
+    def _request(self, path: str, *, weight: int) -> tuple[object, int]:
         if not _PUBLIC_PATH.match(path):
             raise ValueError(f"not a public market path: {path}")
         failure: Exception | None = None
         for attempt in range(self._attempts):
             if attempt:
                 self._sleep(2.0 * 2**attempt)
-            self._pace()
+            self._pace(weight)
             # Taken before sending: a bar that closes while the response travels was still
             # forming on the server, so it must count as forming here as well.
             sent_at = self.now()
@@ -283,25 +304,31 @@ class PublicApi:
         assert failure is not None
         raise failure
 
-    def _pace(self) -> None:
+    def _pace(self, weight: int) -> None:
+        # Each try spends its weight, so the gap after a request is charged by what it cost:
+        # a candle request after a trades request still waits the trades' 0.6 s.
         now = self._clock()
-        if self._last is not None and now - self._last < self._min_interval:
-            self._sleep(self._min_interval - (now - self._last))
-        self._last = self._clock()
+        if self._next_at is not None and now < self._next_at:
+            self._sleep(self._next_at - now)
+        self._next_at = self._clock() + weight * self._min_interval
 
     def _slow_down(self, headers: Mapping[str, str]) -> None:
+        # Without a ``remaining`` header there is nothing to react to; the weight pacing alone
+        # keeps a run at half the budget.
         remaining = _header_number(headers, "bitvavo-ratelimit-remaining")
         if remaining is None or remaining >= self._slow_below:
             return
         reset = _header_number(headers, "bitvavo-ratelimit-resetat")
-        if reset is None:
-            wait = 60.0
-        else:
+        now = self._clock()
+        wait = RESET_WAIT
+        if reset is not None:
             reset_s = reset / 1000 if reset > 100_000_000_000 else reset
-            wait = reset_s - self._clock() + 1.0
-        # The budget resets every minute; never stall longer than that on a strange header.
+            if reset_s > now:
+                # Until the reset plus a second of margin; never longer than one budget minute
+                # (plus margin) on a strange header.
+                wait = min(RESET_WAIT + 1.0, reset_s - now + 1.0)
         self.slowdowns += 1
-        self._sleep(min(61.0, max(1.0, wait)))
+        self._sleep(wait)
 
 
 def _market_segment(market: str) -> str:
@@ -687,7 +714,8 @@ def fetch_archive(
 
     Safe to abort at any point and to call again: done windows are skipped, each window is
     committed together with its status. Stops at a 429 (and remembers until when) or when
-    ``max_requests`` is reached; ``ArchiveError`` on data that does not fit.
+    ``max_requests`` is reached; ``ArchiveError`` on data that does not fit. Not clamped to the
+    seal: the fidelity check needs recent candles (see the module docstring).
     """
     if archive.readonly:
         raise ArchiveError("the archive was opened read-only")
@@ -833,9 +861,16 @@ def cross_check(
     markets: Iterable[str] = MARKETS,
     intervals: Iterable[int] = (15, 60, 240),
     max_examples: int = 10,
+    include_sealed: bool = False,
 ) -> list[CrossCheck]:
     """Compare where both series are complete (done windows only), slot by slot in
-    ``[start, end)``. Equality is numeric (Decimal), so ``"1.0"`` equals ``"1"``."""
+    ``[start, end)``. Equality is numeric (Decimal), so ``"1.0"`` equals ``"1"``.
+
+    ``end`` is clamped to ``SEAL_EPOCH`` unless ``include_sealed``: even a data-quality count is
+    a look at the sealed period, so only a deliberate caller (a registered test run, Spec 018)
+    may ask for it."""
+    if not include_sealed:
+        end = min(end, SEAL_EPOCH)
     out = []
     for market in markets:
         done_1m = archive.windows_done(market, 1)
@@ -898,3 +933,228 @@ def cross_check_text(checks: Iterable[CrossCheck]) -> str:
     lines = ["Abgleich 1m gegen höhere Intervalle (nur vollständig geladene Fenster):"]
     lines += [f"- {c.text()}" for c in checks]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- CLI
+
+EXIT_OK = 0
+EXIT_ERROR = 1
+"""Archive, data or network error; nothing half-written (each window is one transaction)."""
+EXIT_USAGE = 2
+"""Like argparse: unknown option or invalid value."""
+EXIT_RATE_LIMITED = 3
+"""Stopped by a 429 or a remembered ban; the text says from when on it may continue."""
+FETCH_START = "2020-07-01"
+"""Default start: ample lead before the first graded quarter 2021Q2 (500 rows of 4h are about
+83 days), and 1m rows for the cross-check from the start of 2021."""
+
+
+class UsageExit(Exception):
+    """argparse wanted to exit (``--help``, bad option); carries the exit status."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(status)
+        self.status = status
+
+
+class LabArgumentParser(argparse.ArgumentParser):
+    """argparse that writes help and errors to the command's ``out`` and never calls
+    ``sys.exit``: ``cli_main`` must return its code, also when tests call it."""
+
+    def __init__(self, *, out: TextIO, prog: str, description: str) -> None:
+        super().__init__(prog=prog, description=description)
+        self._out = out
+
+    def _print_message(self, message: str, file: object = None) -> None:
+        if message:
+            self._out.write(message)
+
+    def exit(self, status: int = 0, message: str | None = None) -> NoReturn:
+        if message:
+            self._out.write(message)
+        raise UsageExit(status)
+
+
+def parse_utc(text: str) -> int:
+    """``2021-01-01`` or an ISO time such as ``2021-01-01T12:00Z`` -> epoch s; naive means UTC."""
+    try:
+        moment = dt.datetime.fromisoformat(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"kein ISO-Datum: {text!r} (z. B. 2021-01-01 oder 2021-01-01T12:00Z)"
+        ) from None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=dt.UTC)
+    return math.floor(moment.timestamp())
+
+
+def format_utc(epoch: int) -> str:
+    """User-facing time: the day alone at midnight, otherwise with the time of day."""
+    if epoch % 86_400 == 0:
+        return _day(epoch)
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(epoch))
+
+
+def parse_cli(parser: LabArgumentParser, argv: Sequence[str]) -> argparse.Namespace | int:
+    """The parsed options, or the exit status argparse asked for."""
+    try:
+        return parser.parse_args(list(argv))
+    except UsageExit as exc:
+        return exc.status
+
+
+def add_dir_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--dir",
+        type=Path,
+        default=None,
+        help="Labor-Ordner (Standard: LTB_LAB_DIR, sonst der lokale Datenordner)",
+    )
+
+
+def archive_path(folder: Path | None) -> Path:
+    """``candles.db`` in ``folder``, by default in the lab folder (ADR-0026)."""
+    return (folder if folder is not None else lab_dir()) / CANDLES_FILE
+
+
+def sealed_note(requested_end: int) -> str:
+    return (
+        f"Hinweis: Ende {format_utc(requested_end)} liegt im versiegelten Zeitraum; "
+        f"ausgewertet wird nur bis {format_utc(SEAL_EPOCH)} (ADR-0026)."
+    )
+
+
+def _fetch_parser(out: TextIO) -> LabArgumentParser:
+    parser = LabArgumentParser(
+        out=out,
+        prog="trading-bot lab fetch",
+        description="Lädt öffentliche Bitvavo-Kerzen (1m, 15m, 1h, 4h; BTC-EUR, ETH-EUR) "
+        "fortsetzbar ins Kerzenarchiv.",
+    )
+    add_dir_option(parser)
+    parser.add_argument(
+        "--start",
+        type=parse_utc,
+        default=parse_utc(FETCH_START),
+        help=f"Beginn, ISO-Datum (Standard: {FETCH_START})",
+    )
+    parser.add_argument("--end", type=parse_utc, default=None, help="Ende, ISO (Standard: jetzt)")
+    parser.add_argument(
+        "--max-requests", type=int, default=None, help="höchstens so viele Anfragen in diesem Lauf"
+    )
+    return parser
+
+
+def _check_parser(out: TextIO) -> LabArgumentParser:
+    parser = LabArgumentParser(
+        out=out,
+        prog="trading-bot lab check",
+        description="Abgleich der 1m-Kerzen mit 15m/1h/4h im Kerzenarchiv (ohne Netz), "
+        "nur vor dem versiegelten Zeitraum ab 2025-10-01.",
+    )
+    add_dir_option(parser)
+    parser.add_argument(
+        "--start",
+        type=parse_utc,
+        default=parse_utc(FETCH_START),
+        help=f"Beginn, ISO-Datum (Standard: {FETCH_START})",
+    )
+    parser.add_argument(
+        "--end",
+        type=parse_utc,
+        default=SEAL_EPOCH,
+        help="Ende, ISO-Datum (Standard und Obergrenze: 2025-10-01)",
+    )
+    return parser
+
+
+def cli_main(
+    command: str, argv: Sequence[str], out: TextIO, *, api: PublicApi | None = None
+) -> int:
+    """``trading-bot lab fetch`` and ``trading-bot lab check`` (Spec 016 AK1).
+
+    ``api`` is injectable for tests (a fake transport, a fake clock); by default the real
+    public API with the lab's User-Agent. Exit codes: ``EXIT_OK`` (also when stopped by
+    ``--max-requests``: a later call resumes), ``EXIT_ERROR``, ``EXIT_USAGE``,
+    ``EXIT_RATE_LIMITED``.
+    """
+    if command == "fetch":
+        return _cli_fetch(argv, out, api)
+    if command == "check":
+        return _cli_check(argv, out)
+    print(f"Unbekannter Labor-Befehl für das Kerzenarchiv: {command}", file=out)
+    return EXIT_USAGE
+
+
+def _cli_fetch(argv: Sequence[str], out: TextIO, api: PublicApi | None) -> int:
+    args = parse_cli(_fetch_parser(out), argv)
+    if isinstance(args, int):
+        return args
+    if args.max_requests is not None and args.max_requests < 1:
+        print("--max-requests muss mindestens 1 sein.", file=out)
+        return EXIT_USAGE
+    api = api if api is not None else PublicApi()
+    start: int = args.start
+    end: int = args.end if args.end is not None else api.now()
+    if start >= end:
+        print("Der Beginn muss vor dem Ende liegen.", file=out)
+        return EXIT_USAGE
+    path = archive_path(args.dir)
+    print(f"Kerzenarchiv: {path}", file=out)
+    print(f"Zeitraum: {format_utc(start)} bis {format_utc(end)}", file=out)
+    if end > SEAL_EPOCH:
+        print(
+            "Hinweis: Kerzen ab 2025-10-01 werden nur für den Treue-Test gespeichert; "
+            "Auswertungen bleiben versiegelt (ADR-0026).",
+            file=out,
+        )
+
+    def progress(line: str) -> None:
+        print(line, file=out, flush=True)
+
+    try:
+        with Archive(path) as archive:
+            result = fetch_archive(
+                archive,
+                api,
+                start=start,
+                end=end,
+                max_requests=args.max_requests,
+                progress=progress,
+            )
+    except RateLimited as exc:  # fetch_archive handles 429s itself; kept for any other path
+        print(german_retry_message(exc.retry_at, api.now()), file=out)
+        return EXIT_RATE_LIMITED
+    except ArchiveError as exc:
+        print(f"Kerzenarchiv-Fehler: {exc}", file=out)
+        return EXIT_ERROR
+    except (HTTPFailure, TransportError, OSError) as exc:
+        print(f"Abruf fehlgeschlagen: {exc}. Ein weiterer Aufruf setzt fort.", file=out)
+        return EXIT_ERROR
+    print(result.text(), file=out)
+    return EXIT_RATE_LIMITED if result.stopped == "rate_limited" else EXIT_OK
+
+
+def _cli_check(argv: Sequence[str], out: TextIO) -> int:
+    args = parse_cli(_check_parser(out), argv)
+    if isinstance(args, int):
+        return args
+    start: int = args.start
+    requested: int = args.end
+    end = min(requested, SEAL_EPOCH)
+    if requested > SEAL_EPOCH:
+        print(sealed_note(requested), file=out)
+    if start >= end:
+        print("Der Beginn muss vor dem Ende (höchstens 2025-10-01) liegen.", file=out)
+        return EXIT_USAGE
+    path = archive_path(args.dir)
+    try:
+        with Archive.open_readonly(path) as archive:
+            checks = cross_check(archive, start=start, end=end)
+    except ArchiveError as exc:
+        print(f"Kerzenarchiv-Fehler: {exc}", file=out)
+        return EXIT_ERROR
+    print(f"Kerzenarchiv: {path}", file=out)
+    print(f"Zeitraum: {format_utc(start)} bis {format_utc(end)}", file=out)
+    print(cross_check_text(checks), file=out)
+    return EXIT_OK

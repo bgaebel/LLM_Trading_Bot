@@ -43,8 +43,13 @@ FORBIDDEN_IMPORTS = (
 EXCHANGE_METHODS = {"market_rules", "balances", "submit", "lookup", "cancel_all"}
 ORDER_FUNCTIONS = {"place_order", "create_order", "cancel_order"}
 HTTP_MODULE = "market/http.py"
-# Spec 016: the strategy lab's candle/trade downloader, the only caller of the header variant.
+# Spec 016: the strategy lab's candle/trade downloader, the only caller of the header variant
+# and the only file that may build the public ``f"/{market}/trades?{query}"`` path. The src
+# scans key files relative to the package, the literal scan relative to the repository.
 LAB_FETCH = "lab/archive.py"
+LAB_FETCH_IN_REPO = "src/llm_trading_bot/" + LAB_FETCH
+# Spec 016 AK8: the register's git runner, the only src file allowed to import subprocess.
+GIT_MODULE = "lab/gitstate.py"
 HEADERS_METHOD = "get_json_and_headers"
 BITVAVO_MODULE = "market/bitvavo.py"
 EXCHANGE_PROTOCOL = ("broker/contract.py", "OrderExchange")
@@ -124,7 +129,8 @@ def _calls(tree: ast.AST) -> Iterator[ast.Call]:
 def _public_trades_parts(tree: ast.AST) -> set[int]:
     """Literal parts of ``f"/{market}/trades?{query}"``: Bitvavo's public market trades (the
     strategy lab's spread samples, Spec 016 AK6). The private ``/trades`` has no market in the
-    path, so only this exact shape is exempt; any other string with ``/trades`` still fails."""
+    path, so only this exact shape is exempt, and only in ``LAB_FETCH_IN_REPO`` (see
+    ``rule_literals``); any other string with ``/trades`` still fails."""
     ids: set[int] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.JoinedStr) and len(node.values) == 4:
@@ -145,7 +151,11 @@ def rule_literals(files: Files) -> list[str]:
     out = []
     for path, text in files.items():
         tree = ast.parse(text)
-        for line, value in _strings(tree, skip=_public_trades_parts(tree)):
+        # The same f-string elsewhere (``f"/{ver}/trades?{q}"`` in broker/) would build the
+        # private path, so the exemption is tied to the one file whose run-time check
+        # (``archive._PUBLIC_PATH``) only lets ``/{MARKET}/trades?`` through.
+        skip = _public_trades_parts(tree) if path == LAB_FETCH_IN_REPO else set()
+        for line, value in _strings(tree, skip=skip):
             for bad in FORBIDDEN_LITERALS:
                 if bad in value:
                     out.append(f"{path}:{line}: literal {bad!r}")
@@ -243,10 +253,65 @@ def rule_imports(files: Files) -> list[str]:
                 # connection is caught by rule_http.
                 if name == "http.client" and path == HTTP_MODULE:
                     continue
+                # The register's git runner; what it may run is held by rule_subprocess_calls
+                # and its own allow-list (tests/lab/test_gitstate.py).
+                if (
+                    name == "subprocess"
+                    and path == GIT_MODULE
+                    and isinstance(node, ast.Import)
+                    and not any(a.asname for a in node.names)
+                ):
+                    continue
                 if any(name == m or name.startswith(m + ".") for m in FORBIDDEN_IMPORTS):
                     out.append(f"{path}:{node.lineno}: import {name}")
                 if name == "hmac" and path != "web/auth.py":
                     out.append(f"{path}:{node.lineno}: hmac outside web/auth.py")
+    return out
+
+
+def rule_subprocess_calls(files: Files) -> list[str]:
+    """``subprocess`` is used only as ``subprocess.run(<list>, ..., shell=False, timeout=...)``
+    (plus ``subprocess.DEVNULL``) and only in GIT_MODULE: no Popen, no shell, no other helper
+    (check_output, call, getoutput), no ``getattr(subprocess, ...)`` or alias of the module."""
+    allowed_attrs = ("run", "DEVNULL")
+    out = []
+    for path, text in files.items():
+        tree = ast.parse(text)
+        used_ok: set[int] = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "subprocess"
+                and node.attr in allowed_attrs
+            ):
+                used_ok.add(id(node.value))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "subprocess":
+                if path != GIT_MODULE:
+                    out.append(f"{path}:{node.lineno}: subprocess outside {GIT_MODULE}")
+                elif id(node) not in used_ok:
+                    out.append(f"{path}:{node.lineno}: subprocess beyond run/DEVNULL")
+        if path != GIT_MODULE:
+            continue
+        for call in _calls(tree):
+            func = call.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "subprocess"
+            ):
+                continue
+            keywords = {k.arg: k.value for k in call.keywords}
+            shell = keywords.get("shell")
+            if (
+                not isinstance(shell, ast.Constant)
+                or shell.value is not False
+                or "timeout" not in keywords
+                or None in keywords  # **kwargs could smuggle shell=True in
+                or len(call.args) != 1
+            ):
+                out.append(f"{path}:{call.lineno}: run without shell=False and a timeout")
     return out
 
 
@@ -309,6 +374,7 @@ REAL: list[tuple[str, Rule, Callable[[], Files]]] = [
     ("public_paths", rule_public_paths, src_files),
     ("http", rule_http, src_files),
     ("imports", rule_imports, src_files),
+    ("subprocess_calls", rule_subprocess_calls, src_files),
     ("secrets", rule_secrets, src_files),
     ("exchange_shape", rule_exchange_shape, src_files),
     ("exchange_shape_tests_tools", rule_exchange_shape, files_in_tests_and_tools),
@@ -326,6 +392,12 @@ def test_repository_has_no_order_path(name: str, rule: Rule, files: Callable[[],
 def test_the_scans_see_the_files_they_are_about() -> None:
     src = src_files()
     assert {HTTP_MODULE, BITVAVO_MODULE, "web/auth.py", "broker/contract.py"} <= set(src)
+    # The named exceptions point at real files that really use them (a renamed file would
+    # otherwise leave a dead exemption behind, ready for whatever takes its name).
+    assert {LAB_FETCH, GIT_MODULE} <= set(src)
+    assert 'f"/{_market_segment(market)}/trades?{query}"' in src[LAB_FETCH]
+    assert "import subprocess" in src[GIT_MODULE]
+    assert LAB_FETCH_IN_REPO in python_files()
     assert any(p.startswith("tests/") for p in python_files())
     assert any(p.startswith("tools/") for p in python_files())
     assert {"scripts/deploy.sh", "deploy/release.sh"} <= set(shell_files())
@@ -367,6 +439,25 @@ BAD: list[tuple[str, Rule, str, str]] = [
     ("trades f-string", rule_literals, "lab/x.py", 'u = f"{base}/trades"'),
     ("trades no market", rule_literals, "lab/x.py", 'u = f"/trades?{q}"'),
     ("trades with prefix", rule_literals, "lab/x.py", 'u = f"/{m}/trades?{q}/order"'),
+    # The public-trades shape is exempt in LAB_FETCH_IN_REPO only (wave-1 check of Spec 016).
+    (
+        "trades shape in broker",
+        rule_literals,
+        "src/llm_trading_bot/broker/live.py",
+        'u = f"/{ver}/trades?{q}"',
+    ),
+    (
+        "trades shape in spread",
+        rule_literals,
+        "src/llm_trading_bot/lab/spread.py",
+        'u = f"/{m}/trades?{q}"',
+    ),
+    ("trades shape in tests", rule_literals, "tests/lab/x.py", 'u = f"/{m}/trades?{q}"'),
+    ("trades shape in tools", rule_literals, "tools/x.py", 'u = f"/{m}/trades?{q}"'),
+    ("trades shape, package key", rule_literals, LAB_FETCH, 'u = f"/{m}/trades?{q}"'),
+    ("private trades in lab fetch", rule_literals, LAB_FETCH_IN_REPO, 'P = "/trades?market=X"'),
+    ("trades no market in lab fetch", rule_literals, LAB_FETCH_IN_REPO, 'u = f"/trades?{q}"'),
+    ("order in lab fetch", rule_literals, LAB_FETCH_IN_REPO, 'u = f"/{m}/order?{q}"'),
     ("request elsewhere", rule_http, "paper/x.py", "urllib.request.Request(u)"),
     ("request post", rule_http, HTTP_MODULE, 'urllib.request.Request(u, method="POST")'),
     ("request data", rule_http, HTTP_MODULE, "urllib.request.Request(u, b'x')"),
@@ -378,6 +469,43 @@ BAD: list[tuple[str, Rule, str, str]] = [
     ("import requests", rule_imports, "x.py", "import requests"),
     ("from httpx", rule_imports, "x.py", "from httpx import Client"),
     ("import subprocess", rule_imports, "x.py", "import subprocess"),
+    # subprocess is exempt in GIT_MODULE only, as a plain un-aliased import.
+    ("subprocess in lab fetch", rule_imports, LAB_FETCH, "import subprocess"),
+    ("subprocess in register", rule_imports, "lab/register.py", "import subprocess"),
+    ("subprocess in broker", rule_imports, "broker/x.py", "import subprocess"),
+    (
+        "subprocess, repo key",
+        rule_imports,
+        "src/llm_trading_bot/" + GIT_MODULE,
+        "import subprocess",
+    ),
+    ("from subprocess in git", rule_imports, GIT_MODULE, "from subprocess import run"),
+    ("subprocess alias in git", rule_imports, GIT_MODULE, "import subprocess as sp"),
+    ("requests in git", rule_imports, GIT_MODULE, "import requests"),
+    ("popen in git", rule_subprocess_calls, GIT_MODULE, 'subprocess.Popen(["git"])'),
+    ("check_output in git", rule_subprocess_calls, GIT_MODULE, "subprocess.check_output(a)"),
+    ("getattr in git", rule_subprocess_calls, GIT_MODULE, 'getattr(subprocess, "Popen")(a)'),
+    ("module alias in git", rule_subprocess_calls, GIT_MODULE, "p = subprocess\np.Popen(a)"),
+    (
+        "shell in git",
+        rule_subprocess_calls,
+        GIT_MODULE,
+        "subprocess.run(a, shell=True, timeout=1)",
+    ),
+    ("shell missing in git", rule_subprocess_calls, GIT_MODULE, "subprocess.run(a, timeout=1)"),
+    ("no timeout in git", rule_subprocess_calls, GIT_MODULE, "subprocess.run(a, shell=False)"),
+    (
+        "kwargs in git",
+        rule_subprocess_calls,
+        GIT_MODULE,
+        "subprocess.run(a, shell=False, timeout=1, **kw)",
+    ),
+    (
+        "run elsewhere",
+        rule_subprocess_calls,
+        "lab/register.py",
+        "subprocess.run(a, shell=False, timeout=1)",
+    ),
     ("http.client import", rule_imports, "x.py", "from http.client import HTTPSConnection"),
     ("websockets", rule_imports, "x.py", "import websockets.sync.client"),
     ("hmac elsewhere", rule_imports, "market/x.py", "import hmac"),
@@ -409,7 +537,13 @@ def test_each_rule_catches_its_pattern(case: str, rule: Rule, path: str, source:
         (rule_public_paths, BITVAVO_MODULE, 'self._get("/ticker/book")'),
         (rule_public_paths, BITVAVO_MODULE, 'self._get(f"/{m}/candles?{q}")'),
         (rule_public_paths, LAB_FETCH, "self._transport.get_json_and_headers(API + path)"),
-        (rule_literals, LAB_FETCH, 'p = f"/{m}/trades?{q}"'),
+        (rule_literals, LAB_FETCH_IN_REPO, 'p = f"/{m}/trades?{q}"'),
+        (rule_imports, GIT_MODULE, "import subprocess"),
+        (
+            rule_subprocess_calls,
+            GIT_MODULE,
+            "subprocess.run(list(f), stdin=subprocess.DEVNULL, shell=False, timeout=5)",
+        ),
         (rule_imports, "web/auth.py", "import hmac"),
         (rule_imports, HTTP_MODULE, "import http.client"),
         (rule_scripts, "deploy/web.service", "ExecStart=x web --data-dir /var/lib/x"),

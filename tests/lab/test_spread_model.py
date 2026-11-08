@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from llm_trading_bot.lab.archive import Archive, ArchiveError, PublicApi
-from llm_trading_bot.lab.model import Quarter
+from llm_trading_bot.lab.model import SEAL_EPOCH, Quarter
 from llm_trading_bot.lab.spread import (
     DEFAULT_SPREAD,
     FLOOR,
@@ -260,3 +260,49 @@ def test_sampler_stops_at_429_and_resumes(tmp_path: Path) -> None:
         clock.now = Q2.end + 900
         done = sample_spreads(archive, api, start=start, end=end, markets=["BTC-EUR"])
         assert (done.stopped, done.hours_skipped, done.hours_sampled) == ("", 1, 3)
+
+
+# ---------------------------------------------------------------- sealed period (ADR-0026)
+
+
+def test_sampler_never_requests_sealed_hours(tmp_path: Path) -> None:
+    start, end = SEAL_EPOCH - 3 * WEEK, SEAL_EPOCH + 5 * WEEK
+    before = sample_hours("BTC-EUR", start, SEAL_EPOCH)
+    assert sample_hours("BTC-EUR", SEAL_EPOCH, end)  # there would be hours to sample
+    trades = [t for h in before for t in hour_with_spread(h, 0.0004)]
+    fake = FakeTradesApi({"BTC-EUR": trades})
+    api = PublicApi(fake, clock=Clock(end + WEEK), sleep=lambda _s: None, min_interval=0)
+    with Archive(tmp_path / "candles.db") as archive:
+        result = sample_spreads(archive, api, start=start, end=end, markets=["BTC-EUR"])
+        assert result.clamped and result.hours_sampled == len(before) == len(fake.urls)
+        starts = [int(parse_qs(urlsplit(u).query)["start"][0]) // 1000 for u in fake.urls]
+        assert starts == before and max(starts) + 3600 <= SEAL_EPOCH
+        built = build_quarter_spreads(archive, now=1)
+        assert list(built) == [("BTC-EUR", "2025Q3")]
+        inside = sample_spreads(archive, api, start=start, end=SEAL_EPOCH, markets=["BTC-EUR"])
+        assert not inside.clamped and inside.requests == 0
+
+
+def test_sealed_quarters_never_computed_or_used(tmp_path: Path) -> None:
+    with Archive(tmp_path / "candles.db") as archive:
+        # Rows as older code might have left them: a sample and a value inside the seal.
+        for hour, median in ((SEAL_EPOCH - 7200, 0.0004), (SEAL_EPOCH, 0.0009)):
+            archive.db.execute(
+                "INSERT INTO spread_samples(market, method, hour, trades, pairs, median, "
+                "fetched_at) VALUES ('BTC-EUR', ?, ?, 4, 3, ?, 1)",
+                (METHOD, hour, median),
+            )
+        built = build_quarter_spreads(archive, now=1)
+        assert list(built) == [("BTC-EUR", "2025Q3")]
+        value, hours = built[("BTC-EUR", "2025Q3")]
+        assert value == pytest.approx(0.0004) and hours == 1
+        quarters = [r[0] for r in archive.db.execute("SELECT quarter FROM spreads")]
+        assert quarters == ["2025Q3"]
+        archive.db.execute(
+            "INSERT INTO spreads(market, quarter, method, spread, samples, computed_at) "
+            "VALUES ('BTC-EUR', '2025Q4', ?, 0.0009, 1, 1)",
+            (METHOD,),
+        )
+        model = QuarterSpreads.from_archive(archive)
+        assert model.source("BTC-EUR", SEAL_EPOCH) == "default"
+        assert model.spread("BTC-EUR", SEAL_EPOCH - 1) == pytest.approx(0.0004)

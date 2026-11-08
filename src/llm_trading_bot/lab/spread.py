@@ -17,6 +17,16 @@ Before the bot's own recording (Spec 015) the spread is estimated from public tr
 - **Without samples:** ``DEFAULT_SPREAD``, deliberately wide (see there).
 
 ``half_spread`` is what the historical client adds to and subtracts from the mid (AK2).
+
+**Sealed period** (ADR-0026, ``SEAL_EPOCH`` = 2025-10-01 = start of 2025Q4): the sampler never
+requests an hour from there on and ``build_quarter_spreads`` never computes or stores a quarter
+from 2025Q4 on, whatever range a caller passes. A spread for those quarters would be a number
+from the test period; after the seal the recorded median of Spec 015 takes over anyway.
+
+The quarter value uses samples from the whole quarter, also from after a given decision: an
+assumption of the cost model (the report lists it), not a signal any strategy sees.
+
+CLI ``trading-bot lab spread`` (German output): see ``cli_main``.
 """
 
 import itertools
@@ -26,10 +36,28 @@ import statistics
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, TextIO
 
-from llm_trading_bot.lab.archive import Archive, ArchiveError, PublicApi, RateLimited
-from llm_trading_bot.lab.model import MARKETS
+from llm_trading_bot.lab.archive import (
+    EXIT_ERROR,
+    EXIT_OK,
+    EXIT_RATE_LIMITED,
+    EXIT_USAGE,
+    Archive,
+    ArchiveError,
+    LabArgumentParser,
+    PublicApi,
+    RateLimited,
+    add_dir_option,
+    archive_path,
+    format_utc,
+    german_retry_message,
+    parse_cli,
+    parse_utc,
+    sealed_note,
+)
+from llm_trading_bot.lab.model import MARKETS, SEAL_EPOCH, Quarter
+from llm_trading_bot.market.http import HTTPFailure, TransportError
 
 METHOD = "trades-adjacent-opposite-60s-q75-v1"
 """Stored with every value; another estimator gets another name, never the same rows."""
@@ -82,7 +110,10 @@ class QuarterSpreads:
         rows = archive.db.execute(
             "SELECT market, quarter, spread FROM spreads WHERE method=?", (method,)
         )
-        return cls({(str(m), str(q)): float(s) for m, q, s in rows})
+        # A sealed quarter's row can only come from older code; it is never used.
+        return cls(
+            {(str(m), str(q)): float(s) for m, q, s in rows if not Quarter.parse(str(q)).sealed}
+        )
 
     def spread(self, market: str, epoch: int) -> float:
         value = self._spreads.get((market, quarter_label(epoch)))
@@ -194,6 +225,8 @@ class SampleResult:
     stopped: str = ""
     """``""``, ``rate_limited`` or ``budget``."""
     retry_at: int | None = None
+    clamped: bool = False
+    """The requested end reached into the sealed period and was cut to ``SEAL_EPOCH``."""
 
 
 def sample_spreads(
@@ -209,11 +242,13 @@ def sample_spreads(
 ) -> SampleResult:
     """Fetch and store the hour estimates that are still missing; resumable like the archive.
 
-    Shares the archive's 429 memory: after a ban nothing is sent before ``retry_at``.
+    Shares the archive's 429 memory: after a ban nothing is sent before ``retry_at``. ``end`` is
+    clamped to ``SEAL_EPOCH`` (module docstring); there is no switch to lift that here.
     """
     if archive.readonly:
         raise ArchiveError("the archive was opened read-only")
-    result = SampleResult()
+    result = SampleResult(clamped=end > SEAL_EPOCH)
+    end = min(end, SEAL_EPOCH)
     now = api.now()
     banned = archive.retry_at()
     if banned is not None and banned > now:
@@ -264,11 +299,14 @@ def build_quarter_spreads(
 
     Returns ``{(market, quarter): (spread, hours with a median)}``. A quarter's row is
     recomputed from all its samples each time: the samples are the record, the value follows.
+    Samples from the sealed period (only possible in an archive written by older code) are
+    ignored, so no quarter from 2025Q4 on is ever computed or stored.
     """
     by_quarter: dict[tuple[str, str], list[float]] = {}
     for market, hour, median in archive.db.execute(
-        "SELECT market, hour, median FROM spread_samples WHERE method=? AND median IS NOT NULL",
-        (method,),
+        "SELECT market, hour, median FROM spread_samples "
+        "WHERE method=? AND median IS NOT NULL AND hour + 3600 <= ?",
+        (method, SEAL_EPOCH),
     ):
         by_quarter.setdefault((str(market), quarter_label(int(hour))), []).append(float(median))
     stamp = math.floor(time.time()) if now is None else now
@@ -288,3 +326,149 @@ def build_quarter_spreads(
             con.execute("ROLLBACK")
         raise
     return out
+
+
+# ---------------------------------------------------------------- CLI
+
+SPREAD_START = "2021-01-01"
+"""Default start: one quarter before the first graded one (2021Q2)."""
+
+
+def _percent(fraction: float) -> str:
+    return f"{fraction * 100:.4f}".replace(".", ",") + " %"
+
+
+def quarter_table(
+    built: Mapping[tuple[str, str], tuple[float, int]],
+    start: int,
+    end: int,
+    *,
+    markets: Sequence[str] = MARKETS,
+    default: Mapping[str, float] = DEFAULT_SPREAD,
+) -> str:
+    """German table of the assumed full spread per quarter in ``[start, end)`` and market;
+    quarters without enough samples show the default and say so."""
+    if start >= end:
+        return "Keine Quartale im Zeitraum."
+    quarters = Quarter.span(quarter_label(start), quarter_label(end - 1))
+    header = "| Quartal | " + " | ".join(markets) + " |"
+    lines = [
+        "Angenommener Spread (voller Abstand Bid/Ask in % der Mitte, oberes Quartil der "
+        "Stunden-Mediane):",
+        header,
+        "|" + "---|" * (len(markets) + 1),
+    ]
+    for q in quarters:
+        cells = []
+        for market in markets:
+            value = built.get((market, q.label))
+            if value is None:
+                fallback = default.get(market, FALLBACK_SPREAD)
+                cells.append(f"Standard {_percent(fallback)}")
+            else:
+                cells.append(f"{_percent(value[0])} ({value[1]} Std.)")
+        lines.append(f"| {q.label} | " + " | ".join(cells) + " |")
+    lines.append(
+        "„Standard“: zu wenige Stunden mit mindestens "
+        f"{MIN_PAIRS} Gegenpaaren; der Wert ist eine vorsichtige Annahme."
+    )
+    return "\n".join(lines)
+
+
+def _spread_parser(out: TextIO) -> LabArgumentParser:
+    parser = LabArgumentParser(
+        out=out,
+        prog="trading-bot lab spread",
+        description=f"Schätzt den Spread je Quartal aus {HOURS_PER_WEEK} Stunden öffentlicher "
+        "Bitvavo-Trades je Woche (fortsetzbar), nur vor dem versiegelten Zeitraum ab 2025-10-01.",
+    )
+    add_dir_option(parser)
+    parser.add_argument(
+        "--start",
+        type=parse_utc,
+        default=parse_utc(SPREAD_START),
+        help=f"Beginn, ISO-Datum (Standard: {SPREAD_START})",
+    )
+    parser.add_argument(
+        "--end",
+        type=parse_utc,
+        default=SEAL_EPOCH,
+        help="Ende, ISO-Datum (Standard und Obergrenze: 2025-10-01)",
+    )
+    parser.add_argument(
+        "--max-requests", type=int, default=None, help="höchstens so viele Anfragen in diesem Lauf"
+    )
+    return parser
+
+
+def cli_main(
+    command: str, argv: Sequence[str], out: TextIO, *, api: PublicApi | None = None
+) -> int:
+    """``trading-bot lab spread`` (Spec 016 AK6): sample, then print the quarter table.
+
+    ``api`` is injectable for tests. The table is built only once every hour of the range is
+    sampled; a run stopped by ``--max-requests`` (exit 0) or a 429 (exit 3) is resumed by
+    calling again.
+    """
+    if command != "spread":
+        print(f"Unbekannter Labor-Befehl für das Spread-Modell: {command}", file=out)
+        return EXIT_USAGE
+    args = parse_cli(_spread_parser(out), argv)
+    if isinstance(args, int):
+        return args
+    if args.max_requests is not None and args.max_requests < 1:
+        print("--max-requests muss mindestens 1 sein.", file=out)
+        return EXIT_USAGE
+    start: int = args.start
+    requested: int = args.end
+    end = min(requested, SEAL_EPOCH)
+    if requested > SEAL_EPOCH:
+        print(sealed_note(requested), file=out)
+    if start >= end:
+        print("Der Beginn muss vor dem Ende (höchstens 2025-10-01) liegen.", file=out)
+        return EXIT_USAGE
+    api = api if api is not None else PublicApi()
+    path = archive_path(args.dir)
+    print(f"Kerzenarchiv: {path}", file=out)
+    print(
+        f"Spread-Stichproben: {HOURS_PER_WEEK} Stunden je Woche, "
+        f"{format_utc(start)} bis {format_utc(end)} (Methode {METHOD})",
+        file=out,
+    )
+
+    def progress(line: str) -> None:
+        print(line, file=out, flush=True)
+
+    try:
+        with Archive(path) as archive:
+            result = sample_spreads(
+                archive,
+                api,
+                start=start,
+                end=end,
+                max_requests=args.max_requests,
+                progress=progress,
+            )
+            print(
+                f"Anfragen: {result.requests}, neue Stunden: {result.hours_sampled}, "
+                f"schon vorhanden: {result.hours_skipped}",
+                file=out,
+            )
+            if result.stopped == "rate_limited" and result.retry_at is not None:
+                print(german_retry_message(result.retry_at, api.now()), file=out)
+                return EXIT_RATE_LIMITED
+            if result.stopped == "budget":
+                print("Anfragen-Grenze erreicht; ein weiterer Aufruf setzt fort.", file=out)
+                return EXIT_OK
+            built = build_quarter_spreads(archive, now=api.now())
+    except RateLimited as exc:  # sample_spreads handles 429s itself; kept for any other path
+        print(german_retry_message(exc.retry_at, api.now()), file=out)
+        return EXIT_RATE_LIMITED
+    except ArchiveError as exc:
+        print(f"Kerzenarchiv-Fehler: {exc}", file=out)
+        return EXIT_ERROR
+    except (HTTPFailure, TransportError, OSError) as exc:
+        print(f"Abruf fehlgeschlagen: {exc}. Ein weiterer Aufruf setzt fort.", file=out)
+        return EXIT_ERROR
+    print(quarter_table(built, start, end), file=out)
+    return EXIT_OK
