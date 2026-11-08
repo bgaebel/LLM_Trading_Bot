@@ -76,7 +76,7 @@ aus demselben Commit aus. `<dienst>` ist der Systembenutzer aus Spec 002.
 | `/opt/llm-trading-bot/current`, `…/previous` | Symlinks auf das aktive und das vorige Release | root |
 | `/var/lib/llm-trading-bot/` | `bot.db`, `observations.db` (ab Spec 015), `secrets.env`, `web-auth.json`, `service-status.json` | `<dienst>`, 700 / 600 |
 | `/var/backups/llm-trading-bot/{daily,pre-update}/` | geprüfte Kopien von `bot.db` (14 bzw. 5) | `<dienst>`, 700 / 600 |
-| `/var/backups/llm-trading-bot/observations/{daily,pre-update}/` | geprüfte Kopien von `observations.db` (14 bzw. 3) | `<dienst>`, 700 / 600 |
+| `/var/backups/llm-trading-bot/observations/{daily,pre-update}/` | geprüfte Kopien von `observations.db` (7 bzw. 3; wächst etwa 2 MB am Tag) | `<dienst>`, 700 / 600 |
 | `/usr/local/bin/uv` | uv in fester Version (SHA-256 geprüft) | root |
 
 Units: `llm-trading-bot` (Runde je Minute), `llm-trading-bot-web` (127.0.0.1:8787),

@@ -28,6 +28,8 @@ from llm_trading_bot.paper.db import COLUMNS, UNIQUE_KEYS, SchemaError, check_sc
 from llm_trading_bot.paper.observations_schema import OBS_TABLES, check_observations_schema
 
 KEEP = 14
+KEEP_OBSERVATIONS = 7
+"""observations.db grows about 2 MB a day (Spec 015): a week of copies keeps the disk in check."""
 SIDECARS = ("-wal", "-shm", "-journal")
 STALE_SECONDS = 3600
 """A temporary copy older than this belongs to a backup that was killed; rotation removes it."""

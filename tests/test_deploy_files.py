@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from llm_trading_bot.ops.backup import KEEP
+from llm_trading_bot.ops.backup import KEEP, KEEP_OBSERVATIONS
 from llm_trading_bot.service.run import EXIT_LOCKED, PING_SECONDS, STALL_SECONDS, STOP_SECONDS
 
 DEPLOY = Path(__file__).parent.parent / "deploy"
@@ -123,7 +123,8 @@ def test_backup_unit_copies_observations_in_its_own_invocation_after_bot_db() ->
     assert not bot.startswith("-")
     assert observations == (
         "-__APP_DIR__/.venv/bin/trading-bot backup --profile observations --if-exists"
-        f" --db __DATA_DIR__/observations.db --dir __BACKUP_DIR__/observations/daily --keep {KEEP}"
+        f" --db __DATA_DIR__/observations.db --dir __BACKUP_DIR__/observations/daily"
+        f" --keep {KEEP_OBSERVATIONS}"
     )
     release = RELEASE.read_text(encoding="utf-8")
     # release.sh tells a release from Spec 015 on by this line (knows_observations).

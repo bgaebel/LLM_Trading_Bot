@@ -55,7 +55,7 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
   Standardwerten in `ADDED` (ältere Leser vertragen die neue Datei, neue Leser die alte); `release.sh status` zeigt
   sie. — Nachweis: `tests/service/test_status.py::test_observation_fields_*`, `tests/deploy/test_release.py::test_status_observations`
 - [ ] AK6: **Sicherung:** `observations.db` wird in einem eigenen Aufruf (eigenes Profil: Schema, Namensmuster
-  `observations-…`, Unterordner, 14 tägliche Kopien) gesichert; ein Fehler dabei lässt die `bot.db`-Sicherung, die
+  `observations-…`, Unterordner, 7 tägliche Kopien) gesichert; ein Fehler dabei lässt die `bot.db`-Sicherung, die
   Sicherung vor dem Update und jeden Deploy unberührt. Wiederherstellen nur in ein neues Ziel. — Nachweis:
   `tests/ops/test_backup.py::test_observations_profile_*`, `::test_corrupt_observations_keeps_bot_backup`,
   `tests/deploy/test_release.py::test_observations_backup_*`
@@ -93,12 +93,12 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
   rendert Units mit `current`).
 
 ## Plan
-- [ ] 1. Quote-Tiefe getrennt, Tests (AK1)
-- [ ] 2. Fehlercodes und Auslöser-Grund mit Gleichheitstests (AK2)
-- [ ] 3. Beobachtungs-DB: Schema, Puffer, Schreiber, Lebenszyklus (AK3)
-- [ ] 4. Aufzeichnungspunkte in Snapshot, Zyklus, GPT; Größenmessung (AK4)
-- [ ] 5. Statusfelder (AK5)
-- [ ] 6. Sicherungsprofil und Deploy-Anpassung (AK6, AK7)
+- [x] 1. Quote-Tiefe getrennt, Tests (AK1)
+- [x] 2. Fehlercodes und Auslöser-Grund mit Gleichheitstests (AK2)
+- [x] 3. Beobachtungs-DB: Schema, Puffer, Schreiber, Lebenszyklus (AK3)
+- [x] 4. Aufzeichnungspunkte in Snapshot, Zyklus, GPT; Größenmessung (AK4)
+- [x] 5. Statusfelder (AK5)
+- [x] 6. Sicherungsprofil und Deploy-Anpassung (AK6, AK7)
 - [ ] 7. Doku, ADR, Prüfung (Workflow), PR (AK9)
 - [ ] 8. Mit Zustimmung: Deploy, Stichprobe (AK8)
 
@@ -116,6 +116,13 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
   neu geschnitten: Aufzeichnung allein und zuerst (geht täglich verloren), Archiv und Backtest in Spec 016,
   Signal-Bericht in Spec 017, Kandidaten in Spec 018; Schreiben nach der Runde aus einem Puffer, keine zweite Sperre,
   Tiefe außerhalb der Quote, Gründe als Codes, Release-SHA aus dem Pfad, eigenes Sicherungsprofil.
+- 2026-11-08: Umsetzung: Schema-Vertrag zuerst, dann Aufzeichnung (Markt, GPT, Puffer, Dienst, Status) und
+  Sicherung/Deploy parallel in zwei Worktrees, gemergt. Größe gemessen: 3,9 MB/Tag mit allen Fenstern; Fenster jetzt
+  nur bei Änderung (verlustfrei, 11.520 → 3.132 Zeilen/Tag) → 2,65 MB/Tag im ungünstigsten GPT-Fall, realistisch
+  ≈ 2 MB/Tag (≈ 0,7 GB/Jahr). Deshalb 7 tägliche Sicherungen statt 14; Ausdünnung/Archivierung vor Ablauf eines
+  halben Jahres planen (neues ADR, da nur anhängend). Statusleser ignorieren jetzt unbekannte Felder (ältere Leser
+  vertragen neuere Dateien ab 015); `llm_due` bleibt `bool`, `due_reason` liefert den Grund; vierter Buch-Zweck
+  `snapshot` (Abfrage in `build_snapshots`).
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

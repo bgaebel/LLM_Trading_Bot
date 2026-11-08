@@ -18,7 +18,7 @@ ExecStart=__APP_DIR__/.venv/bin/trading-bot backup --db __DATA_DIR__/bot.db --di
 # Spec 015 AK6 (ADR-0027): observations.db in its own invocation, only after the trade history is
 # safe. "-": its failure is logged but never fails this unit; a missing file (no 015 round yet) is
 # skipped with a line. deploy/release.sh recognises a release from 015 on by "--profile observations".
-ExecStart=-__APP_DIR__/.venv/bin/trading-bot backup --profile observations --if-exists --db __DATA_DIR__/observations.db --dir __BACKUP_DIR__/observations/daily --keep 14
+ExecStart=-__APP_DIR__/.venv/bin/trading-bot backup --profile observations --if-exists --db __DATA_DIR__/observations.db --dir __BACKUP_DIR__/observations/daily --keep 7
 Nice=10
 IOSchedulingClass=idle
 TimeoutStartSec=30min

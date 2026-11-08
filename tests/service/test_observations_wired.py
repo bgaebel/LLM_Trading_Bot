@@ -181,7 +181,8 @@ def test_service_records_each_round_after_a_start_marker(
     assert code == EXIT_OK
     counts = obs_counts(h.db.parent / OBS_FILE)
     assert counts["service_starts"] == 1 and counts["rounds"] == 3
-    assert counts["books"] > 0 and counts["windows"] == 3 * 8 and counts["snapshots"] == 6
+    # Windows only when Bitvavo's answer changed: all 8 in the first round, then the 1m ones.
+    assert counts["books"] > 0 and 8 < counts["windows"] < 3 * 8 and counts["snapshots"] == 6
     assert counts["decision_meta"] > 0 and counts["llm_attempts"] > 0
     status = obs_status(h)
     assert (status.observations_written, status.observations_failed) == (4, 0)

@@ -194,8 +194,42 @@ def note(buffer: ObservationBuffer | None, record: Callable[[ObservationBuffer],
             buffer.dropped += 1
 
 
-def insert(con: sqlite3.Connection, buffer: ObservationBuffer) -> None:
-    """All rows of ``buffer``; the caller holds the transaction."""
+WindowKey = tuple[str, int]
+"""(symbol, interval) of a window row."""
+
+
+def changed_windows(
+    seen: Mapping[WindowKey, tuple[object, ...]], windows: Iterable[tuple[object, ...]]
+) -> list[tuple[object, ...]]:
+    """The window rows that differ from the last one written for their symbol and interval.
+
+    Lossless: the window a round used is the latest written row at or before its time. Without
+    this a day costs 11,520 window rows; the 15m/1h/4h windows change only once per bar, so it
+    becomes about 3,100 (Spec 015 AK4, measured 2026-11-08).
+    """
+    fresh: list[tuple[object, ...]] = []
+    last = dict(seen)
+    for row in windows:
+        key = (str(row[1]), int(str(row[2])))
+        if last.get(key) != _window_state(row):
+            fresh.append(row)
+            last[key] = _window_state(row)
+    return fresh
+
+
+def _window_state(row: tuple[object, ...]) -> tuple[object, ...]:
+    # rows, first/last open, forming flag and the hash of the closed rows (which covers the
+    # last closed volume): what tells two answers of Bitvavo apart. The time does not.
+    return (*row[3:7], row[8])
+
+
+def insert(
+    con: sqlite3.Connection,
+    buffer: ObservationBuffer,
+    windows: list[tuple[object, ...]] | None = None,
+) -> None:
+    """All rows of ``buffer`` (window rows: ``windows`` if given); the caller holds the
+    transaction."""
     if buffer.round_at is not None:
         cursor = con.execute(
             "INSERT INTO rounds(ts,release) VALUES (?,?)", (iso(buffer.round_at), buffer.release)
@@ -209,7 +243,7 @@ def insert(con: sqlite3.Connection, buffer: ObservationBuffer) -> None:
         con.executemany(
             "INSERT INTO windows(round_id,ts,symbol,interval,rows,first_open,last_open,forming,"
             "last_closed_volume,rows_sha256) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            [(round_id, *row) for row in buffer.windows],
+            [(round_id, *row) for row in (buffer.windows if windows is None else windows)],
         )
         con.executemany(
             "INSERT INTO snapshots(round_id,ts,symbol,status,message,decided) VALUES (?,?,?,?,?,?)",
@@ -250,6 +284,8 @@ class ObservationWriter:
         self.last_error: str | None = None
         self.off = False
         """True after a damaged file or one of another version: no further attempt this run."""
+        self.windows_seen: dict[WindowKey, tuple[object, ...]] = {}
+        """The last window written per symbol and interval; after a restart everything is new."""
 
     def start(self, at: str, release: str, pid: int) -> None:
         """The start marker of this service run: gaps between runs stay visible."""
@@ -266,12 +302,20 @@ class ObservationWriter:
         except Exception as exc:
             self._fail(exc)
             return
-        self._write(lambda con: insert(con, buffer))
+        try:
+            fresh = changed_windows(self.windows_seen, buffer.windows)
+        except Exception as exc:
+            self._fail(exc)
+            return
+        if self._write(lambda con: insert(con, buffer, fresh)):
+            # Only after the commit: a lost round must not hide its windows from the next one.
+            for row in fresh:
+                self.windows_seen[(str(row[1]), int(str(row[2])))] = _window_state(row)
 
-    def _write(self, work: Callable[[sqlite3.Connection], object]) -> None:
+    def _write(self, work: Callable[[sqlite3.Connection], object]) -> bool:
         if self.off:
             self.failed += 1
-            return
+            return False
         try:
             con = self._open()
             try:
@@ -287,8 +331,9 @@ class ObservationWriter:
                 con.close()
         except Exception as exc:
             self._fail(exc)
-        else:
-            self.written += 1
+            return False
+        self.written += 1
+        return True
 
     def _fail(self, exc: BaseException) -> None:
         self.failed += 1

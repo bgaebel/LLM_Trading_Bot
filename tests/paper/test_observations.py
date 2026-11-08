@@ -27,6 +27,7 @@ from llm_trading_bot.paper.observations import (
     BUSY_TIMEOUT_MS,
     ObservationBuffer,
     ObservationWriter,
+    changed_windows,
     insert,
     note,
     observations_path,
@@ -447,11 +448,38 @@ def test_writer_counts_an_unopenable_path(tmp_path: Path) -> None:
 def test_writer_rolls_back_a_round_that_fails_halfway(tmp_path: Path) -> None:
     path = tmp_path / OBS_FILE
     buffer = full_buffer()
-    buffer.windows.append(("too", "short"))
+    buffer.snapshots.append(("too", "short"))  # inserted after rounds, books and windows
     writer = ObservationWriter(path)
     writer.write(buffer)
     assert writer.failed == 1 and not writer.off
     assert counts(path)["rounds"] == 0 and counts(path)["books"] == 0
+    assert counts(path)["windows"] == 0
+
+
+def test_writer_writes_a_window_only_when_it_changed(tmp_path: Path) -> None:
+    path = tmp_path / OBS_FILE
+    writer = ObservationWriter(path)
+    first = full_buffer()
+    writer.write(first)
+    written = counts(path)["windows"]
+    assert written == len(first.windows) > 0
+    writer.write(full_buffer())  # same answers from Bitvavo: nothing new to keep
+    assert counts(path)["windows"] == written and counts(path)["rounds"] == 2
+    changed = full_buffer()
+    changed.windows[0] = (*changed.windows[0][:8], "0" * 64)
+    writer.write(changed)
+    assert counts(path)["windows"] == written + 1
+
+
+def test_writer_keeps_windows_of_a_lost_round_for_the_next(tmp_path: Path) -> None:
+    path = tmp_path / OBS_FILE
+    writer = ObservationWriter(path)
+    broken = full_buffer()
+    broken.books.append(("too", "short"))  # this round's insert fails after the windows
+    writer.write(broken)
+    assert writer.failed == 1 and counts(path)["windows"] == 0
+    writer.write(full_buffer())
+    assert counts(path)["windows"] == len(full_buffer().windows)
 
 
 def test_writer_survives_a_buffer_that_raises(tmp_path: Path) -> None:
@@ -490,6 +518,7 @@ def test_size_of_one_day(tmp_path: Path) -> None:
     db = sqlite3.connect(path, isolation_level=None)
     db.execute("BEGIN")
     call_id = 0
+    seen: dict[tuple[str, int], tuple[object, ...]] = {}
     for minute in range(1440):
         at = NOW + 60 * minute
         buffer = ObservationBuffer(SHA)
@@ -499,7 +528,11 @@ def test_size_of_one_day(tmp_path: Path) -> None:
         gpt = minute % 15 == 0  # 4 attempts per hour and depot
         if gpt:
             buffer.book("after_llm", at, book)
-        buffer.windows.extend(windows)
+        # As live: a window changes once per bar of its interval (the 1m one every round).
+        for row in windows:
+            bar = minute // int(str(row[2]))
+            sha = hashlib.sha256(f"{row[1]}-{row[2]}-{bar}".encode()).hexdigest()
+            buffer.windows.append((*row[:8], sha))
         for symbol in (Symbol.BTCEUR, Symbol.ETHEUR):
             buffer.snapshot(symbol, "ok", None, True)
             strategies = ["breakout", "meanrev", "ensemble"] if minute % 15 == 0 else []
@@ -512,14 +545,21 @@ def test_size_of_one_day(tmp_path: Path) -> None:
                 call_id += 1
                 targets = {"BTCEUR": entry(), "ETHEUR": entry()}
                 buffer.llm_attempt("t", call_id, agent, "move", detail, cadence, raw, targets)
-        insert(db, buffer)
+        fresh = changed_windows(seen, buffer.windows)
+        insert(db, buffer, fresh)
+        seen.update({(str(r[1]), int(str(r[2]))): (*r[3:7], r[8]) for r in fresh})
     db.execute("COMMIT")
     db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     totals = {t: db.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in OBS_TABLES}
     db.close()
     size_mb = os.path.getsize(path) / 1_000_000
     print(f"\nobservations.db, one day: {size_mb:.2f} MB, rows {totals}")
-    assert totals["rounds"] == 1440 and totals["windows"] == 1440 * 8
+    per_symbol = sum(1440 // interval for interval in (1, 15, 60, 240))
+    assert (
+        totals["rounds"] == 1440
+        and totals["windows"] == 2 * per_symbol == len(windows) // 4 * per_symbol
+    )
     assert totals["llm_attempts"] == 2 * 4 * 24
-    # Measured 2026-11-08: about 3.9 MB/day; the bound catches an accidental blow-up.
-    assert size_mb < 10
+    # Measured 2026-11-08: about 3.9 MB/day with every window written, see the Verlauf of
+    # Spec 015 for the figure with change-only windows; the bound catches an accidental blow-up.
+    assert size_mb < 4
