@@ -58,7 +58,43 @@ BOOTSTRAP_BLOCK = 7
 BOOTSTRAP_SEED = 16_016
 BAND = 0.95
 Z95 = 1.959963984540054
-"""Two-sided 95 % normal quantile for the per-cell band (trades treated as independent)."""
+"""Two-sided 95 % normal quantile; the limit of ``t95`` for many degrees of freedom."""
+_T95 = (
+    12.706204736174698,
+    4.302652729749464,
+    3.182446305284263,
+    2.7764451051977934,
+    2.570581835636314,
+    2.4469118511449666,
+    2.3646242515927853,
+    2.306004135204168,
+    2.262157162798205,
+    2.2281388519862744,
+    2.200985160082949,
+    2.1788128296672284,
+    2.1603686564627917,
+    2.1447866879178035,
+    2.131449545559774,
+    2.1199052992212555,
+    2.1098155778333156,
+    2.100922040241036,
+    2.093024054408307,
+    2.0859634472658626,
+    2.0796138447276835,
+    2.0738730679040147,
+    2.068657610419041,
+    2.0638985616280205,
+    2.0595385527532977,
+    2.0555294386428713,
+    2.0518305164802833,
+    2.048407141795244,
+    2.0452296421327034,
+    2.0422724563012373,
+)
+"""Two-sided 95 % quantiles of Student's t for 1..30 degrees of freedom (a test checks them
+against a numerical integration of the t density)."""
+MIN_BAND_TRIPS = 2
+"""Round trips a market-phase cell needs for a band; below, the report says "zu wenige"."""
 FEW_TRADES = 30
 """Cells with fewer round trips are flagged as not robust (methodology, regime split)."""
 VOL_MIN_HISTORY = 30
@@ -112,6 +148,27 @@ def _stdev(xs: Sequence[float]) -> float:
         return 0.0
     m = sum(xs) / n
     return math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+
+
+def t95(df: int) -> float:
+    """Two-sided 95 % quantile of Student's t with ``df`` degrees of freedom.
+
+    Exact table up to 30, above it the Cornish-Fisher expansion around the normal quantile
+    (error far below the rounding of the report). Small samples get the wide band they need:
+    with two round trips the normal 1.96 would make the band about six times too narrow.
+    """
+    if df < 1:
+        raise ValueError(f"t quantile needs at least one degree of freedom: {df}")
+    if df <= len(_T95):
+        return _T95[df - 1]
+    z, v = Z95, float(df)
+    return (
+        z
+        + (z**3 + z) / (4 * v)
+        + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * v**2)
+        + (3 * z**7 + 19 * z**5 + 17 * z**3 - 15 * z) / (384 * v**3)
+        + (79 * z**9 + 776 * z**7 + 1482 * z**5 - 1920 * z**3 - 945 * z) / (92_160 * v**4)
+    )
 
 
 def verdict(round_trips: int) -> str:
@@ -263,7 +320,9 @@ def max_drawdown(values: Iterable[float]) -> float:
 
 
 def mean_weights(depot: DepotResult) -> dict[str, float]:
-    """ē_m: the depot's mean weight per market over its daily points."""
+    """ē_m: the depot's mean weight per market over its daily points. Each point already holds
+    the day's time-weighted mean over its rounds (``DayPoint.weights``), so a position held for
+    hours and closed before midnight counts with its hours."""
     if not depot.days:
         return {}
     markets = sorted({m for p in depot.days for m in p.weights})
@@ -524,12 +583,16 @@ class DepotMetrics:
     drawdown_basis: str
     """``DRAWDOWN_BASIS``: the report says the drawdown is measured at the end of each day."""
     mean_quote: float
-    """Mean of the summed market weights over the days (mean investment quote)."""
+    """Mean of the summed market weights over the days (mean investment quote, from the
+    time-weighted day means of ``DayPoint.weights``)."""
     mean_weights: dict[str, float]
     benchmark: float
     benchmark_cost: float
     excess: float
     """net_return_mid - benchmark_cost."""
+    excess_no_cost: float
+    """net_return_mid - benchmark: against buy & hold that pays no rebalancing costs (AK7 asks
+    for both; the costed benchmark is the one more favourable to the strategy)."""
     benchmark_days: int
     benchmark_complete: bool
     """False if the benchmark misses depot days; then benchmark and excess cover fewer days than
@@ -579,6 +642,7 @@ def depot_metrics(
         benchmark=bench.total,
         benchmark_cost=bench.total_cost,
         excess=net_mid - bench.total_cost,
+        excess_no_cost=net_mid - bench.total,
         benchmark_days=len(bench.days),
         benchmark_complete=not bench.issues,
         data_issues=bench.issues,
@@ -686,6 +750,9 @@ class Uncertainty:
     """Same against the benchmark without costs."""
     excluded_days: int
     """Calendar days of the graded quarters left out of the bootstrap (see ``DataIssue``)."""
+    group: tuple[str, ...] = ()
+    """The depots resampled with the same day indices as this one (same valid days, itself
+    included); depots of different groups never share draws."""
 
 
 class TooFewDays(ValueError):
@@ -810,7 +877,7 @@ def uncertainty_all(
             expected = {
                 d for r in results if r.graded and a in r.depots for d in quarter_days(r.quarter)
             }
-            result[a] = replace(u, excluded_days=len(expected) - len(days))
+            result[a] = replace(u, excluded_days=len(expected) - len(days), group=tuple(members))
     return {a: result[a] for a in agents if a in result}
 
 
@@ -971,9 +1038,11 @@ class Cell:
     count: int
     mean: float
     """Mean net return per round trip."""
-    low: float
-    high: float
-    """95 % band: mean ± 1.96 · sd / sqrt(n) (round trips treated as independent)."""
+    low: float | None
+    high: float | None
+    """95 % band: mean ± t95(n - 1) · sd / sqrt(n) (round trips treated as independent);
+    None below ``MIN_BAND_TRIPS``: one round trip has no spread, and a band ``x bis x`` would
+    claim certainty."""
     pnl: float
     few: bool
     """Fewer than FEW_TRADES round trips: not robust."""
@@ -1017,7 +1086,11 @@ def market_cells(
     for (regime, vol, direction), rts in sorted(groups.items()):
         rets = [rt.net_return for rt in rts]
         m = _mean(rets)
-        half = Z95 * _stdev(rets) / math.sqrt(len(rets))
+        low: float | None = None
+        high: float | None = None
+        if len(rets) >= MIN_BAND_TRIPS:
+            half = t95(len(rets) - 1) * _stdev(rets) / math.sqrt(len(rets))
+            low, high = m - half, m + half
         cells.append(
             Cell(
                 agent,
@@ -1026,8 +1099,8 @@ def market_cells(
                 direction,
                 len(rts),
                 m,
-                m - half,
-                m + half,
+                low,
+                high,
                 sum(rt.pnl for rt in rts),
                 len(rts) < FEW_TRADES,
             )
@@ -1047,8 +1120,11 @@ class QualityRow:
     decided: int
     share: float
     no_decision: dict[str, int]
+    rounds: int
+    """Rounds of the market in the quarter (``MarketQuality.rounds``; the sum for ``all``)."""
     no_decision_share: dict[str, float]
-    """Rounds without a decision per error code, relative to ``due``."""
+    """Rounds without a decision per error code over ``rounds``: rounds over rounds, never over
+    ``due`` (bars), so a share is at most 1."""
     blocked_rounds: int
     blocked_hours: float
     """Blocked rounds are minutes (ADR-0017)."""
@@ -1062,6 +1138,9 @@ def quality(results: Iterable[QuarterResult]) -> list[QualityRow]:
     for r in sorted(results, key=_start):
         eligible = r.eligible
         for market, q in sorted(r.quality.items()):
+            # Every round reports each market's outcome, so for results recorded before
+            # MarketQuality.rounds existed the quarter's round count is the market's.
+            rounds = q.rounds or r.rounds
             rows.append(
                 _quality_row(
                     r.quarter.label,
@@ -1069,18 +1148,20 @@ def quality(results: Iterable[QuarterResult]) -> list[QualityRow]:
                     q.due,
                     q.decided,
                     q.no_decision,
+                    rounds,
                     q.blocked_rounds,
                     eligible.get(market),
                 )
             )
-            t = total.setdefault(market, [0, 0, {}, 0])
+            t = total.setdefault(market, [0, 0, {}, 0, 0])
             t[0] += q.due
             t[1] += q.decided
             for code, n in q.no_decision.items():
                 t[2][code] = t[2].get(code, 0) + n
-            t[3] += q.blocked_rounds
-    for market, (due, decided, codes, blocked) in sorted(total.items()):
-        rows.append(_quality_row("all", market, due, decided, codes, blocked, None))
+            t[3] += rounds
+            t[4] += q.blocked_rounds
+    for market, (due, decided, codes, rounds, blocked) in sorted(total.items()):
+        rows.append(_quality_row("all", market, due, decided, codes, rounds, blocked, None))
     return rows
 
 
@@ -1090,6 +1171,7 @@ def _quality_row(
     due: int,
     decided: int,
     codes: Mapping[str, int],
+    rounds: int,
     blocked: int,
     eligible: bool | None,
 ) -> QualityRow:
@@ -1100,7 +1182,8 @@ def _quality_row(
         decided,
         decided / due if due else 0.0,
         dict(sorted(codes.items())),
-        {c: n / due if due else 0.0 for c, n in sorted(codes.items())},
+        rounds,
+        {c: n / rounds if rounds else 0.0 for c, n in sorted(codes.items())},
         blocked,
         blocked / 60,
         eligible,

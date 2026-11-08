@@ -34,6 +34,9 @@ What a result means (the conventions ``lab.metrics`` and the report rely on):
     quarter's first round. For a depot stopped by the drawdown stop only bars closing before
     the stop's round count: a stopped depot decides nothing by design (ADR-0021).
   - ``decided``: decisions stored for exactly those bars with status ``OK``.
+  - ``rounds``: rounds in which the cycle reported the market's snapshot outcome (every round,
+    ``ok`` or a failure code): the base of the ``no_decision`` shares, which count rounds, not
+    bars - ``due`` counts bars and must never be their denominator.
   - ``no_decision``: rounds in which the market got no snapshot, by the code the live cycle
     gives the failure (``gap_1m``, ``stale``, ``quote_missing`` ...), read through the
     observation hook of ``paper_cycle`` (Spec 015), which never changes what is traded.
@@ -50,11 +53,15 @@ What a result means (the conventions ``lab.metrics`` and the report rely on):
     slack) and then as ``gap_60m`` (while the hole is among the newest 60 bars).
     ``blocked_rounds`` minus the ``gap_*`` counts of the higher intervals is the part of
     ``stale`` that came from them; the rest of ``stale`` is quote or 1m staleness.
-- **Depots:** one ``DayPoint`` per UTC day (the depot's last equity point that day, valued at
-  mid, weights ``qty * mid / value`` with the mid of that round); ``end_mid`` is the last equity
-  value; ``end_liquidated`` sells every holding at ``bid * (1 - slippage)`` minus the fee at the
-  last round. ``halted_at`` is the round of the drawdown stop; the depot is cash afterwards, and
-  only in this quarter, because the next quarter starts with fresh capital.
+- **Depots:** one ``DayPoint`` per UTC day: value and cash of the depot's last equity point
+  that day (valued at mid); ``weights`` the time-weighted mean exposure over that day's valued
+  rounds (each round's ``qty * mid / value`` with the mid of that round, summed and divided by
+  the depot's valued rounds of the day). Not the last round: a 15m strategy that holds for
+  hours and is flat at midnight was invested, and the benchmark (AK7) must see that quote.
+  ``end_mid`` is the last equity value; ``end_liquidated`` sells every holding at
+  ``bid * (1 - slippage)`` minus the fee at the last round. ``halted_at`` is the round of the
+  drawdown stop; the depot is cash afterwards, and only in this quarter, because the next
+  quarter starts with fresh capital.
 - **Trade context** (market-phase cells, AK7), from the decision's stored ``inputs``
   (``strategy.payload.feature_payload``), so only facts known before the trade:
   ``regime`` = ``indicators.regime`` (TREND/RANGE/TRANSITION from the closed 1h ADX),
@@ -93,6 +100,7 @@ from typing import Any, Protocol, TextIO
 from llm_trading_bot.lab import archive as archive_mod
 from llm_trading_bot.lab.archive import (
     Archive,
+    ArchiveError,
     LabArgumentParser,
     add_dir_option,
     parse_cli,
@@ -115,14 +123,14 @@ from llm_trading_bot.lab.model import (
     Variant,
 )
 from llm_trading_bot.lab.paths import CANDLES_FILE, CHAIN_FILE, RUNS_FILE, lab_dir
-from llm_trading_bot.lab.register import Register
+from llm_trading_bot.lab.register import Register, RegisterError
 from llm_trading_bot.lab.spread import QuarterSpreads, stored_quarter_spreads
 from llm_trading_bot.llm.agents import BotConfig
 from llm_trading_bot.market import snapshot
 from llm_trading_bot.market.models import SYMBOLS, Quote, Symbol
 from llm_trading_bot.market.snapshot import INTERVALS, MarketSnapshot
 from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME, paper_cycle
-from llm_trading_bot.paper.db import open_db
+from llm_trading_bot.paper.db import SchemaError, open_db
 from llm_trading_bot.paper.execution import Costs, fresh_quotes
 from llm_trading_bot.paper.observations import ObservationBuffer
 from llm_trading_bot.paper.report import CycleReport, Equity
@@ -391,6 +399,32 @@ def _dataset_sha256(arch: Archive, pre: _Preload, end: int) -> str:
     return digest.hexdigest()
 
 
+def round_weights(eq: Equity, qs: Mapping[Symbol, Quote]) -> dict[str, float]:
+    """Market -> share of the depot value held in it in one round, at that round's mid."""
+    weights = {}
+    for symbol, qty in ((Symbol.BTCEUR, eq.btc), (Symbol.ETHEUR, eq.eth)):
+        quote = qs.get(symbol)
+        worth = qty * quote.mid if quote is not None and qty else 0.0
+        weights[symbol.market] = worth / eq.value if eq.value > 0 else 0.0
+    return weights
+
+
+@dataclass
+class _Exposure:
+    """Sum of one depot's per-round weights over the valued rounds of the current day."""
+
+    sums: dict[str, float] = field(default_factory=dict)
+    rounds: int = 0
+
+    def add(self, weights: Mapping[str, float]) -> None:
+        for market, w in weights.items():
+            self.sums[market] = self.sums.get(market, 0.0) + w
+        self.rounds += 1
+
+    def mean(self) -> dict[str, float]:
+        return {m: s / self.rounds for m, s in self.sums.items()} if self.rounds else {}
+
+
 @dataclass
 class _Tracker:
     """Per-round bookkeeping of the main loop: day points, daily mids, stops, failure codes."""
@@ -398,9 +432,13 @@ class _Tracker:
     costs: Costs
     days: dict[str, list[DayPoint]] = field(default_factory=dict)
     pending: dict[str, tuple[int, Equity, dict[Symbol, Quote]]] = field(default_factory=dict)
+    exposure: dict[str, _Exposure] = field(default_factory=dict)
+    """Per depot: the weights of the day not yet emitted (``DayPoint.weights``)."""
     halted_at: dict[str, int] = field(default_factory=dict)
     mids: dict[str, list[tuple[str, float]]] = field(default_factory=dict)
     mid_day: dict[str, tuple[int, float]] = field(default_factory=dict)
+    observed: dict[str, int] = field(default_factory=dict)
+    """Per market: rounds with a snapshot outcome (``MarketQuality.rounds``)."""
     no_decision: dict[str, dict[str, int]] = field(default_factory=dict)
     blocked: dict[str, int] = field(default_factory=dict)
 
@@ -414,6 +452,7 @@ class _Tracker:
     ) -> None:
         day = t // DAY
         for market, code in codes.items():
+            self.observed[market] = self.observed.get(market, 0) + 1
             if code != "ok":
                 per = self.no_decision.setdefault(market, {})
                 per[code] = per.get(code, 0) + 1
@@ -426,6 +465,7 @@ class _Tracker:
             if old is not None and old[0] != day:
                 self._emit(eq.agent, old)
             self.pending[eq.agent] = (day, eq, qs)
+            self.exposure.setdefault(eq.agent, _Exposure()).add(round_weights(eq, qs))
         for symbol, quote in qs.items():
             market = symbol.market
             mid = quote.mid
@@ -438,12 +478,9 @@ class _Tracker:
             self.mid_day[market] = (day, mid)
 
     def _emit(self, agent: str, item: tuple[int, Equity, dict[Symbol, Quote]]) -> None:
-        day, eq, qs = item
-        weights = {}
-        for symbol, qty in ((Symbol.BTCEUR, eq.btc), (Symbol.ETHEUR, eq.eth)):
-            quote = qs.get(symbol)
-            worth = qty * quote.mid if quote is not None and qty else 0.0
-            weights[symbol.market] = worth / eq.value if eq.value > 0 else 0.0
+        day, eq, _ = item
+        # The day's mean exposure (module doc), then a fresh sum for the next day.
+        weights = self.exposure.pop(agent, _Exposure()).mean()
         self.days.setdefault(agent, []).append(
             DayPoint(_day(day * DAY), eq.value, eq.cash, weights)
         )
@@ -525,6 +562,7 @@ def _quality(
             decided=decided,
             no_decision=dict(sorted(track.no_decision.get(market, {}).items())),
             blocked_rounds=track.blocked.get(market, 0),
+            rounds=track.observed.get(market, 0),
         )
     return out
 
@@ -756,6 +794,15 @@ def _spreads_of(path: Path) -> dict[tuple[str, str], float]:
     return out
 
 
+def _archive_refusal(path: Path, exc: Exception) -> str:
+    """German refusal for a candle archive the backtest cannot read (``cli_main``)."""
+    if isinstance(exc, sqlite3.Error):
+        detail = archive_mod.database_error_message(exc)
+    else:
+        detail = f"Die Datei ist kein Kerzenarchiv, das dieser Code lesen kann ({exc})."
+    return f"Kerzenarchiv {path} nicht lesbar - nichts gerechnet. {detail}"
+
+
 def _parser(out: TextIO) -> LabArgumentParser:
     p = LabArgumentParser(
         out=out,
@@ -833,7 +880,21 @@ def cli_main(command: str, argv: Sequence[str], out: TextIO) -> int:
         print(f"Kein Kerzenarchiv unter {archive_path} - zuerst 'trading-bot lab fetch'.", file=out)
         return EXIT_REFUSED
     chosen = variants(args.variant)
-    spreads = _spreads_of(archive_path)
+    # Archive and register are opened here, before any quarter runs: a damaged file, an old
+    # schema or a locked database is a refusal in one German line, never a traceback.
+    try:
+        spreads = _spreads_of(archive_path)
+    except (ArchiveError, SchemaError, sqlite3.Error) as exc:
+        print(_archive_refusal(archive_path, exc), file=out)
+        return EXIT_REFUSED
+    try:
+        register = Register.open(folder / RUNS_FILE, folder / CHAIN_FILE, runner=git_runner)
+    except (RegisterError, SchemaError, sqlite3.Error, OSError) as exc:
+        print(
+            f"Prüfregister unter {folder / RUNS_FILE} nicht nutzbar ({exc}); nichts gerechnet.",
+            file=out,
+        )
+        return EXIT_REFUSED
     print(
         f"Backtest {quarters[0].label} bis {quarters[-1].label}, Varianten "
         f"{', '.join(v.name for v in chosen)}, {args.workers} Prozess(e) ...",
@@ -847,7 +908,7 @@ def cli_main(command: str, argv: Sequence[str], out: TextIO) -> int:
         print(describe(result), file=out, flush=True)
 
     started = time.perf_counter()
-    with Register.open(folder / RUNS_FILE, folder / CHAIN_FILE, runner=git_runner) as register:
+    with register:
         results = run_quarters(
             archive_path,
             quarters,

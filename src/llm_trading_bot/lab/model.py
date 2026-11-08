@@ -102,13 +102,17 @@ class Trade:
 
 @dataclass(frozen=True)
 class DayPoint:
-    """A depot at the end of a UTC day (its last equity point of that day, valued at mid)."""
+    """A depot on one UTC day: ``value`` and ``cash`` at its last equity point of that day
+    (valued at mid), ``weights`` over the whole day."""
 
     day: str
     value: float
     cash: float
     weights: dict[str, float]
-    """Market -> share of the value held in it at that point."""
+    """Market -> time-weighted mean share of the value held in it over the day's valued rounds:
+    the sum of each round's ``qty * mid / value`` divided by the depot's valued rounds of that
+    day. Not the share at the last round - a strategy that holds for hours and is flat at
+    midnight was invested that day, and the benchmark of the same quote (AK7) must see it."""
 
 
 @dataclass
@@ -136,6 +140,10 @@ class MarketQuality:
     """Rounds without a decision for this market, by error code (gap_*, stale, ...)."""
     blocked_rounds: int = 0
     """Rounds blocked only by gaps in a higher interval (15m/1h/4h)."""
+    rounds: int = 0
+    """Rounds in which the market's snapshot outcome was reported (ok or a failure code): the
+    denominator of the ``no_decision`` shares, which count rounds, never bars. 0 in results
+    recorded before this field existed; ``metrics.quality`` then uses ``QuarterResult.rounds``."""
 
     @property
     def share(self) -> float:

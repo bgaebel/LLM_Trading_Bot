@@ -2,6 +2,7 @@
 
 import calendar
 import inspect
+import json
 from typing import Any
 
 import pytest
@@ -60,7 +61,7 @@ def test_result_survives_json() -> None:
                 {"BUY/OK": 1},
             )
         },
-        quality={"BTC-EUR": MarketQuality("BTC-EUR", 100, 95, {"stale": 3}, 2)},
+        quality={"BTC-EUR": MarketQuality("BTC-EUR", 100, 95, {"stale": 3}, 2, rounds=1440)},
         daily_mid={"BTC-EUR": [("2022-01-01", 40_100.0)]},
         spread={"BTC-EUR": 0.0002},
         rounds=1440,
@@ -106,3 +107,19 @@ def test_docstrings_state_the_contract_metrics_relies_on() -> None:
     source = inspect.getsource(QuarterResult)
     assert "incomplete" in source
     assert "day_before_quarter" in source and "base of day 1" in source
+
+
+def test_result_recorded_before_market_rounds_still_loads() -> None:
+    # Register rows written before MarketQuality.rounds existed carry no such key.
+    q = Quarter.parse("2022Q1")
+    result = QuarterResult(q, Variant(), quality={BTC: MarketQuality(BTC, 10, 9, rounds=60)})
+    data = json.loads(result.to_json())
+    del data["quality"][BTC]["rounds"]
+    again = QuarterResult.from_json(json.dumps(data))
+    assert again.quality[BTC].rounds == 0
+
+
+def test_day_weights_are_documented_as_the_day_mean() -> None:
+    # The benchmark of the same quote rests on this meaning (Spec 016 AK7, final review).
+    source = inspect.getsource(DayPoint)
+    assert "time-weighted mean" in source and "Not the share at the last round" in source

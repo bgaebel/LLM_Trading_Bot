@@ -489,7 +489,7 @@ def build_report(
     _summary(doc, kinds, base, base_rows, fidelity, trial_count, sealed)
     _overall(doc, base)
     _quarters(doc, base, base_rows)
-    _costs(doc, kinds, summaries, base, base_rows, spread_sources or {})
+    _costs(doc, kinds, summaries, visible, base, base_rows, spread_sources or {}, draws)
     _cells(doc, base)
     _uncertainty(doc, base)
     _quality(doc, kinds, base, summaries)
@@ -539,6 +539,7 @@ def _summary(
     ]
     beats: list[str] = []
     banded: list[str] = []
+    judged: list[str] = []
     for agent in _ordered(base.round_trips):
         if agent == BUYHOLD:
             continue
@@ -548,31 +549,46 @@ def _summary(
             items.append(f"{agent}: zu wenige gewertete Tage für ein Band; {count(n)} Round-Trips.")
             continue
         banded.append(agent)
-        if u.excess.low > 0:
-            beats.append(agent)
+        # AK10: under 100 round trips there is no verdict, whatever the band says, so such a
+        # strategy can neither beat buy & hold nor be shown not to.
+        if base.labels[agent] != metrics.NO_VERDICT:
+            judged.append(agent)
+            if u.excess.low > 0:
+                beats.append(agent)
         items.append(
             f"{agent}: Übertrendite gegenüber Buy & Hold gleicher Quote {band_pct(u.excess)} "
             f"pro Jahr, mit Zufall vereinbar: {chance(u.excess)}{_band_days(u)}; "
             f"{count(n)} Round-Trips, Einstufung: {base.labels[agent]}."
         )
-    if beats:
+    unjudged = [a for a in banded if a not in judged]
+    if banded and not judged:
+        items.append(
+            "Kein Urteil: Jede Strategie hat unter 100 Round-Trips. Die Daten reichen nicht, um "
+            "zu sagen, ob eine Strategie Buy & Hold gleicher Quote schlägt oder nicht; auch ein "
+            "Band ganz über oder unter null zählt so noch nicht."
+        )
+    elif beats:
         items.append(
             "Band ganz über null: "
-            + ", ".join(beats)
+            + ", ".join(f"{a} ({base.labels[a]})" for a in beats)
             + f". Das ist noch kein Beleg: {count(trial_count)} Versuche stehen im Register, "
             "und die beste von vielen Varianten sieht schon zufällig gut aus."
         )
-    elif banded:
+    elif judged:
         strategies = [a for a in base.round_trips if a != BUYHOLD]
-        tested = "" if len(banded) == len(strategies) else f" (geprüft: {', '.join(banded)})"
+        tested = "" if len(judged) == len(strategies) else f" (mit Urteil: {', '.join(judged)})"
         items.append(
             f"Keine Strategie{tested} schlägt Buy & Hold gleicher Quote nachweisbar: Jedes Band "
-            "enthält null oder liegt darunter. Das ist ein gültiges Ergebnis."
+            "enthält null oder liegt darunter. Für diese Strategien ist das ein gültiges Ergebnis."
         )
     else:
         # Without a single band nothing was tested; "no strategy beats B&H" would read as a
         # tested negative result.
         items.append("Kein Urteil möglich: " + _no_band_reason(graded, base) + ".")
+    if judged and unjudged:
+        items.append(
+            f"Ohne Urteil (unter 100 Round-Trips, zu wenige Daten): {', '.join(unjudged)}."
+        )
     items.append(_fidelity_short(fidelity))
     if sealed:
         items.append(
@@ -669,6 +685,7 @@ def _overall(doc: Doc, base: LabMetrics | None) -> None:
                 band_pct(u.mean_return if u else None),
                 band_pct(u.excess if u else None),
                 chance(u.excess if u else None),
+                band_pct(u.excess_no_cost if u else None),
                 band_num(u.sharpe if u else None),
                 count(u.days) if u else NOT_SHOWN,
                 count(u.excluded_days) if u else NOT_SHOWN,
@@ -679,7 +696,10 @@ def _overall(doc: Doc, base: LabMetrics | None) -> None:
     doc.p(
         "Renditen pro Jahr (Mittel der Tagesrenditen mal 365) mit 95-%-Band. Die Übertrendite "
         "vergleicht mit Buy & Hold, das im Mittel genauso viel investiert war wie die Strategie, "
-        "mit dessen Kosten; Bargeld bringt 0 %."
+        "mit dessen Kosten für das tägliche Nachjustieren; Bargeld bringt 0 %. Daneben steht "
+        "derselbe Vergleich gegen Buy & Hold ohne Kosten: Ist die Übertrendite nur mit Kosten "
+        "positiv, kommt sie allein aus den Kosten des Vergleichs. Die Quote ist der Anteil des "
+        "Depots in BTC und ETH im Mittel über alle Runden, nicht nur zum Tagesende."
     )
     short = [a for a in agents if (u := base.uncertainty.get(a)) and u.excluded_days]
     if short:
@@ -696,6 +716,7 @@ def _overall(doc: Doc, base: LabMetrics | None) -> None:
             "Netto p. a. [95-%-Band]",
             "Übertrendite p. a. gegenüber Buy & Hold gleicher Quote [Band]",
             "mit Zufall vereinbar",
+            "Übertrendite p. a. gegenüber Buy & Hold ohne Kosten [Band]",
             "Sharpe-Quote [Band]",
             "Tage",
             f"ausgelassene Tage (siehe {DATA_QUALITY})",
@@ -737,7 +758,7 @@ def _overall(doc: Doc, base: LabMetrics | None) -> None:
             "Trades",
             "Umschlag je Quartal (Vielfaches des Kapitals)",
             "Gebühren",
-            "mittlere Investitionsquote",
+            "mittlere Investitionsquote (über alle Runden)",
             "schlechtester Drawdown (Tagesende)",
             "Quartale mit Drawdown-Stopp",
         ],
@@ -805,7 +826,9 @@ def _quarters(doc: Doc, base: LabMetrics | None, base_rows: Sequence[QuarterResu
                 "ja" if d.graded else "nein",
                 pct(d.net_return_mid),
                 pct(d.net_return_liquidated),
+                pct(d.benchmark) + short,
                 pct(d.benchmark_cost) + short,
+                pct(d.excess_no_cost) + short,
                 pct(d.excess) + short,
                 pct(d.mean_quote, 1, sign=False),
                 count(d.round_trips),
@@ -820,9 +843,11 @@ def _quarters(doc: Doc, base: LabMetrics | None, base_rows: Sequence[QuarterResu
             "gewertet",
             "Netto (Mitte)",
             "Netto (verkauft)",
+            "Buy & Hold gleicher Quote ohne Kosten",
             "Buy & Hold gleicher Quote mit Kosten",
-            "Übertrendite",
-            "Quote",
+            "Übertrendite ohne Kosten",
+            "Übertrendite mit Kosten",
+            "Quote (über alle Runden)",
             "Round-Trips",
             "max. Drawdown (Tagesende)",
             "Drawdown-Stopp am",
@@ -844,9 +869,11 @@ def _costs(
     doc: Doc,
     kinds: _Variants,
     summaries: Mapping[str, LabMetrics],
+    visible: Mapping[str, Sequence[QuarterResult]],
     base: LabMetrics | None,
     base_rows: Sequence[QuarterResult],
     sources: Mapping[tuple[str, str], SpreadSource],
+    draws: int,
 ) -> None:
     doc.section("Kosten", "kosten")
     if base is not None and kinds.base is not None:
@@ -882,17 +909,16 @@ def _costs(
         doc.p(
             "Kein Lauf des Kostenrasters im Register; die Tabelle zeigt nur den Basislauf.", "note"
         )
-    if grid and any(n in summaries for n in grid):
+    names = [n for n in grid if n in summaries]
+    if names:
         doc.p(
             "Jede Zeile ist ein vollständiger neuer Lauf mit anderen Kosten: Die Strategien sehen "
             "andere Kosten und entscheiden anders. Jede Variante zählt im Register als eigener "
             "Versuch."
         )
+        compared = _grid_summaries(doc, names, summaries, visible, draws)
         rows = []
-        for name in grid:
-            s = summaries.get(name)
-            if s is None:
-                continue
+        for name, s in compared.items():
             for a in _ordered(s.round_trips):
                 u = s.uncertainty.get(a)
                 rows.append(
@@ -950,6 +976,46 @@ def _costs(
         )
 
 
+def _grid_summaries(
+    doc: Doc,
+    names: Sequence[str],
+    summaries: Mapping[str, LabMetrics],
+    visible: Mapping[str, Sequence[QuarterResult]],
+    draws: int,
+) -> dict[str, LabMetrics]:
+    """Each cost variant summarised over the quarters graded in every variant shown, and the
+    reader told which. Runs of separate calls can cover different quarters; pooled over their
+    own, a difference of another period would read as the effect of the costs."""
+    graded = {n: {r.quarter.label for r in visible.get(n, []) if r.graded} for n in names}
+    common = set.intersection(*graded.values())
+    if len(names) > 1:
+        text = (
+            "Verglichen werden nur Quartale, die in jeder Variante gewertet sind: "
+            f"{_labels(common)}."
+        )
+        for n in names:
+            if left := graded[n] - common:
+                text += f" Nur in {n} gewertet und deshalb nicht verglichen: {_labels(left)}."
+        doc.p(text)
+    if not common:
+        doc.p(
+            "Kein Quartal ist in allen Varianten gewertet; ein Vergleich entfällt."
+            if len(names) > 1
+            else "Kein Quartal ist gewertet; es gibt keine Zahlen.",
+            "note",
+        )
+        return {}
+    out = {}
+    for n in names:
+        if graded[n] == common:
+            out[n] = summaries[n]
+        else:
+            out[n] = metrics.summarize(
+                [r for r in visible.get(n, []) if r.quarter.label in common], draws=draws
+            )
+    return out
+
+
 def _break_even_row(b: BreakEven) -> list[str]:
     if b.break_even is None:
         return (
@@ -987,6 +1053,16 @@ def _label(names: Mapping[str, str], value: str) -> str:
     return names.get(value, value)
 
 
+CELL_TOO_FEW = "zu wenige"
+"""Shown instead of a band for a cell below ``metrics.MIN_BAND_TRIPS`` round trips."""
+
+
+def _cell_band(c: metrics.Cell) -> str:
+    if c.low is None or c.high is None:
+        return f"{pct(c.mean)} [Band: {CELL_TOO_FEW}]"
+    return f"{pct(c.mean)} [{pct(c.low)} bis {pct(c.high)}]"
+
+
 def _cells(doc: Doc, base: LabMetrics | None) -> None:
     doc.section("Marktphasen", "marktphasen")
     if base is None or not any(base.cells.values()):
@@ -994,8 +1070,11 @@ def _cells(doc: Doc, base: LabMetrics | None) -> None:
         return
     doc.p(
         "Round-Trips nach der Lage beim Einstieg: Regime des Bots, Volatilitäts-Drittel (nur aus "
-        "früheren Werten bestimmt) und Richtung. Band: Mittel ± 1,96 Standardfehler. Zellen mit "
-        f"weniger als {metrics.FEW_TRADES} Round-Trips sind markiert und nicht belastbar."
+        "früheren Werten bestimmt) und Richtung. Band: Mittel ± Standardfehler mal dem "
+        "95-%-Wert der t-Verteilung; bei wenigen Round-Trips ist dieser Faktor größer als 1,96 "
+        "und das Band entsprechend breiter (bei zwei Round-Trips etwa 12,7). Mit nur einem "
+        f"Round-Trip gibt es kein Band („{CELL_TOO_FEW}“). Zellen mit weniger als "
+        f"{metrics.FEW_TRADES} Round-Trips sind markiert und nicht belastbar."
     )
     rows: list[list[str]] = []
     marked: list[int] = []
@@ -1010,7 +1089,7 @@ def _cells(doc: Doc, base: LabMetrics | None) -> None:
                     _label(_VOL, c.vol),
                     _label(_DIRECTION, c.direction),
                     count(c.count),
-                    f"{pct(c.mean)} [{pct(c.low)} bis {pct(c.high)}]",
+                    _cell_band(c),
                     eur(c.pnl),
                     f"unter {metrics.FEW_TRADES}: nicht robust" if c.few else "",
                 ]
@@ -1034,15 +1113,31 @@ def _cells(doc: Doc, base: LabMetrics | None) -> None:
 def _uncertainty(doc: Doc, base: LabMetrics | None) -> None:
     doc.section("Unsicherheit", "unsicherheit")
     some: Uncertainty | None = next(iter(base.uncertainty.values()), None) if base else None
-    days = count(some.days) if some else "die"
     seed = some.seed if some else metrics.BOOTSTRAP_SEED
+    found = base.uncertainty if base else {}
+    groups = _draw_groups(found)
+    if len(groups) > 1:
+        # Each group has its own day set and index stream (metrics.uncertainty_all): one
+        # depot's day count and "the same draws for all" would both be wrong here.
+        source = "den gewerteten Tagen des jeweiligen Depots (Spalte „Tage“ unter „Gesamt“)"
+        shared = (
+            "Dieselben Ziehungen teilen nur Depots mit denselben Tagen: "
+            + "; ".join(
+                f"{', '.join(depot_name(a) for a in g)} ({count(found[g[0]].days)} Tage)"
+                for g in groups
+            )
+            + ". "
+        )
+    else:
+        days = count(some.days) if some else "den"
+        source = f"{days} gewerteten Tagen aller Quartale"
+        shared = "Alle Depots verwenden dieselben Ziehungen. " if some else ""
     doc.p(
-        "Die Bänder entstehen mit einem stationären Block-Bootstrap: Aus "
-        f"{days} gewerteten Tagen aller Quartale werden "
+        f"Die Bänder entstehen mit einem stationären Block-Bootstrap: Aus {source} werden "
         f"{count(some.draws if some else metrics.BOOTSTRAP_DRAWS)}-mal neue Verläufe gleicher "
         "Länge gezogen, in Blöcken von im Mittel "
         f"{some.mean_block if some else metrics.BOOTSTRAP_BLOCK} Tagen, damit ruhige und "
-        "unruhige Wochen zusammenbleiben. Alle Depots verwenden dieselben Ziehungen. Der "
+        f"unruhige Wochen zusammenbleiben. {shared}Der "
         f"Zufallsgenerator hat einen festen Startwert ({seed}), "
         "der Bericht ergibt also bei jedem Lauf dieselben Zahlen. Das 95-%-Band reicht vom "
         "2,5-%- bis zum 97,5-%-Wert der Ziehungen."
@@ -1097,6 +1192,14 @@ def _uncertainty(doc: Doc, base: LabMetrics | None) -> None:
         )
 
 
+def _draw_groups(found: Mapping[str, Uncertainty]) -> list[list[str]]:
+    """Depots that share their bootstrap draws (same valid days), each in the bot's order."""
+    groups = {u.group or (a,) for a, u in found.items()}
+    ordered = [_ordered(a for a in g if a in found) for g in groups]
+    rank = {a: i for i, a in enumerate(_ordered(found))}
+    return sorted((g for g in ordered if g), key=lambda g: rank[g[0]])
+
+
 def _codes(row: QualityRow) -> str:
     if not row.no_decision:
         return "keine"
@@ -1128,7 +1231,7 @@ _QUALITY_HEADERS = [
     "fällige Entscheidungen",
     "getroffen",
     "Anteil",
-    "ohne Entscheidung nach Code (Anteil)",
+    "Runden ohne Entscheidung nach Code (Anteil der Runden)",
     "gesperrt durch Lücken in 15m, 1h, 4h (Stunden)",
     "zugelassen",
 ]
@@ -1145,7 +1248,8 @@ def _quality(
             "Runden ohne Entscheidung je Markt, nach Fehlercode, und Stunden, in denen nur eine "
             "Lücke in einem höheren Intervall den Markt sperrte (wie live: der Bot handelt nicht "
             "auf lückenhaften Daten). Fällige Entscheidungen sind über die vier Strategien "
-            "summiert."
+            "summiert und zählen Kerzen; die Codes zählen Runden (eine je Minute) und ihr Anteil "
+            "bezieht sich auf alle Runden des Markts im Quartal."
         )
         marked = [i for i, q in enumerate(base.quality) if q.eligible is False]
         doc.table(_QUALITY_HEADERS, _quality_rows(base.quality), marked)
