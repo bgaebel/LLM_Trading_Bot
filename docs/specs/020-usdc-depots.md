@@ -11,33 +11,35 @@ bleibt in Euro: Jeder BTC-Kauf tauscht Euro → USDC → BTC, jeder Verkauf zur�
 Depots laufen unverändert weiter – so zeigt der Vergleich, was die günstigere Ausführung bringt.
 
 ## Akzeptanzkriterien
-- [ ] AK1: **Kurse:** Dieselbe Abfrage `/ticker/book` liefert zusätzlich BTC-USDC und USDC-EUR (kein weiterer
+- [x] AK1: **Kurse:** Dieselbe Abfrage `/ticker/book` liefert zusätzlich BTC-USDC und USDC-EUR (kein weiterer
   Request); gleiche Prüfungen und Fehlercodes wie heute je Markt; gespeichert in `market` und aufgezeichnet in der
   Beobachtungs-DB (Spec 015). Kerzen bleiben BTC-EUR und ETH-EUR. — Nachweis: `tests/market/test_usdc_quotes.py`
-- [ ] AK2: **Ausführung über USDC:** Kauf von BTC für E € = E → USDC zum USDC-EUR-Brief (+ 0,01 % Slippage, 0,10 %
+- [x] AK2: **Ausführung über USDC:** Kauf von BTC für E € = E → USDC zum USDC-EUR-Brief (+ 0,01 % Slippage, 0,10 %
   Gebühr) → BTC zum BTC-USDC-Brief (+ 0,05 % Slippage, 0,05 % Gebühr); Verkauf umgekehrt zum Geld. Gebühren beider Schritte in € im
   Trade gespeichert, Markt `BTC-USDC`; Mindestorder und Grenzen wie heute in €. ETH bleibt ETH-EUR mit heutigen
   Kosten. — Nachweis: `tests/paper/test_usdc_execution.py` (Handrechnung je Schritt)
-- [ ] AK3: **Kosten in der Bewertung jedes Trades:** Die Strategien der USDC-Depots rechnen mit den Kosten ihres
+- [x] AK3: **Kosten in der Bewertung jedes Trades:** Die Strategien der USDC-Depots rechnen mit den Kosten ihres
   Wegs: `2 · (0,05 % + 0,05 % + 0,10 % + 0,01 %) = 0,42 %` plus die Spreads beider Bücher statt
   `2 · (0,25 % + 0,05 %) = 0,60 %` plus Spread. Regeln sonst identisch zu v0.3.1, Version `v0.3.1-usdc` in jeder Entscheidung. — Nachweis:
   `tests/strategy/test_usdc_costs.py`
-- [ ] AK4: **Depots:** `trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc` und `buyhold-usdc` mit je
+- [x] AK4: **Depots:** `trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc` und `buyhold-usdc` mit je
   10.000 € Start; in den Einstellungen wählbar, standardmäßig an. Die v0.3.1-Depots und ihre Historie bleiben
   byte-gleich (bestehende Golden-Tests unverändert grün). — Nachweis: `tests/paper/test_usdc_depots.py`,
-  Golden-Tests v0.3.1
-- [ ] AK5: **Bewertung und Risiko in Euro:** BTC eines USDC-Depots = Menge · BTC-USDC-Mitte · USDC-EUR-Mitte;
+  Golden-Tests v0.3.1. *Umsetzung „standardmäßig an“:* in der Auswahl angeboten, auf dem Server nach dem Deploy
+  einmal anzukreuzen (`docs/betrieb/server.md`), weil `BOT_AGENTS` dort eine ausdrückliche Liste ist, die der Bot
+  nie selbst ändert.
+- [x] AK5: **Bewertung und Risiko in Euro:** BTC eines USDC-Depots = Menge · BTC-USDC-Mitte · USDC-EUR-Mitte;
   Drawdown-Stopp 10 % wie ADR-0021. Fehlt oder veraltet ein nötiger Kurs (BTC-USDC oder USDC-EUR), entscheidet und
   bewertet das Depot nicht (fail closed); andere Depots sind nicht betroffen. — Nachweis:
   `tests/paper/test_usdc_depots.py::test_missing_usdc_quote_blocks_only_usdc_depots`
-- [ ] AK6: **Gleichheit und Mutation:** Mutationsgruppe `usdc` (Gebühr vertauscht, Umrechnung vergessen, Brief/Geld
+- [x] AK6: **Gleichheit und Mutation:** Mutationsgruppe `usdc` (Gebühr vertauscht, Umrechnung vergessen, Brief/Geld
   vertauscht, Kosten der Signale wie EUR) wird vollständig erkannt. — Nachweis:
   `uv run python tools/golden/mutation_check.py usdc`
-- [ ] AK7: **Weboberfläche:** USDC-Depots mit Kennzeichen „USDC“, Trades mit Markt BTC-USDC, Kurse im Laufband;
+- [x] AK7: **Weboberfläche:** USDC-Depots mit Kennzeichen „USDC“, Trades mit Markt BTC-USDC, Kurse im Laufband;
   öffentliche Ansicht wie ADR-0028. — Nachweis: `tests/web/test_usdc_overview.py`
 - [ ] AK8: **Labor:** Spec 016 bekommt die Variante `usdc` (USDC-Kostenweg auf BTC-EUR-Kursen, da BTC-USDC erst
   ab 2024-07-01 existiert); im Bericht als „Ausführung über USDC“. — Nachweis: `tests/lab/test_backtest.py::test_usdc_variant`
-- [ ] AK9: Doku: ADR-0029 (löst ADR-0026 ab: Ausführungsvarianten ohne Regeländerung brauchen keine Hürden),
+- [x] AK9: Doku: ADR-0029 (löst ADR-0026 ab: Ausführungsvarianten ohne Regeländerung brauchen keine Hürden),
   ADR-0030 (USDC-Depots), PROJEKT (Märkte), ARCHITEKTUR, `docs/betrieb/server.md`. — Nachweis: `scripts/docs-check.sh`
 - [ ] AK10: [manuell] Mit Zustimmung: Deploy; die neuen Depots erscheinen, Buy & Hold USDC kauft einmal, Kurse
   BTC-USDC/USDC-EUR frisch in der Übersicht.
@@ -71,12 +73,12 @@ Depots laufen unverändert weiter – so zeigt der Vergleich, was die günstiger
 
 ## Plan
 - [x] 1. ADRs und Spec freigeben, PROJEKT anpassen
-- [ ] 2. Kurse BTC-USDC/USDC-EUR aus `/ticker/book` (AK1)
-- [ ] 3. Ausführungsweg und Kosten je Depot, Golden der v0.3.1 unverändert (AK2, AK3, AK6)
-- [ ] 4. Depots, Bewertung, Risiko, fail closed (AK4, AK5)
-- [ ] 5. Weboberfläche (AK7)
-- [ ] 6. Laborvariante (AK8)
-- [ ] 7. Doku, Prüfung (Workflow), PR (AK9)
+- [x] 2. Kurse BTC-USDC/USDC-EUR aus `/ticker/book` (AK1)
+- [x] 3. Ausführungsweg und Kosten je Depot, Golden der v0.3.1 unverändert (AK2, AK3, AK6)
+- [x] 4. Depots, Bewertung, Risiko, fail closed (AK4, AK5)
+- [x] 5. Weboberfläche (AK7)
+- [ ] 6. Laborvariante (AK8) – zurückgestellt als Folgearbeit (Workflow 2026-11-08)
+- [ ] 7. Doku, Prüfung (Workflow), PR (AK9) – Doku und Prüfung erledigt, PR offen
 - [ ] 8. Mit Zustimmung: Deploy (AK10)
 
 ## Risiken & offene Fragen
@@ -90,6 +92,12 @@ Depots laufen unverändert weiter – so zeigt der Vergleich, was die günstiger
 ## Verlauf
 - 2026-11-08: Nutzer: BTC/USDC nutzen und dessen Gebühren berücksichtigen; Recherche (Workflow, 4 Agenten, Gebühren
   gegen Bitvavo-Seiten geprüft); Nutzer wählt neue USDC-Depots und Euro mit Umrechnung je Trade.
+- 2026-11-08: Umsetzung (Workflow, Branch `feat/s020-usdc-depots-impl`): Kurse, Weg in `paper/usdc.py`,
+  Depots, Weboberfläche, Doku. Mutationsgruppe `usdc` (`mutation_check.py usdc`): alle erkannt außer zwei
+  dokumentierten äquivalenten – „Gebühren der Schritte vertauscht“ (beide Gebühren liegen auf demselben
+  Euro-Betrag, nur die Summe ist beobachtbar; jede falsche Einzelgebühr wird erkannt) und „Buy & Hold USDC kauft
+  nach Neustart nur einmal“ (die Entscheidung mit Bar −1 ist eindeutig). Muster der Mutationen dürfen in der
+  Gruppe nur einmal vorkommen (ein Docstring hatte drei Mutanten verschluckt). AK8 als Folgearbeit zurückgestellt.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

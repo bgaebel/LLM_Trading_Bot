@@ -145,6 +145,24 @@ Alles über die Weboberfläche, Seite **Einstellungen**, Bereich „Handel & Ris
 ssh <alias> 'sudo runuser -u <dienst> -- python3 -c "import sqlite3; c=sqlite3.connect(\"file:/var/lib/llm-trading-bot/bot.db?mode=ro\", uri=True); [print(a, round((v/p-1)*100, 2)) for a, p, v in c.execute(\"SELECT p.agent, p.peak, (SELECT value FROM equity e WHERE e.agent=p.agent ORDER BY ts DESC LIMIT 1) FROM portfolios p\") if v]"'
 ```
 
+### USDC-Depots einschalten (Spec 020, ADR-0030)
+Ein Deploy allein startet sie nicht: Die Depotliste in `secrets.env` (`BOT_AGENTS`) ist eine ausdrückliche Auswahl,
+die der Bot nie selbst ändert. Nach dem Deploy einmal in der Weboberfläche, Seite **Einstellungen**, Bereich
+„Depots“ die Kacheln mit Kennzeichen **USDC** (`trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc`)
+ankreuzen und speichern – kein Befehl auf dem Server, kein Neustart (der Dienst liest die Einstellungen jede Runde).
+
+- In der nächsten Runde (≤ 1 min) legt der Bot die gewählten Depots und `buyhold-usdc` mit je 10.000 € an. Journal:
+  `depots now …, trend-usdc, … (new with start cash: …, buyhold-usdc)` und einmal
+  `trade buyhold-usdc bought 2 market(s) (benchmark)`.
+- Die Übersicht zeigt die Depots mit Kennzeichen „USDC“, ihre BTC-Trades mit Markt BTC-USDC und im Laufband
+  BTC-USDC und USDC-EUR. Die übrigen Depots und ihre Historie ändern sich nicht.
+- Fehlt BTC-USDC oder USDC-EUR in der Antwort von `/ticker/book`, steht im Journal z. B.
+  `quotes: MarketDataError: BTC-USDC: missing`. Ohne frischen Kurs (≤ 20 s) beider Bücher entscheidet das BTC
+  eines USDC-Depots nicht, und ein USDC-Depot mit BTC-Bestand bekommt keinen Equity-Punkt (fail closed); alle
+  anderen Depots laufen weiter.
+- Abschalten: Kacheln abwählen und speichern. Die Depots handeln ab der nächsten Runde nicht mehr; ihre Historie
+  bleibt in der DB.
+
 ### Variablen außerhalb von `secrets.env`
 In `secrets.env` stehen nur Key, Depots, Effort, Budgets sowie Handelspause und Freigaben (Weboberfläche). Gebühren, Takt-Parameter oder
 `LOG_LEVEL` setzt man per Drop-in; ein Update ändert Drop-ins nie (es prüft das sogar):

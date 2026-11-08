@@ -11,6 +11,9 @@ die fünf klassischen Strategien und der LLM-Kontext (`strategy`, Spec 003, iden
 Paper-Ausführung mit SQLite (`paper`, Spec 004): virtuelle Orders, Depot, Entscheidungen, Trades, Equity.
 GPT-Depots (`llm`, Spec 005): `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprobe) plus Buy & Hold (ADR-0012),
 eine OpenAI-Anfrage für beide Märkte nur bei Bedarf, hartes EUR-Budget, Provenienz je Versuch (ADR-0013).
+USDC-Depots (`paper.usdc`, Spec 020, ADR-0030): `trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc` plus
+`buyhold-usdc` – Regeln und Signale wie v0.3.1 aus den BTC-EUR-/ETH-EUR-Kerzen, BTC aber ausgeführt und bewertet
+über BTC-USDC und USDC-EUR (Bargeld bleibt Euro), Version `v0.3.1-usdc`; nur aktiv, wenn in den Einstellungen gewählt.
 Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`. Weboberfläche (`web`, Spec 006/007): Login, Übersicht
 (Depots, Equity-Verlauf, Lebenszeichen, Entscheidungen, GPT-Kosten, Trades; liest die Bot-DB nur lesend, ADR-0016)
 und Eingabe von OpenAI-Key und Einstellungen per `uv run trading-bot web --data-dir <dir> [--db <pfad>]`, nur auf
@@ -70,8 +73,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 ### market
 - **Zweck:** öffentliche Marktdaten holen und nur geprüfte Daten weitergeben (fail closed). Aus der Arena übernommen (ADR-0003).
 - **Schnittstelle:**
-  - `models`: `Symbol` (BTCEUR/ETHEUR), `Quote`, `QuoteBook` (gültige Quotes je Markt + `errors`), `Candle`,
-    `MarketDataError`
+  - `models`: `Symbol` (BTCEUR/ETHEUR mit Kerzen; BTCUSDC/USDCEUR nur als Kurs, Spec 020), `SYMBOLS` (die zwei
+    Kerzenmärkte von v0.3.1), `QUOTE_MARKETS`, `QUOTED` (alle vier), `Quote`, `QuoteBook` (gültige Quotes je Markt +
+    `errors`; `problem(markets)`), `Candle`, `MarketDataError`
   - `http`: `Transport`-Protocol, `UrllibTransport` (nur GET), `HTTPFailure(status, retry_after)`,
     `TransportError` (abgebrochene/unlesbare Antwort)
   - `bitvavo`: `BitvavoClient.quotes() -> QuoteBook`, `.closed_candles(symbol, interval, now_epoch=)`,
@@ -83,7 +87,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   Quote älter als 20 s, Spread > 50 bp oder Uhrzeitabweichung > 120 s. Nach HTTP 429 keine Anfrage bis zum Ende
   der Pause (eine `BitvavoClient`-Instanz je Prozess). Ein Markt blockiert den anderen nicht – auch nicht bei
   den Quotes: ein ungültiger, doppelter oder fehlender Eintrag kostet nur seinen Markt (Spec 011); nur eine
-  unlesbare Antwort von `/ticker/book` als Ganzes betrifft beide.
+  unlesbare Antwort von `/ticker/book` als Ganzes betrifft beide. BTC-USDC und USDC-EUR kommen aus derselben
+  Antwort mit denselben Prüfungen und Codes (Spec 020); als fehlend gemeldet werden sie nur, wenn ein USDC-Depot
+  läuft, sonst bleibt alles wie vorher.
 
 ### strategy
 - **Zweck:** aus einem `MarketSnapshot` Indikatoren, Signale und den LLM-Kontext berechnen. Kein Netz, keine Orders.
@@ -108,7 +114,13 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `execution`: `Costs` (Gebühr/Slippage, `from_env`), `record_decision(..., stops=, partial=)`,
     `trade_to_target`, `mark(con, agent, qs, now, costs) -> RiskStop | None` (Drawdown-Stopp, `DRAWDOWN_KILL =
     0.10`), `initialize_buyhold`, `record_quotes` (je Markt), `fresh_quotes` (je Markt), `latest_quotes` (beide
-    oder None), `value`, `current_weight`, `covers`, `unquoted_holdings`
+    oder None), `value`, `current_weight`, `covers`, `unquoted_holdings`, `initialize_buyhold_usdc`,
+    `BENCHMARKS` (Buy & Hold und Buy & Hold USDC: kaufen einmal, nie gestoppt)
+  - `usdc` (Spec 020, ADR-0030, rein, ohne I/O): Kostenweg der USDC-Depots – `buy(spend, qs)` (€ → USDC zum
+    USDC-EUR-Brief · (1 + 0,01 %), 0,10 % Gebühr; → BTC zum BTC-USDC-Brief · (1 + 0,05 %), 0,05 % Gebühr),
+    `sell(qty, qs)` (umgekehrt zum Geld), `btc_mid` (BTC-USDC-Mitte · USDC-EUR-Mitte), `roundtrip_cost` (0,42 % +
+    beide Spreads, Kosteneingang der Signale), `routed`/`route_markets`/`strategy_of`, `USDC_VERSION =
+    "v0.3.1-usdc"`; alle Zahlen des Wegs stehen nur hier
   - `observations` (Spec 015, ADR-0027): `ObservationBuffer` (während der Runde, nur Speicher, `note` schluckt jeden
     Fehler), `ObservationWriter(path)` (schreibt nach der Runde in `observations.db`, nie eine Ausnahme, zählt
     Fehler, schaltet bei beschädigter/anderer Version ab), `changed_windows` (Fenster nur bei Änderung),
@@ -138,6 +150,13 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   Ausführung identisch zu Arena@7563724, belegt durch `tests/paper/fixtures/execution_golden_v0.3.1.json` und
   `execution_drawdown_golden_v0.3.1.json` (Grenzfälle und Verläufe bitgenau per SHA-256; `--check` des Generators
   belegt die ältere Datei bytegleich) und `mutation_check.py`. SQL-Rechnungen nicht umformen.
+  USDC-Depots (Spec 020): nur ihr BTC läuft über `paper.usdc` (eigener Zweig `_trade_routed`, gespeichert als Markt
+  `BTCUSDC`, `slip_rate` 0,06 %, Gebühren beider Schritte in €); ETH, Bargeld, Mindestorder, Grenzen und
+  Drawdown-Stopp wie v0.3.1 in €. Fehlt BTC-USDC oder USDC-EUR frisch, entscheidet ihr BTC nicht und ein Depot mit
+  BTC-Bestand wird nicht bewertet (fail closed); v0.3.1-Depots und Buy & Hold sehen die Kursmärkte nie
+  (`fresh_quotes`/`record_quotes` standardmäßig nur `SYMBOLS`) und bleiben bytegleich
+  (`tests/paper/test_usdc_depots.py`). Mit neutralem Weg (USDC-EUR 1/1, Kosten wie v0.3.1) spielt
+  `tests/paper/test_usdc_execution.py` die Ausführungs-Grenzfälle bitgleich zu v0.3.1 nach. Schema bleibt v2.
 
 ### broker
 - **Zweck:** Vertrag, an den M2 einen Live-Broker anschließt (Spec 012, ADR-0022; Entwurf für M2 in ADR-0023).
@@ -250,8 +269,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
 `build_snapshots` holt je Markt die Kerzen für 1/15/60/240 min, danach einmal die Quotes (sie veralten am
 schnellsten), dann die Prüfung je Markt. `paper_cycle`: Freigaben anwenden → Quotes holen und je Markt speichern →
 frische Quotes aus der DB (ohne jeden Ende ohne Entscheidung) → Buy & Hold initialisieren (beide Quotes, keine
-Pause) → Snapshots → Quotes älter als 20 s neu holen → je Markt eine Entscheidung pro neuem abgeschlossenem Bar
-des Strategie-Zeitrahmens (trend 60 min, sonst 15 min) → GPT-Depots (luna, sol) mit demselben
+Pause; mit USDC-Depots auch Buy & Hold USDC auf BTC-USDC, USDC-EUR, ETH-EUR) → Snapshots → Quotes älter als 20 s neu holen → je Markt eine Entscheidung pro neuem abgeschlossenem Bar
+des Strategie-Zeitrahmens (trend 60 min, sonst 15 min; USDC-Depots wie ihre Basis, mit den Kosten ihres
+Wegs) → GPT-Depots (luna, sol) mit demselben
 Snapshot: je Depot frische Quotes? fällig? (stündlich, Bewegung ≥ 1,8 % oder Wechsel eines Referenzsignals, ≥ 10 min
 Abstand, ≤ 4/h) → Reservierung; dann alle Anfragen gleichzeitig (Threads, nur Netz) → Quotes einmal neu holen → je
 Depot Abrechnung → Prüfung → Entscheidung je Markt → Quotes älter als 20 s neu holen → Equity-Punkt und
