@@ -806,9 +806,30 @@ M += [
     ),
     (
         "lab/backtest.py",
-        "spread[Symbol.BTCEUR.market] = route.spread",
-        "spread[Symbol.BTCEUR.market] = spread[Symbol.BTCEUR.market]",
+        "spread[ROUTE_SPREAD] = route.spread",
+        "spread[ROUTE_SPREAD] = spread[Symbol.BTCEUR.market]",
         "lab usdc spread of the route",
+    ),
+    # Review finding: the route's costs and spread belong to the USDC depots' BTC, not to the
+    # market - plain buy & hold runs along in the usdc variant on BTC-EUR.
+    (
+        "lab/model.py",
+        "        if routed(agent, market):\n            return usdc.ROUTE_FEE",
+        '        if self.usdc and market == "BTC-EUR":\n            return usdc.ROUTE_FEE',
+        "lab usdc route cost per market",
+    ),
+    (
+        "lab/model.py",
+        "        if routed(agent, market):\n            return self.spread.get(ROUTE_SPREAD",
+        '        if ROUTE_SPREAD in self.spread and market == "BTC-EUR":\n'
+        "            return self.spread.get(ROUTE_SPREAD",
+        "lab usdc route spread per market",
+    ),
+    (
+        "lab/model.py",
+        "return usdc.ROUTE_SLIPPAGE if routed(agent, market) else self.slippage",
+        'return usdc.ROUTE_SLIPPAGE if self.usdc and market == "BTC-EUR" else self.slippage',
+        "lab usdc route slippage per market",
     ),
     (
         "lab/backtest.py",

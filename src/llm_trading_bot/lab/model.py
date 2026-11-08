@@ -11,6 +11,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from llm_trading_bot.market.models import Symbol
 from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.execution import BUYHOLD
 from llm_trading_bot.strategy.payload import ARENA_SLIPPAGE, ARENA_TAKER_FEE
@@ -43,6 +44,10 @@ USDC_EUR_SPREAD = 0.00011
 """Full USDC-EUR spread as a fraction of mid: measured 1.11 bps."""
 BTC_USDC_SPREAD = 0.0003
 """Full BTC-USDC spread: measured 1.45-4.22 bps (median 1.98); conservatively 3 bps."""
+
+ROUTE_SPREAD = Symbol.BTCUSDC.market
+"""Key of ``QuarterResult.spread`` for the full spread of the USDC route (both books)."""
+_SYMBOLS = {s.market: s for s in Symbol}
 
 _QUARTER = re.compile(r"(\d{4})Q([1-4])")
 
@@ -119,19 +124,23 @@ class Variant:
     def strategy_version(self) -> str:
         return usdc.USDC_VERSION if self.usdc else STRATEGY_VERSION
 
-    def routed(self, market: str) -> bool:
-        """True if this variant trades ``market`` over the USDC route (only BTC-EUR)."""
-        return self.usdc and market == "BTC-EUR"
-
-    def side_cost(self, market: str) -> float:
-        """Fee plus slippage of one side of a trade in ``market`` (without spread)."""
-        if self.routed(market):
+    def side_cost(self, agent: str, market: str) -> float:
+        """Fee plus slippage of one side of a trade of ``agent`` in ``market`` (without spread):
+        the route's for the BTC of a USDC depot, the variant's otherwise."""
+        if routed(agent, market):
             return usdc.ROUTE_FEE + usdc.ROUTE_SLIPPAGE
         return self.fee_rate + self.slippage
 
-    def side_slippage(self, market: str) -> float:
-        """Slippage of one side in ``market``; over the route that of both legs."""
-        return usdc.ROUTE_SLIPPAGE if self.routed(market) else self.slippage
+    def side_slippage(self, agent: str, market: str) -> float:
+        """Slippage of one side; over the route that of both legs."""
+        return usdc.ROUTE_SLIPPAGE if routed(agent, market) else self.slippage
+
+
+def routed(agent: str, market: str) -> bool:
+    """True if ``agent`` trades ``market`` over the USDC route: the live rule
+    (``paper.usdc.routed``) - only the BTC of a ``*-usdc`` depot. Per depot, never per variant:
+    plain buy & hold runs along in the usdc variant and buys BTC on BTC-EUR, as live."""
+    return market in _SYMBOLS and usdc.routed(agent, _SYMBOLS[market])
 
 
 @dataclass(frozen=True)
@@ -218,13 +227,22 @@ class QuarterResult:
     (e.g. ``2021-03-31`` for 2021Q2), never a benchmark day itself; without it day 1 has no
     return and ``metrics`` flags it as a data issue."""
     spread: dict[str, float] = field(default_factory=dict)
-    """Assumed full spread per market as a fraction of mid (AK6): the spread a trade in that
-    market pays. In the usdc variant BTC-EUR holds the route's spread (BTC-USDC plus USDC-EUR),
-    because its BTC trades never touch the BTC-EUR book."""
+    """Assumed full spread per market as a fraction of mid (AK6): the spread a trade on that
+    market's book pays. The usdc variant adds ``ROUTE_SPREAD`` (BTC-USDC plus USDC-EUR), which
+    the BTC trades of its USDC depots pay instead (``trade_spread``); plain buy & hold still
+    pays BTC-EUR's."""
     rounds: int = 0
     seconds: float = 0.0
     dataset_sha256: str = ""
     """Checksum of the archive rows the run read (AK8)."""
+
+    def trade_spread(self, agent: str, market: str) -> float:
+        """The full spread a trade of ``agent`` in ``market`` paid. A usdc run recorded before
+        ``ROUTE_SPREAD`` existed (one day on the feature branch) held the route's spread under
+        BTC-EUR itself; its USDC depots still read it from there."""
+        if routed(agent, market):
+            return self.spread.get(ROUTE_SPREAD, self.spread.get(market, 0.0))
+        return self.spread.get(market, 0.0)
 
     @property
     def eligible(self) -> dict[str, bool]:

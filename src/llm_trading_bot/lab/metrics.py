@@ -361,8 +361,8 @@ class Benchmark:
     quarter: str
     exposure: dict[str, float]
     cost_per_side: dict[str, float]
-    """fee + slippage + half the assumed spread, per market, as the depot trades it (in the usdc
-    variant the route for BTC)."""
+    """fee + slippage + half the assumed spread, per market, as the depot trades it (the route
+    for the BTC of a USDC depot, ``model.routed``)."""
     days: list[str]
     """The depot's days that have a one-day return in the depot and every exposed market."""
     returns: list[float]
@@ -519,7 +519,7 @@ def benchmark(result: QuarterResult, agent: str) -> Benchmark:
     weights = mean_weights(depot)
     exposure = {m: w for m, w in weights.items() if w > 0}
     # Per side as the depot itself trades the market (the USDC route for BTC in ``usdc``).
-    cost = {m: v.side_cost(m) + result.spread.get(m, 0.0) / 2 for m in exposure}
+    cost = {m: v.side_cost(agent, m) + result.trade_spread(agent, m) / 2 for m in exposure}
     per_market = {m: _market_returns(result.daily_mid.get(m, [])) for m in exposure}
     own = _depot_days(result, depot)
     issues: list[DataIssue] = []
@@ -610,7 +610,7 @@ def depot_metrics(
     depot = result.depots[agent]
     v = result.variant
     fees = sum(t.fee for t in depot.trades)
-    slip = sum(slippage_cost(t, v.side_slippage(t.market)) for t in depot.trades)
+    slip = sum(slippage_cost(t, v.side_slippage(agent, t.market)) for t in depot.trades)
     notional = sum(abs(t.notional) for t in depot.trades)
     gross_pnl = depot.end_mid - capital + fees + slip
     acc = fifo(depot.trades)
@@ -699,9 +699,9 @@ def break_even(
         gross += m.gross_pnl
         volume += m.roundtrip_volume
         for t in r.depots[agent].trades:
-            spread_volume += abs(t.notional) / 2 * r.spread.get(t.market, 0.0)
+            spread_volume += abs(t.notional) / 2 * r.trade_spread(agent, t.market)
             # The usdc variant trades BTC over the route at other costs than ETH (AK14).
-            trip = 2 * r.variant.side_cost(t.market)
+            trip = 2 * r.variant.side_cost(agent, t.market)
             cost_volume += abs(t.notional) / 2 * trip
             costs.add(trip)
     spread = spread_volume / volume if volume > 0 else 0.0

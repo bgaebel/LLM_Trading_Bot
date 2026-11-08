@@ -85,7 +85,8 @@ runs exactly the v0.3.1 depots and buy & hold, with ``usdc=()`` written out.
 
 - A routed BTC trade is stored live under BTC-USDC; the lab books it under BTC-EUR, the
   market it was decided on, so FIFO, cells and benchmark line up with the base run. Its
-  costs (``Variant.side_cost``) and ``spread["BTC-EUR"]`` are those of the route.
+  costs (``Variant.side_cost``) and spread (``spread[ROUTE_SPREAD]``) are those of the route,
+  chosen per depot as live (``paper.usdc.routed``): plain buy & hold keeps BTC-EUR's.
 - Weights, day values and ``end_liquidated`` value and sell that BTC over the route
   (``paper.usdc.btc_mid``/``sell``), like the live depot.
 
@@ -126,6 +127,7 @@ from llm_trading_bot.lab.model import (
     FIRST_GRADED,
     LEAD_ROWS,
     MARKETS,
+    ROUTE_SPREAD,
     SEAL_EPOCH,
     DayPoint,
     DepotResult,
@@ -629,8 +631,9 @@ def run_quarter(
     route = UsdcRoute() if variant.usdc else None
     spread = {m: model.spread(m, quarter.start) for m in MARKETS}
     if route is not None:
-        # What a BTC trade pays in this variant (QuarterResult.spread): the route's books.
-        spread[Symbol.BTCEUR.market] = route.spread
+        # What a BTC trade of a USDC depot pays (QuarterResult.trade_spread): the route's books.
+        # BTC-EUR keeps its own: buy & hold runs along and buys there, as live.
+        spread[ROUTE_SPREAD] = route.spread
     result = QuarterResult(quarter, variant, spread=spread)
     if quarter.start % MINUTE or quarter.end <= quarter.start:
         raise ValueError(f"quarter must start on a minute and not be empty: {quarter}")

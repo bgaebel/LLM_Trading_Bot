@@ -1951,7 +1951,8 @@ def _with_defaults(
     model = QuarterSpreads({})
     for rows in results.values():
         for r in rows:
-            for m in r.spread:
+            # Only the markets' books: the usdc variant's route spread is a fixed assumption.
+            for m in (m for m in r.spread if m in MARKETS):
                 default = model.spread(m, r.quarter.start)
                 out.setdefault((r.quarter.label, m), SpreadSource("default", default))
     return out

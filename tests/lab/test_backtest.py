@@ -39,6 +39,7 @@ from llm_trading_bot.lab.model import (
     BTC_USDC_SPREAD,
     DEPOTS,
     LEAD_ROWS,
+    ROUTE_SPREAD,
     SEAL_EPOCH,
     USDC_DEPOTS,
     USDC_EUR_SPREAD,
@@ -696,9 +697,14 @@ def test_usdc_variant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     # Buy & hold runs along as live does, on the same quotes: the same depot as in base.
     assert routed.depots["buyhold"] == base.depots["buyhold"]
-    # The route is costed, never the BTC-EUR book: its spread for BTC, base's for ETH.
-    assert routed.spread["BTC-EUR"] == pytest.approx(BTC_USDC_SPREAD + USDC_EUR_SPREAD)
+    # The route is costed for the USDC depots' BTC, never the BTC-EUR book; the books keep
+    # their own spreads, which plain buy & hold pays (review finding: per depot, not market).
+    assert routed.spread[ROUTE_SPREAD] == pytest.approx(BTC_USDC_SPREAD + USDC_EUR_SPREAD)
+    assert routed.spread["BTC-EUR"] == base.spread["BTC-EUR"]
     assert routed.spread["ETH-EUR"] == base.spread["ETH-EUR"]
+    assert routed.trade_spread(usdc.BUYHOLD_USDC, "BTC-EUR") == routed.spread[ROUTE_SPREAD]
+    assert routed.trade_spread("trend-usdc", "ETH-EUR") == base.spread["ETH-EUR"]
+    assert routed.trade_spread("buyhold", "BTC-EUR") == base.spread["BTC-EUR"]
     assert routed.daily_mid == base.daily_mid
     # Same candles, same snapshots: the same bars were due.
     for market in ("BTC-EUR", "ETH-EUR"):
@@ -751,8 +757,27 @@ def test_usdc_variant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows = {d.agent: d for d in m.depots}
     assert set(rows) == set(USDC_DEPOTS)
     route_trip = 2 * (usdc.ROUTE_FEE + usdc.ROUTE_SLIPPAGE)
-    for agent, even in m.break_even.items():
-        assert route_trip - 1e-12 <= even.model_cost <= BASE.roundtrip + 1e-12, agent
+    # Exact per depot (a bound over all depots let plain buy & hold pass on the route's costs):
+    # buy & hold over USDC mixes the route (BTC) and ETH-EUR, plain buy & hold pays only EUR
+    # books, and a USDC depot without a trade has the variant's level.
+    assert route_trip < m.break_even[usdc.BUYHOLD_USDC].model_cost < BASE.roundtrip
+    assert m.break_even["buyhold"].model_cost == pytest.approx(BASE.roundtrip, rel=1e-12)
+    for agent in USDC_DEPOTS[:4]:
+        assert not routed.depots[agent].trades, agent
+        assert m.break_even[agent].model_cost == BASE.roundtrip, agent
+    # Plain buy & hold is the same depot as in base, so every number of it is the same: its
+    # slippage, gross result, benchmark costs, spread and break-even.
+    plain_m = metrics.summarize([base], draws=50)
+    assert rows["buyhold"] == {d.agent: d for d in plain_m.depots}["buyhold"]
+    assert m.break_even["buyhold"] == plain_m.break_even["buyhold"]
+    assert metrics.benchmark(routed, "buyhold") == metrics.benchmark(base, "buyhold")
+    assert rows["buyhold"].slippage == pytest.approx(
+        sum(
+            metrics.slippage_cost(t, BASE.slippage)
+            for t in base.depots["buyhold"].trades
+        ),
+        rel=1e-12,
+    )
     bench = metrics.benchmark(routed, usdc.BUYHOLD_USDC)
     assert bench.cost_per_side["BTC-EUR"] == pytest.approx(
         usdc.ROUTE_FEE + usdc.ROUTE_SLIPPAGE + (BTC_USDC_SPREAD + USDC_EUR_SPREAD) / 2
