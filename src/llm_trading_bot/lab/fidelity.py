@@ -21,9 +21,13 @@ bid/ask history.
 
 Without observations the archive cannot tell whether live already had the forming bar in its
 answer (``history.py``). A deviation that disappears when the forming bar of some intervals is
-counted the other way is marked "laufende Kerze (Naeherung)" and counted as equal; any other
-deviation keeps an empty cause (unexplained) and fails the check. Below ``FIDELITY_MIN``
-comparisons per market fidelity is "nicht belegt" (``FidelitySummary.established``).
+dropped is marked "laufende Kerze (Naeherung)" and counted as equal - but only for intervals
+whose forming bar live could have lacked: no closed 1m bar with a trade in it before the
+snapshot. Any other deviation keeps an empty cause (unexplained) and fails the check. A
+STALE_QUOTE decision is compared with the fail-closed HOLD/0; a classic decision whose inputs
+cannot be read is listed as unreadable (only buy & hold has no snapshot to compare). Below
+``FIDELITY_MIN`` comparisons per market fidelity is "nicht belegt"
+(``FidelitySummary.established``).
 
 This is a technical check of the code path: nothing about returns is evaluated, so the sealed
 period (ADR-0026) does not apply to it. It reads only copies of the live databases, opened
@@ -67,7 +71,7 @@ from llm_trading_bot.market.models import (
 from llm_trading_bot.market.snapshot import INTERVALS, MarketSnapshot, build_snapshots
 from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME
 from llm_trading_bot.paper.db import SchemaError, check_schema
-from llm_trading_bot.paper.execution import REASON_MAX
+from llm_trading_bot.paper.execution import BUYHOLD, REASON_MAX
 from llm_trading_bot.paper.observations import rows_sha256
 from llm_trading_bot.paper.observations_schema import check_observations_schema
 from llm_trading_bot.strategy.indicators import Indicators, indicators
@@ -105,6 +109,7 @@ ACTION, SIGNAL, INDICATOR, DATA, SNAPSHOT, WINDOW, RAW = (
     "raw",
 )
 ROUGH_KIND, SKIPPED = "rough", "skipped"
+STALE_QUOTE = "STALE_QUOTE"
 _FILLED = "filled_no_trade_1m_intervals_last_60"
 
 
@@ -226,10 +231,12 @@ def recorded_snapshots(bot: sqlite3.Connection) -> tuple[list[Recorded], list[di
     ).fetchall()
     for row in rows:
         agent = str(row["agent"])
+        if agent == BUYHOLD:
+            continue  # no snapshot behind its decision: it buys once on the quotes
         try:
             payload = json.loads(row["inputs"])
-            if not isinstance(payload, dict) or "utc" not in payload:
-                continue  # buy & hold: no snapshot behind its decision
+            if not isinstance(payload, dict):
+                raise TypeError("inputs not an object")
             symbol = _symbol(str(row["symbol"]))
             if agent in STRATEGY_TIMEFRAME:
                 stored = row["target"]
@@ -262,6 +269,10 @@ def recorded_snapshots(bot: sqlite3.Connection) -> tuple[list[Recorded], list[di
             elif isinstance(payload.get("_llm"), dict):
                 attempt = int(payload["_llm"]["attempt"])
                 gpt_decisions.setdefault((attempt, symbol), []).append(row)
+            else:
+                # Neither a classic nor a GPT decision: its snapshot cannot be found, which the
+                # check must say instead of comparing fewer rows than live recorded.
+                raise ValueError("neither a classic decision nor GPT provenance (_llm)")
         except (ValueError, KeyError, TypeError) as exc:
             skipped.append(_skip(str(row["symbol"]), str(row["ts"]), agent, UNREADABLE, exc))
 
@@ -480,6 +491,15 @@ class Rebuilder:
         """Live always got CANDLE_LIMIT rows; fewer in the archive cannot be rebuilt."""
         return all(self.client.rows_before(symbol, i, epoch + 1) >= CANDLE_LIMIT for i in INTERVALS)
 
+    def traded(self, symbol: Symbol, interval: int, epoch: int) -> bool:
+        """True if the bar of ``interval`` forming at ``epoch`` had a trade before ``epoch``:
+        a 1m row with volume that had closed by then (open in ``[forming_open, epoch - 60]``).
+        The 1m bar still forming at ``epoch`` proves nothing: its trade may have come later."""
+        step = interval * 60
+        forming_open = epoch // step * step
+        minutes = self.client.candles_between(symbol, 1, forming_open, epoch - 60 + 1)
+        return any(c.volume > 0 for c in minutes)
+
     def rebuild(self, rec: Recorded, hint: Hint) -> Rebuilt:
         p = rec.payload
         quote = Quote(float(p["quote_bid"]), float(p["quote_ask"]))
@@ -540,6 +560,10 @@ def _float(value: object) -> float:
 def _expected(rec: Recorded, sig: Signal) -> tuple[str, float, bool]:
     """Action and target as record_decision stores them; True if clamped to the weight."""
     action, target = sig.action, sig.target_fraction
+    if rec.status == STALE_QUOTE:
+        # Fail closed: without fresh quotes record_decision stores HOLD with target 0 whatever
+        # the signal said; any other stored value is a regression of that path.
+        return "HOLD", 0.0, False
     if rec.status != "OK":
         return action, target, False  # PAUSED keeps the raw signal
     weight = rec.weight
@@ -640,7 +664,7 @@ def compare(
             if rec.triggers.get(name) != trig:
                 add(ACTION, f"trigger_signals.{name}", rec.triggers.get(name), trig)
 
-    if rec.source == "decision" and rec.status != "STALE_QUOTE":
+    if rec.source == "decision":
         sig = run_strategy(rec.agent, snap, ind, rec.weight)
         action, target, clamped = _expected(rec, sig)
         if rec.action != action:
@@ -653,7 +677,9 @@ def compare(
             add(ACTION, "target", stored, target)
         if rec.confidence != sig.confidence:
             add(SIGNAL, "confidence", rec.confidence, sig.confidence)
-        reason = sig.reason.strip()[:REASON_MAX] if rec.status == "OK" else sig.reason
+        # A classic STALE_QUOTE began as OK in record_decision: its reason was trimmed too.
+        trimmed = rec.status in ("OK", STALE_QUOTE)
+        reason = sig.reason.strip()[:REASON_MAX] if trimmed else sig.reason
         if rec.reason != reason:
             add(SIGNAL, "reason", rec.reason, reason)
 
@@ -684,10 +710,18 @@ def _counts(deviations: Sequence[Mapping[str, Any]]) -> tuple[bool, bool]:
     return not kinds & {ACTION, SNAPSHOT}, not kinds & {INDICATOR, SNAPSHOT}
 
 
-def _alternatives(got: Rebuilt) -> Iterator[dict[int, bool | None]]:
+def _alternatives(
+    rec: Recorded, rebuilder: Rebuilder, got: Rebuilt
+) -> Iterator[dict[int, bool | None]]:
     """Forming-bar counts to try, fewest flips first: only intervals whose forming bar the
-    default rebuild counted (live may not have had a trade in it yet)."""
-    flippable = [tf for tf, w in sorted(got.windows.items()) if w.forming]
+    default rebuild counted and live could have lacked. Bitvavo leaves the forming bar out
+    only while it has no trade; a closed 1m bar with volume inside it proves live had it, and
+    then dropping it would hide a real deviation (a window-start bug, say)."""
+    flippable = [
+        tf
+        for tf, w in sorted(got.windows.items())
+        if w.forming and not rebuilder.traded(rec.symbol, tf, rec.epoch)
+    ]
     for size in range(1, len(flippable) + 1):
         for chosen in combinations(flippable, size):
             yield dict.fromkeys(chosen, False)
@@ -705,7 +739,7 @@ def _explain(
     stay unexplained. Returns that rebuild's deviations, or None if no count helps."""
     failing = {d["field"]: d for d in _failing(found)}
     best: tuple[dict[int, bool | None], list[dict[str, Any]]] | None = None
-    for alt in _alternatives(got):
+    for alt in _alternatives(rec, rebuilder, got):
         again = compare(rec, rebuilder.rebuild(rec, alt), None, raw)
         left = {d["field"] for d in _failing(again)}
         # Only a strict improvement over the same fields: a count that trades one deviation
@@ -730,6 +764,8 @@ def _explain(
 class _Tally:
     summary: FidelitySummary
     skipped: int = 0
+    unreadable: int = 0
+    """Of ``skipped``: rows whose inputs could not be read (never compared)."""
     explained: int = 0
     unobserved: int = 0
     """With observations: snapshots whose round was not recorded (compared as without)."""
@@ -763,6 +799,7 @@ def check(
         summary.indicators_ok[market] = 0
     summary.deviations.extend(unreadable)
     tally.skipped += len(unreadable)
+    tally.unreadable = len(unreadable)
     observations = Observations(obs) if obs is not None else None
     rebuilder = Rebuilder(source, [r.epoch for r in recs], spreads) if recs else None
     for n, rec in enumerate(recs, 1):
@@ -826,6 +863,11 @@ def _note(tally: _Tally, with_obs: bool) -> str:
         )
     if tally.skipped:
         parts.append(f"{tally.skipped} Snapshots übersprungen (nicht verglichen).")
+    if tally.unreadable:
+        parts.append(
+            f"{tally.unreadable} davon mit nicht lesbaren Eingaben: diese Entscheidungen "
+            "konnten nicht nachgebaut werden."
+        )
     return " ".join(parts)
 
 
