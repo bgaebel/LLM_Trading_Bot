@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 
 from llm_trading_bot.market.http import HTTPFailure, Transport, UrllibTransport
 from llm_trading_bot.market.models import (
+    QUOTED,
     SYMBOLS,
     Candle,
     ClosedCandles,
@@ -73,11 +74,17 @@ class BitvavoClient:
         Spec 011 AK7 (ADR-0021): unlike the Arena, a broken, conflicting or missing quote costs
         only its own market - the book holds the valid ones and names the others in ``errors``.
         Only an unreadable response as a whole fails both.
+
+        Spec 020: the quote-only markets (BTC-USDC, USDC-EUR) come from the same response and
+        pass the same checks with the same codes; they are separate entries, so they can never
+        cost BTC-EUR or ETH-EUR. Only a candle market the response lacks is named missing in
+        ``errors``: every reader treats an absent market as ``quote_missing`` anyway, and a bot
+        without USDC depots must see exactly the book it saw before.
         """
         data = self._get("/ticker/book")
         if not isinstance(data, list):
             raise MarketDataError("ticker/book: unexpected response format", "parse")
-        by_market = {symbol.market: symbol for symbol in SYMBOLS}
+        by_market = {symbol.market: symbol for symbol in QUOTED}
         result: dict[Symbol, Quote] = {}
         errors: dict[Symbol, str] = {}
         depth: dict[Symbol, Depth] = {}

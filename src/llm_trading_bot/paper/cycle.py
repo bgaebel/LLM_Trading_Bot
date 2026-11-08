@@ -4,19 +4,22 @@
 
 ADR-0004: virtual orders only. ADR-0012: GPT depots (luna trades, sol cross-checks) plus buy & hold;
 classic depots are optional. All depots of a cycle see the same snapshot.
+
+Spec 020 (ADR-0030): the optional USDC depots decide like their classic twins on the same
+snapshots; only their BTC costs, quotes and execution follow the USDC route (``paper.usdc``).
 """
 
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from llm_trading_bot.llm.agents import BotConfig
 from llm_trading_bot.llm.cycle import run_llm_depots
 from llm_trading_bot.llm.due import iso
 from llm_trading_bot.llm.openai_client import SignalModel
-from llm_trading_bot.market.models import SYMBOLS, Candle, Quote, QuoteBook, Symbol
+from llm_trading_bot.market.models import QUOTED, SYMBOLS, Candle, Quote, QuoteBook, Symbol
 from llm_trading_bot.market.snapshot import (
     DATA_ERRORS,
     MarketClient,
@@ -24,9 +27,10 @@ from llm_trading_bot.market.snapshot import (
     build_snapshots,
     error_code,
 )
+from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.db import balance, write_tx
 from llm_trading_bot.paper.execution import (
-    BUYHOLD,
+    BUYHOLD_USDC_MARKETS,
     QUOTE_MAX_AGE,
     Costs,
     Quotes,
@@ -34,6 +38,7 @@ from llm_trading_bot.paper.execution import (
     current_weight,
     fresh_quotes,
     initialize_buyhold,
+    initialize_buyhold_usdc,
     mark,
     record_bar,
     record_decision,
@@ -63,9 +68,12 @@ def quote_problem(p: Mapping[str, Any], symbol: Symbol, qs: Quotes) -> str:
 
     A market without a fresh quote gets no decision, so its bar stays open (Spec 004). A held
     market without one also blocks the other market: the depot's value is unknown then.
+
+    Spec 020: the BTC of a USDC depot needs BTC-USDC and USDC-EUR instead of BTC-EUR.
     """
-    if symbol not in qs:
-        return f"MarketDataError: {symbol.market}: no fresh quote - no decision"
+    if missing := [m for m in usdc.route_markets(p.get("agent", ""), symbol) if m not in qs]:
+        markets = ", ".join(m.market for m in missing)
+        return f"MarketDataError: {markets}: no fresh quote - no decision"
     held = unquoted_holdings(p, qs)
     if held:
         markets = ", ".join(s.market for s in held)
@@ -88,9 +96,13 @@ def _decide(
 
     While trading is paused (ADR-0021) the decision is stored with status PAUSED and not traded,
     so the log shows what the strategy would have done.
+
+    A USDC depot (Spec 020) runs the rules of its v0.3.1 strategy on the same snapshot; only
+    the costs of its BTC are those of the route, and its decisions carry ``v0.3.1-usdc``.
     """
     symbol = snap.symbol
-    bar_ts = snap.bars[STRATEGY_TIMEFRAME[agent]][-1].ts
+    strategy = usdc.strategy_of(agent)
+    bar_ts = snap.bars[STRATEGY_TIMEFRAME[strategy]][-1].ts
     exists = con.execute(
         "SELECT 1 FROM decisions WHERE agent=? AND symbol=? AND bar_ts=?",
         (agent, symbol.name, bar_ts),
@@ -105,9 +117,18 @@ def _decide(
     if problem:
         return MarketResult(agent, symbol, bar_ts, error=problem)
     weight = current_weight(p, symbol, qs)
-    ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage))
-    sig = run_strategy(agent, snap, ind, weight)
-    context = feature_payload(snap, ind, weight, costs.fee_rate, costs.slippage)
+    if usdc.routed(agent, symbol):
+        # Spec 020 AK3: both legs' fees and slippage plus the spreads of both books.
+        roundtrip = usdc.roundtrip_cost(qs)
+        fee_rate, slippage = usdc.ROUTE_FEE, usdc.ROUTE_SLIPPAGE
+    else:
+        roundtrip = cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage)
+        fee_rate, slippage = costs.fee_rate, costs.slippage
+    ind = indicators(snap, roundtrip)
+    sig = run_strategy(strategy, snap, ind, weight)
+    if usdc.is_usdc(agent):
+        sig = replace(sig, version=usdc.USDC_VERSION)
+    context = feature_payload(snap, ind, weight, fee_rate, slippage)
     new = record_decision(
         con,
         agent,
@@ -146,6 +167,8 @@ class _Feed:
     """The exception of the last failed fetch; observed only (Spec 015 AK2)."""
     book: QuoteBook | None = None
     """The book of the last fetch that returned one; observed only."""
+    markets: tuple[Symbol, ...] = SYMBOLS
+    """Markets stored, reported and read again: with USDC depots also the quote-only ones."""
 
     def fetch(self, purpose: str = "start") -> set[Symbol]:
         """Fetch and store; the markets stored by THIS fetch (a failed one stores none)."""
@@ -162,8 +185,8 @@ class _Feed:
         # One clock reading for the stored and the observed stamp: as many readings as before.
         arrived = self.clock()
         note(self.observations, lambda b: b.book(purpose, arrived, book))
-        stored = set(record_quotes(self.con, book, now=iso(arrived)))
-        if problem := book.problem():
+        stored = set(record_quotes(self.con, book, now=iso(arrived), markets=self.markets))
+        if problem := book.problem(self.markets):
             self.errors.append(f"MarketDataError: {problem}")
         return stored
 
@@ -172,7 +195,7 @@ class _Feed:
         if now - self.fetched_at > QUOTE_MAX_AGE:
             self.fetch("recheck")
             now = self.clock()
-        return fresh_quotes(self.con, now_epoch=now)
+        return fresh_quotes(self.con, now_epoch=now, markets=self.markets)
 
 
 def paper_cycle(
@@ -209,7 +232,7 @@ def paper_cycle(
     note(obs, lambda b: b.begin(at))
     controls = controls or Controls()
     report = CycleReport(at, config.agents, paused=controls.paused)
-    feed = _Feed(con, client, clock, obs)
+    feed = _Feed(con, client, clock, obs, markets=QUOTED if config.usdc else SYMBOLS)
     # Also depots switched off meanwhile: the web offers the release for every stopped depot,
     # and a refusal must be reported, not skipped (Spec 011 AK5).
     for agent, requested_at in controls.resumes.items():
@@ -220,7 +243,8 @@ def paper_cycle(
             report.refused.append((agent, why))
 
     feed.fetch()
-    qs = fresh_quotes(con, now_epoch=clock())
+    start = clock()
+    qs = fresh_quotes(con, now_epoch=start)
     report.quotes_error = feed.errors[0] if feed.errors else ""
     if not qs:
         report.quotes_error = report.quotes_error or "stored quotes missing or stale"
@@ -229,6 +253,11 @@ def paper_cycle(
     if set(qs) == set(SYMBOLS) and not controls.paused:
         # Arena: the benchmark buys only on fresh quotes of both markets.
         report.buyhold_bought = initialize_buyhold(con, qs, costs, when=now)
+    if config.usdc and not controls.paused:
+        # Spec 020: the USDC benchmark buys once as well, on fresh quotes of its own markets.
+        start_qs = fresh_quotes(con, now_epoch=start, markets=QUOTED)
+        if all(m in start_qs for m in BUYHOLD_USDC_MARKETS):
+            report.buyhold_usdc_bought = initialize_buyhold_usdc(con, start_qs, costs, when=now)
 
     errors: dict[Symbol, str] = {}
     failures: dict[Symbol, Exception] = {}
@@ -255,9 +284,10 @@ def paper_cycle(
             last_minute = fresh_snap.bars[1][-1]
             record_bar(con, fresh_snap.symbol, bar_ts=last_minute.ts, last_close=last_minute.close)
 
-        # One quote set for every classic depot of the round, no older than QUOTE_MAX_AGE.
-        classic_qs = feed.current() if config.classic else {}
-        for agent in config.classic:
+        # One quote set for every classic and USDC depot of the round, no older than
+        # QUOTE_MAX_AGE. A v0.3.1 depot ignores the quote-only markets in it (Spec 020).
+        classic_qs = feed.current() if config.classic or config.usdc else {}
+        for agent in (*config.classic, *config.usdc):
             for symbol in SYMBOLS:
                 snap = snaps.get(symbol)
                 if snap is None:
@@ -320,7 +350,7 @@ def paper_cycle(
                 report.llm.append(outcome)
                 report.markets.extend(results)
 
-        names = (*config.agents, BUYHOLD)
+        names = config.depots
         # Spec 011 AK8: the final valuation never uses quotes older than QUOTE_MAX_AGE.
         latest = feed.current()
         valued = []

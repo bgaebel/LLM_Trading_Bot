@@ -7,6 +7,8 @@ from decimal import Decimal
 from llm_trading_bot.llm.budget import Pricing, amount
 from llm_trading_bot.llm.due import Cadence
 from llm_trading_bot.llm.openai_client import EFFORTS
+from llm_trading_bot.paper.execution import BUYHOLD
+from llm_trading_bot.paper.usdc import BUYHOLD_USDC, USDC_SUFFIX
 
 # List prices in USD per 1M tokens taken 1:1 as EUR - rather too high, which is the safe side.
 MODEL_PRICES: Mapping[str, Pricing] = {
@@ -20,6 +22,13 @@ LLM_DEFAULTS: Mapping[str, tuple[str, Decimal]] = {
 }
 DEFAULT_AGENTS = "gpt-luna,gpt-sol"
 CLASSIC_AGENTS = ("trend", "breakout", "meanrev", "ensemble")
+USDC_AGENTS = tuple(f"{name}{USDC_SUFFIX}" for name in CLASSIC_AGENTS)
+"""Spec 020 (ADR-0030): the classic rules with BTC executed over BTC-USDC, cash in euro."""
+USDC_FIELD = "BOT_USDC_AGENTS"
+"""Spec 020: the USDC depots are chosen here, never in ``BOT_AGENTS``, so that a release from
+before Spec 020 (rollback) still reads ``BOT_AGENTS`` and simply ignores this field. Missing
+means all of them (AK4: on by default, also on a server with an explicit ``BOT_AGENTS``);
+empty means none."""
 MAX_OUTPUT_TOKENS = 8000
 
 
@@ -50,10 +59,24 @@ class LlmSettings:
 class BotConfig:
     classic: tuple[str, ...]
     llm: LlmSettings | None
+    usdc: tuple[str, ...] = ()
+    """Selected USDC depots (Spec 020); empty: the bot runs exactly as before."""
 
     @property
     def agents(self) -> tuple[str, ...]:
-        return self.classic + (tuple(a.name for a in self.llm.agents) if self.llm else ())
+        return (
+            self.classic + self.usdc + (tuple(a.name for a in self.llm.agents) if self.llm else ())
+        )
+
+    @property
+    def benchmarks(self) -> tuple[str, ...]:
+        """Buy & hold always; its USDC twin whenever a USDC depot runs (Spec 020)."""
+        return (BUYHOLD, BUYHOLD_USDC) if self.usdc else (BUYHOLD,)
+
+    @property
+    def depots(self) -> tuple[str, ...]:
+        """Every depot of a round: the selected ones, then the benchmarks."""
+        return self.agents + self.benchmarks
 
 
 def _suffix(name: str) -> str:
@@ -78,21 +101,28 @@ def _llm_agent(env: Mapping[str, str], name: str) -> LlmAgent:
     return LlmAgent(name, model, pricing, share)
 
 
-def load_config(env: Mapping[str, str]) -> BotConfig:
-    """Raises ValueError for anything unclear; nothing is opened or written before this passes."""
-    names = [n.strip() for n in env.get("BOT_AGENTS", DEFAULT_AGENTS).split(",") if n.strip()]
-    if not names:
-        raise ValueError("BOT_AGENTS must name at least one depot")
+def _names(env: Mapping[str, str], field: str, default: str, known: tuple[str, ...]) -> list[str]:
+    names = [n.strip() for n in env.get(field, default).split(",") if n.strip()]
     if len(set(names)) != len(names):
-        raise ValueError(f"BOT_AGENTS lists a depot twice: {names}")
-    known = (*CLASSIC_AGENTS, *LLM_DEFAULTS)
+        raise ValueError(f"{field} lists a depot twice: {names}")
     unknown = [n for n in names if n not in known]
     if unknown:
-        raise ValueError(f"BOT_AGENTS: unknown depots {unknown}; known: {list(known)}")
+        hint = f" (USDC depots belong in {USDC_FIELD})" if set(unknown) & set(USDC_AGENTS) else ""
+        raise ValueError(f"{field}: unknown depots {unknown}; known: {list(known)}{hint}")
+    return names
+
+
+def load_config(env: Mapping[str, str]) -> BotConfig:
+    """Raises ValueError for anything unclear; nothing is opened or written before this passes."""
+    names = _names(env, "BOT_AGENTS", DEFAULT_AGENTS, (*CLASSIC_AGENTS, *LLM_DEFAULTS))
+    if not names:
+        # Also with USDC depots chosen: a release from before Spec 020 needs one here.
+        raise ValueError("BOT_AGENTS must name at least one depot besides the USDC depots")
     classic = tuple(n for n in names if n in CLASSIC_AGENTS)
+    usdc = tuple(_names(env, USDC_FIELD, ",".join(USDC_AGENTS), USDC_AGENTS))
     llm_names = [n for n in LLM_DEFAULTS if n in names]
     if not llm_names:
-        return BotConfig(classic, None)
+        return BotConfig(classic, None, usdc)
     api_key = env.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         raise ValueError(f"OPENAI_API_KEY is required for the GPT depots {llm_names}")
@@ -107,4 +137,4 @@ def load_config(env: Mapping[str, str]) -> BotConfig:
         Cadence.from_env(env),
         api_key,
     )
-    return BotConfig(classic, settings)
+    return BotConfig(classic, settings, usdc)

@@ -23,6 +23,7 @@ from llm_trading_bot.paper.risk import Controls
 from llm_trading_bot.strategy.signals import Signal
 
 TREND = BotConfig(("trend",), None)
+GPT_LUNA = {"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna", "BOT_USDC_AGENTS": ""}
 
 
 @pytest.fixture
@@ -189,7 +190,7 @@ def test_stop_request_skips_gpt_but_still_values_the_depots(tmp_path: Path) -> N
     con = open_db(tmp_path / "bot.db", agents=("gpt-luna", "gpt-sol", BUYHOLD))
     try:
         model = FakeModel()
-        config = load_config({"OPENAI_API_KEY": KEY})
+        config = load_config({"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": ""})
         report = paper_cycle(
             con,
             ScenarioClient(),
@@ -322,7 +323,7 @@ def test_slow_round_refreshes_quotes_before_the_final_valuation(
         return valid_reply(markets)
 
     model = FakeModel({"gpt-6-luna": slow})
-    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna"})
+    config = load_config(GPT_LUNA)
     calls_before = client.quote_calls
     report = paper_cycle(con, client, config, costs=Costs(), model=model, clock=clock)
     assert report.complete
@@ -341,7 +342,7 @@ def test_final_valuation_never_uses_stale_quotes(gpt_con: sqlite3.Connection) ->
         return valid_reply(markets)
 
     model = FakeModel({"gpt-6-luna": slow})
-    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna"})
+    config = load_config(GPT_LUNA)
     report = paper_cycle(con, client, config, costs=Costs(), model=model, clock=clock)
     # Buy & hold holds ETH, but the ETH quote from the start is 30 s old: no equity point.
     assert [(m.agent, m.symbol) for m in report.unvalued][:1] == [(BUYHOLD, Symbol.ETHEUR)]
@@ -372,7 +373,7 @@ def test_pause_stores_classic_decisions_without_trading(con: sqlite3.Connection)
 
 def test_pause_skips_gpt_without_a_request(gpt_con: sqlite3.Connection) -> None:
     model = FakeModel()
-    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna"})
+    config = load_config(GPT_LUNA)
     report = paper_cycle(
         gpt_con,
         ScenarioClient(),
@@ -459,7 +460,7 @@ def test_final_valuation_fetches_again_when_nothing_else_did(
     the final valuation can fetch again, and it must, or no depot gets an equity point."""
     clock = Ticking(3.0)
     client = SlowCandles(clock)
-    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna"})
+    config = load_config(GPT_LUNA)
     paper_cycle(gpt_con, client, config, costs=Costs(), model=FakeModel(), clock=clock)
     clock.now += 60
     before = client.quote_calls

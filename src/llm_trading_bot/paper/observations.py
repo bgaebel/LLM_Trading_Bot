@@ -34,7 +34,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 from llm_trading_bot.llm.due import iso
-from llm_trading_bot.market.models import SYMBOLS, Candle, Quote, RawRow, Symbol
+from llm_trading_bot.market.models import QUOTED, Candle, Quote, RawRow, Symbol
 from llm_trading_bot.paper.db import SchemaError
 from llm_trading_bot.paper.observations_schema import (
     OBS_FILE,
@@ -122,12 +122,16 @@ class ObservationBuffer:
         self.round_at = int(at)
 
     def book(self, purpose: str, at: float, book: Mapping[Symbol, Quote]) -> None:
-        """One row per accepted quote, then one per row of a rejected market (see module doc)."""
+        """One row per accepted quote, then one per row of a rejected market (see module doc).
+
+        Spec 020: the quote-only markets too, after the candle markets; a book without them
+        (no USDC market in the response) gives exactly the rows it gave before.
+        """
         depth: Mapping[Symbol, tuple[float | None, float | None]] = getattr(book, "depth", {})
         codes: Mapping[Symbol, str] = getattr(book, "codes", {})
         rejected: Mapping[Symbol, tuple[RawRow, ...]] = getattr(book, "rejected", {})
         stamp = iso(at)
-        for symbol in SYMBOLS:
+        for symbol in QUOTED:
             quote = book.get(symbol)
             if quote is None:
                 continue
@@ -135,7 +139,7 @@ class ObservationBuffer:
             self.books.append(
                 (stamp, symbol.name, purpose, quote.bid, quote.ask, bid_size, ask_size)
             )
-        for symbol in SYMBOLS:
+        for symbol in QUOTED:
             if symbol in book:
                 continue
             code = codes.get(symbol, "other")

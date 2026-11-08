@@ -50,7 +50,7 @@ def js(value: object) -> Any:
 
 
 def gpt_config(agents: str = "gpt-luna") -> BotConfig:
-    return load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": agents})
+    return load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": agents, "BOT_USDC_AGENTS": ""})
 
 
 @pytest.fixture
@@ -202,7 +202,7 @@ def test_records_every_book_fetch_with_its_purpose(db: sqlite3.Connection) -> No
     buffer = observed(
         db,
         client,
-        load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "trend,gpt-luna"}),
+        load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "trend,gpt-luna", "BOT_USDC_AGENTS": ""}),
         clock=lambda: now[0],
         model=FakeModel({"gpt-6-luna": ask}),
     )

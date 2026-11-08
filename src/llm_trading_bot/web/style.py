@@ -252,6 +252,7 @@ form.inline { display: inline-block; margin: 10px 0 0; }
   letter-spacing: 0.16em; padding: 4px 6px; border-radius: 1px; color: var(--muted);
   border: 1px solid var(--line-hot); }
 .badge.llm { color: var(--magenta); border-color: rgba(255, 61, 139, 0.45); }
+.badge.usdc { color: var(--lime); border-color: rgba(107, 255, 154, 0.45); }
 .tile:has(input:checked) { border-color: rgba(45, 226, 230, 0.55);
   background: linear-gradient(90deg, rgba(45, 226, 230, 0.1), rgba(0, 0, 0, 0.72) 70%); }
 .tile:has(input:checked) .tile-name { color: var(--cyan); }
