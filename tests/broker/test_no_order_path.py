@@ -269,49 +269,83 @@ def rule_imports(files: Files) -> list[str]:
     return out
 
 
+# What GIT_MODULE may pass to subprocess.run. Left out on purpose: ``executable`` (runs another
+# program under git's name), ``preexec_fn``, ``start_new_session``, ``pass_fds``, ``input``.
+RUN_KEYWORDS = frozenset(
+    {
+        "cwd",
+        "stdin",
+        "capture_output",
+        "text",
+        "encoding",
+        "errors",
+        "timeout",
+        "check",
+        "shell",
+        "env",
+    }
+)
+
+
+# Also CPython's ``_posixsubprocess`` behind it.
+PROCESS_MODULE_NAME = re.compile(r"\s*(_posix)?subprocess(\.\w+)*\s*")
+
+
+def _subprocess_attr(node: ast.AST, attr: str) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "subprocess"
+        and node.attr == attr
+        and isinstance(node.ctx, ast.Load)
+    )
+
+
 def rule_subprocess_calls(files: Files) -> list[str]:
-    """``subprocess`` is used only as ``subprocess.run(<list>, ..., shell=False, timeout=...)``
-    (plus ``subprocess.DEVNULL``) and only in GIT_MODULE: no Popen, no shell, no other helper
-    (check_output, call, getoutput), no ``getattr(subprocess, ...)`` or alias of the module."""
-    allowed_attrs = ("run", "DEVNULL")
+    """``subprocess`` is used only in GIT_MODULE, only as ``subprocess.DEVNULL`` or as the
+    direct callee of ``subprocess.run(<one arg>, shell=False, timeout=..., <RUN_KEYWORDS>)``:
+    no Popen, no other helper (check_output, call, getoutput), no ``getattr(subprocess, ...)``,
+    no alias of the module, and ``subprocess.run`` never as a value (``f = subprocess.run`` or
+    ``partial(subprocess.run, ...)`` would call it with arguments no one checks). A string
+    that is just the module name (``"subprocess"``, ``"subprocess.run"``) counts too:
+    ``__import__``/``importlib``/``sys.modules`` would reach the module without an import
+    statement. Prose that mentions the word (an attribute docstring) is not a module name."""
     out = []
     for path, text in files.items():
         tree = ast.parse(text)
-        used_ok: set[int] = set()
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Attribute)
-                and isinstance(node.value, ast.Name)
-                and node.value.id == "subprocess"
-                and node.attr in allowed_attrs
-            ):
-                used_ok.add(id(node.value))
+        runs = [c for c in _calls(tree) if _subprocess_attr(c.func, "run")]
+        used_ok = {id(c.func.value) for c in runs if isinstance(c.func, ast.Attribute)}
+        used_ok |= {
+            id(n.value)
+            for n in ast.walk(tree)
+            if _subprocess_attr(n, "DEVNULL") and isinstance(n, ast.Attribute)
+        }
         for node in ast.walk(tree):
             if isinstance(node, ast.Name) and node.id == "subprocess":
                 if path != GIT_MODULE:
                     out.append(f"{path}:{node.lineno}: subprocess outside {GIT_MODULE}")
                 elif id(node) not in used_ok:
-                    out.append(f"{path}:{node.lineno}: subprocess beyond run/DEVNULL")
+                    out.append(f"{path}:{node.lineno}: subprocess beyond run(...)/DEVNULL")
+        for line, value in _strings(tree):
+            if PROCESS_MODULE_NAME.fullmatch(value):
+                out.append(f"{path}:{line}: string {value!r} names the subprocess module")
         if path != GIT_MODULE:
             continue
-        for call in _calls(tree):
-            func = call.func
-            if not (
-                isinstance(func, ast.Attribute)
-                and isinstance(func.value, ast.Name)
-                and func.value.id == "subprocess"
-            ):
-                continue
+        for call in runs:
             keywords = {k.arg: k.value for k in call.keywords}
             shell = keywords.get("shell")
+            unknown = sorted(str(k) for k in keywords if k not in RUN_KEYWORDS)
             if (
                 not isinstance(shell, ast.Constant)
                 or shell.value is not False
                 or "timeout" not in keywords
                 or None in keywords  # **kwargs could smuggle shell=True in
                 or len(call.args) != 1
+                or isinstance(call.args[0], ast.Starred)
             ):
                 out.append(f"{path}:{call.lineno}: run without shell=False and a timeout")
+            if unknown:
+                out.append(f"{path}:{call.lineno}: run with keyword(s) {unknown}")
     return out
 
 
@@ -506,6 +540,54 @@ BAD: list[tuple[str, Rule, str, str]] = [
         "lab/register.py",
         "subprocess.run(a, shell=False, timeout=1)",
     ),
+    # Wave-2 check of Spec 016: run stored or wrapped, so its call goes unchecked.
+    (
+        "run aliased in git",
+        rule_subprocess_calls,
+        GIT_MODULE,
+        'import subprocess\nf = subprocess.run\nf(["sh", "-c", "x"], shell=True)',
+    ),
+    (
+        "run in partial in git",
+        rule_subprocess_calls,
+        GIT_MODULE,
+        "functools.partial(subprocess.run, shell=True)(a)",
+    ),
+    ("run walrus in git", rule_subprocess_calls, GIT_MODULE, "(f := subprocess.run)(a)"),
+    ("run in a list in git", rule_subprocess_calls, GIT_MODULE, "[subprocess.run][0](a)"),
+    ("run reassigned in git", rule_subprocess_calls, GIT_MODULE, "subprocess.run = g"),
+    (
+        "executable in git",
+        rule_subprocess_calls,
+        GIT_MODULE,
+        'subprocess.run(["x"], shell=False, timeout=1, executable="cmd.exe")',
+    ),
+    (
+        "preexec_fn in git",
+        rule_subprocess_calls,
+        GIT_MODULE,
+        "subprocess.run(a, shell=False, timeout=1, preexec_fn=f)",
+    ),
+    (
+        "star args in git",
+        rule_subprocess_calls,
+        GIT_MODULE,
+        "subprocess.run(*a, shell=False, timeout=1)",
+    ),
+    ("dunder import", rule_subprocess_calls, GIT_MODULE, '__import__("subprocess").Popen(a)'),
+    (
+        "importlib subprocess",
+        rule_subprocess_calls,
+        "lab/register.py",
+        'importlib.import_module("subprocess")',
+    ),
+    ("sys.modules subprocess", rule_subprocess_calls, "x.py", 'sys.modules["subprocess"].run(a)'),
+    (
+        "posixsubprocess",
+        rule_subprocess_calls,
+        "x.py",
+        'importlib.import_module("_posixsubprocess")',
+    ),
     ("http.client import", rule_imports, "x.py", "from http.client import HTTPSConnection"),
     ("websockets", rule_imports, "x.py", "import websockets.sync.client"),
     ("hmac elsewhere", rule_imports, "market/x.py", "import hmac"),
@@ -543,6 +625,19 @@ def test_each_rule_catches_its_pattern(case: str, rule: Rule, path: str, source:
             rule_subprocess_calls,
             GIT_MODULE,
             "subprocess.run(list(f), stdin=subprocess.DEVNULL, shell=False, timeout=5)",
+        ),
+        (
+            rule_subprocess_calls,
+            GIT_MODULE,
+            "done = subprocess.run(list(f), cwd=d, stdin=subprocess.DEVNULL, capture_output=True,"
+            ' text=True, encoding="utf-8", errors="replace", timeout=t, check=True, shell=False,'
+            " env=e)",
+        ),
+        (rule_subprocess_calls, GIT_MODULE, '"""Starts git via subprocess."""'),
+        (
+            rule_subprocess_calls,
+            "lab/register.py",
+            'R = 1\n"""Starts nothing (no ``subprocess``)."""',
         ),
         (rule_imports, "web/auth.py", "import hmac"),
         (rule_imports, HTTP_MODULE, "import http.client"),

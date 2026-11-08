@@ -21,6 +21,7 @@ from llm_trading_bot.lab.spread import (
     QuarterSpreads,
     SpreadModel,
     build_quarter_spreads,
+    complete_quarters,
     conservative_spread,
     hour_median,
     pair_spreads,
@@ -209,6 +210,17 @@ def test_sampler_builds_conservative_quarter_value(tmp_path: Path) -> None:
         again = sample_spreads(archive, api, start=start, end=end, markets=["BTC-EUR"])
         assert (again.requests, again.hours_skipped) == (0, 4)
 
+        # Two weeks of a quarter are no quarter value (wave-2 check of Spec 016).
+        assert build_quarter_spreads(archive, now=123) == {}
+        assert complete_quarters(archive) == set()
+        assert QuarterSpreads.from_archive(archive).source("BTC-EUR", start) == "default"
+
+        # The rest of the quarter has no trades: stored without a median, so the quarter is
+        # whole and its value comes from the four hours that had pairs.
+        whole = sample_spreads(archive, api, start=Q2.start, end=Q2.end, markets=["BTC-EUR"])
+        assert whole.hours_skipped == 4
+        assert whole.hours_sampled == len(sample_hours("BTC-EUR", Q2.start, Q2.end)) - 4
+        assert complete_quarters(archive) == {("BTC-EUR", "2021Q2")}
         built = build_quarter_spreads(archive, now=123)
         assert list(built) == [("BTC-EUR", "2021Q2")]
         assert built[("BTC-EUR", "2021Q2")][0] == pytest.approx(0.00065, rel=1e-9)
@@ -217,12 +229,87 @@ def test_sampler_builds_conservative_quarter_value(tmp_path: Path) -> None:
         assert tuple(row) == ("BTC-EUR", "2021Q2", METHOD, 4)
         model = QuarterSpreads.from_archive(archive)
         assert model.half_spread("BTC-EUR", start) == pytest.approx(0.000325, rel=1e-9)
+        assert model.source("BTC-EUR", start) == "sampled"
         assert model.half_spread("BTC-EUR", Q2.end) == DEFAULT_SPREAD["BTC-EUR"] / 2
 
 
+def insert_sample(archive: Archive, market: str, hour: int, median: float | None) -> None:
+    archive.db.execute(
+        "INSERT INTO spread_samples(market, method, hour, trades, pairs, median, fetched_at) "
+        "VALUES (?, ?, ?, 4, 3, ?, 1)",
+        (market, METHOD, hour, median),
+    )
+
+
+def insert_spread_row(archive: Archive, market: str, label: str, spread: float) -> None:
+    """A ``spreads`` row as older code (without the whole-quarter rule) may have left it."""
+    archive.db.execute(
+        "INSERT INTO spreads(market, quarter, method, spread, samples, computed_at) "
+        "VALUES (?, ?, ?, ?, 1, 1)",
+        (market, label, METHOD, spread),
+    )
+
+
+def test_partial_quarter_gives_no_value(tmp_path: Path) -> None:
+    """The wave-2 probe: one quiet hour in 2022Q3 gave a "sampled" 1 bp instead of the default."""
+    q = Quarter.parse("2022Q3")
+    planned = sample_hours("BTC-EUR", q.start, q.end)
+    with Archive(tmp_path / "candles.db") as archive:
+        insert_sample(archive, "BTC-EUR", planned[0], FLOOR)
+        insert_spread_row(archive, "BTC-EUR", "2022Q3", FLOOR)  # stale, never used
+        model = QuarterSpreads.from_archive(archive)
+        assert model.source("BTC-EUR", q.start) == "default"
+        assert model.spread("BTC-EUR", q.start) == DEFAULT_SPREAD["BTC-EUR"]
+        assert build_quarter_spreads(archive, now=1) == {}
+        assert archive.db.execute("SELECT COUNT(*) FROM spreads").fetchone()[0] == 0
+        # All planned hours but one: still partial.
+        for hour in planned[1:-1]:
+            insert_sample(archive, "BTC-EUR", hour, 0.0003)
+        assert build_quarter_spreads(archive, now=1) == {}
+        insert_sample(archive, "BTC-EUR", planned[-1], None)
+        built = build_quarter_spreads(archive, now=1)
+        assert list(built) == [("BTC-EUR", "2022Q3")]
+        value, hours = built[("BTC-EUR", "2022Q3")]
+        assert value == pytest.approx(0.0003) and hours == len(planned) - 1
+        assert QuarterSpreads.from_archive(archive).source("BTC-EUR", q.start) == "sampled"
+
+
+def test_budget_stop_leaves_no_quarter_value(tmp_path: Path) -> None:
+    """A run cut by ``max_requests`` inside a quarter, then a finished run elsewhere: the cut
+    quarter keeps the default until its own hours are all stored."""
+    q3 = Quarter.parse("2022Q3")
+    hours = sample_hours("BTC-EUR", q3.start, q3.end)
+    trades = [t for h in hours for t in hour_with_spread(h, 0.0004)]
+    fake = FakeTradesApi({"BTC-EUR": trades})
+    api = PublicApi(fake, clock=Clock(SEAL_EPOCH), sleep=lambda _s: None, min_interval=0)
+    with Archive(tmp_path / "candles.db") as archive:
+        cut = sample_spreads(
+            archive, api, start=q3.start, end=q3.end, markets=["BTC-EUR"], max_requests=3
+        )
+        assert cut.stopped == "budget" and cut.hours_sampled == 3
+        other = sample_spreads(archive, api, start=Q2.start, end=Q2.end, markets=["BTC-EUR"])
+        assert other.stopped == ""
+        built = build_quarter_spreads(archive, now=1)
+        # 2022Q3 is cut; 2021Q2 is whole but had no trades, so no pairs either.
+        assert built == {}
+        assert QuarterSpreads.from_archive(archive).source("BTC-EUR", q3.start) == "default"
+        sample_spreads(archive, api, start=q3.start, end=q3.end, markets=["BTC-EUR"])
+        built = build_quarter_spreads(archive, now=1)
+        value, count = built[("BTC-EUR", "2022Q3")]
+        assert value == pytest.approx(0.0004) and count == len(hours)
+
+
+def test_more_hours_per_week_cover_the_default_plan(tmp_path: Path) -> None:
+    q = Quarter.parse("2022Q3")
+    with Archive(tmp_path / "candles.db") as archive:
+        for hour in sample_hours("ETH-EUR", q.start, q.end, per_week=3):
+            insert_sample(archive, "ETH-EUR", hour, 0.0005)
+        assert complete_quarters(archive) == {("ETH-EUR", "2022Q3")}
+        assert complete_quarters(archive, per_week=4) == set()
+
+
 def test_hours_without_enough_pairs_fall_back_to_default(tmp_path: Path) -> None:
-    start = (Q2.start // WEEK + 1) * WEEK
-    end = start + WEEK
+    start, end = Q2.start, Q2.end
     hours = sample_hours("BTC-EUR", start, end)
     trades = [t for h in hours for t in hour_with_spread(h, 0.0004, pairs=2)]
     api = PublicApi(
@@ -233,7 +320,9 @@ def test_hours_without_enough_pairs_fall_back_to_default(tmp_path: Path) -> None
     )
     with Archive(tmp_path / "candles.db") as archive:
         sample_spreads(archive, api, start=start, end=end, markets=["BTC-EUR"])
-        assert [r[0] for r in archive.db.execute("SELECT pairs FROM spread_samples")] == [2, 2]
+        pairs = [r[0] for r in archive.db.execute("SELECT pairs FROM spread_samples")]
+        assert pairs == [2] * len(hours)
+        assert complete_quarters(archive) == {("BTC-EUR", "2021Q2")}  # whole, but no median
         assert build_quarter_spreads(archive) == {}
         model = QuarterSpreads.from_archive(archive)
         assert model.source("BTC-EUR", start) == "default"
@@ -266,7 +355,7 @@ def test_sampler_stops_at_429_and_resumes(tmp_path: Path) -> None:
 
 
 def test_sampler_never_requests_sealed_hours(tmp_path: Path) -> None:
-    start, end = SEAL_EPOCH - 3 * WEEK, SEAL_EPOCH + 5 * WEEK
+    start, end = Quarter.parse("2025Q3").start, SEAL_EPOCH + 5 * WEEK
     before = sample_hours("BTC-EUR", start, SEAL_EPOCH)
     assert sample_hours("BTC-EUR", SEAL_EPOCH, end)  # there would be hours to sample
     trades = [t for h in before for t in hour_with_spread(h, 0.0004)]
@@ -284,25 +373,25 @@ def test_sampler_never_requests_sealed_hours(tmp_path: Path) -> None:
 
 
 def test_sealed_quarters_never_computed_or_used(tmp_path: Path) -> None:
+    q3, q4 = Quarter.parse("2025Q3"), Quarter.parse("2025Q4")
+    planned = sample_hours("BTC-EUR", q3.start, q3.end)
     with Archive(tmp_path / "candles.db") as archive:
-        # Rows as older code might have left them: a sample and a value inside the seal.
-        for hour, median in ((SEAL_EPOCH - 7200, 0.0004), (SEAL_EPOCH, 0.0009)):
-            archive.db.execute(
-                "INSERT INTO spread_samples(market, method, hour, trades, pairs, median, "
-                "fetched_at) VALUES ('BTC-EUR', ?, ?, 4, 3, ?, 1)",
-                (METHOD, hour, median),
-            )
+        # Rows as older code might have left them: a whole 2025Q3, and samples and a value
+        # inside the seal - even a "whole" sealed quarter.
+        for hour in planned:
+            insert_sample(archive, "BTC-EUR", hour, 0.0004)
+        for hour in sample_hours("BTC-EUR", q4.start, q4.end):
+            insert_sample(archive, "BTC-EUR", hour, 0.0009)
+        insert_spread_row(archive, "BTC-EUR", "2025Q4", 0.0009)
+        assert complete_quarters(archive) == {("BTC-EUR", "2025Q3")}
+        assert QuarterSpreads.from_archive(archive).source("BTC-EUR", SEAL_EPOCH) == "default"
         built = build_quarter_spreads(archive, now=1)
         assert list(built) == [("BTC-EUR", "2025Q3")]
         value, hours = built[("BTC-EUR", "2025Q3")]
-        assert value == pytest.approx(0.0004) and hours == 1
+        assert value == pytest.approx(0.0004) and hours == len(planned)
         quarters = [r[0] for r in archive.db.execute("SELECT quarter FROM spreads")]
-        assert quarters == ["2025Q3"]
-        archive.db.execute(
-            "INSERT INTO spreads(market, quarter, method, spread, samples, computed_at) "
-            "VALUES ('BTC-EUR', '2025Q4', ?, 0.0009, 1, 1)",
-            (METHOD,),
-        )
+        assert quarters == ["2025Q3"]  # the stale sealed row is gone
+        insert_spread_row(archive, "BTC-EUR", "2025Q4", 0.0009)
         model = QuarterSpreads.from_archive(archive)
         assert model.source("BTC-EUR", SEAL_EPOCH) == "default"
         assert model.spread("BTC-EUR", SEAL_EPOCH - 1) == pytest.approx(0.0004)

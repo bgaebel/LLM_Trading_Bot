@@ -14,7 +14,13 @@ Before the bot's own recording (Spec 015) the spread is estimated from public tr
   understated cost flatters every strategy. Not the maximum: a single hour with a fast market
   would dominate. The floor of 1 bp is several ticks of today's book (about 0.15 bp for BTC),
   because an estimate of zero would make fills free of spread.
-- **Without samples:** ``DEFAULT_SPREAD``, deliberately wide (see there).
+- **Only whole quarters:** a quarter gets a value only once every planned sample hour of it
+  (``sample_hours`` over the whole quarter) is stored, with or without a median. A run cut short
+  by ``--max-requests`` or a range ending inside a quarter would otherwise turn a handful of
+  hours into a "sampled" value - as low as ``FLOOR`` from one quiet hour - and an understated
+  cost flatters every strategy. ``build_quarter_spreads`` stores nothing else and removes stale
+  rows; ``QuarterSpreads.from_archive`` checks the samples again for rows older code wrote.
+- **Without a value:** ``DEFAULT_SPREAD``, deliberately wide (see there), source ``default``.
 
 ``half_spread`` is what the historical client adds to and subtracts from the mid (AK2).
 
@@ -32,9 +38,10 @@ CLI ``trading-bot lab spread`` (German output): see ``cli_main``.
 import itertools
 import math
 import random
+import sqlite3
 import statistics
 import time
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, TextIO
 
@@ -50,6 +57,7 @@ from llm_trading_bot.lab.archive import (
     RateLimited,
     add_dir_option,
     archive_path,
+    database_error_message,
     format_utc,
     german_retry_message,
     parse_cli,
@@ -106,14 +114,12 @@ class QuarterSpreads:
         self._default = dict(default)
 
     @classmethod
-    def from_archive(cls, archive: Archive, *, method: str = METHOD) -> "QuarterSpreads":
-        rows = archive.db.execute(
-            "SELECT market, quarter, spread FROM spreads WHERE method=?", (method,)
-        )
-        # A sealed quarter's row can only come from older code; it is never used.
-        return cls(
-            {(str(m), str(q)): float(s) for m, q, s in rows if not Quarter.parse(str(q)).sealed}
-        )
+    def from_archive(
+        cls, archive: Archive, *, method: str = METHOD, per_week: int = HOURS_PER_WEEK
+    ) -> "QuarterSpreads":
+        """The stored values of whole, unsealed quarters (``stored_quarter_spreads``)."""
+        stored = stored_quarter_spreads(archive, method=method, per_week=per_week)
+        return cls({key: value for key, (value, _hours) in stored.items()})
 
     def spread(self, market: str, epoch: int) -> float:
         value = self._spreads.get((market, quarter_label(epoch)))
@@ -292,28 +298,82 @@ def sample_spreads(
     return result
 
 
+def complete_quarters(
+    archive: Archive, *, method: str = METHOD, per_week: int = HOURS_PER_WEEK
+) -> set[tuple[str, str]]:
+    """``(market, quarter)`` pairs, before the seal, whose every planned sample hour is stored.
+
+    "Planned" is ``sample_hours`` over the whole quarter. A run with a larger ``per_week``
+    covers a smaller one, because the picks of a week come in a fixed seeded order.
+    """
+    have: dict[tuple[str, str], set[int]] = {}
+    for market, hour in archive.db.execute(
+        "SELECT market, hour FROM spread_samples WHERE method=? AND hour + 3600 <= ?",
+        (method, SEAL_EPOCH),
+    ):
+        have.setdefault((str(market), quarter_label(int(hour))), set()).add(int(hour))
+    out = set()
+    for (market, label), hours in have.items():
+        q = Quarter.parse(label)
+        planned = sample_hours(market, q.start, q.end, per_week=per_week)
+        if not q.sealed and planned and hours.issuperset(planned):
+            out.add((market, label))
+    return out
+
+
+def stored_quarter_spreads(
+    archive: Archive, *, method: str = METHOD, per_week: int = HOURS_PER_WEEK
+) -> dict[tuple[str, str], tuple[float, int]]:
+    """``{(market, quarter): (spread, hours with a median)}`` from ``spreads``, only for whole
+    quarters before the seal; read-only, so a reader of the archive may call it.
+
+    The samples are checked again because a row written by older code (no completeness rule)
+    must not count as sampled. Every other reader of ``spreads`` should go through here.
+    """
+    whole = complete_quarters(archive, method=method, per_week=per_week)
+    out = {}
+    for market, label, value, hours in archive.db.execute(
+        "SELECT market, quarter, spread, samples FROM spreads WHERE method=?", (method,)
+    ):
+        key = (str(market), str(label))
+        if key in whole:
+            out[key] = (float(value), int(hours))
+    return out
+
+
 def build_quarter_spreads(
-    archive: Archive, *, now: int | None = None, method: str = METHOD
+    archive: Archive,
+    *,
+    now: int | None = None,
+    method: str = METHOD,
+    per_week: int = HOURS_PER_WEEK,
 ) -> dict[tuple[str, str], tuple[float, int]]:
     """Aggregate the stored hour medians into ``spreads`` (one row per market and quarter).
 
-    Returns ``{(market, quarter): (spread, hours with a median)}``. A quarter's row is
-    recomputed from all its samples each time: the samples are the record, the value follows.
-    Samples from the sealed period (only possible in an archive written by older code) are
-    ignored, so no quarter from 2025Q4 on is ever computed or stored.
+    Returns ``{(market, quarter): (spread, hours with a median)}``, only for quarters in
+    ``complete_quarters`` with at least one median. All rows of ``method`` are recomputed
+    each time and nothing else is kept: the samples are the record, the value follows. So no
+    partial quarter and no quarter from 2025Q4 on (samples there only come from older code)
+    is ever stored.
     """
+    whole = complete_quarters(archive, method=method, per_week=per_week)
     by_quarter: dict[tuple[str, str], list[float]] = {}
     for market, hour, median in archive.db.execute(
         "SELECT market, hour, median FROM spread_samples "
         "WHERE method=? AND median IS NOT NULL AND hour + 3600 <= ?",
         (method, SEAL_EPOCH),
     ):
-        by_quarter.setdefault((str(market), quarter_label(int(hour))), []).append(float(median))
+        key = (str(market), quarter_label(int(hour)))
+        if key in whole:
+            by_quarter.setdefault(key, []).append(float(median))
     stamp = math.floor(time.time()) if now is None else now
     out = {key: (conservative_spread(v), len(v)) for key, v in sorted(by_quarter.items())}
     con = archive.db
     con.execute("BEGIN IMMEDIATE")
     try:
+        # Stale rows (a partial quarter from older code, a sealed one) must not outlive the
+        # rule: a reader that skips stored_quarter_spreads would still pick them up.
+        con.execute("DELETE FROM spreads WHERE method=?", (method,))
         con.executemany(
             "INSERT INTO spreads(market, quarter, method, spread, samples, computed_at) "
             "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(market, quarter, method) DO UPDATE SET "
@@ -345,9 +405,12 @@ def quarter_table(
     *,
     markets: Sequence[str] = MARKETS,
     default: Mapping[str, float] = DEFAULT_SPREAD,
+    complete: Collection[tuple[str, str]] | None = None,
 ) -> str:
     """German table of the assumed full spread per quarter in ``[start, end)`` and market;
-    quarters without enough samples show the default and say so."""
+    quarters without a value show the default and say so. With ``complete`` (from
+    ``complete_quarters``) a default cell also says when the quarter is not fully sampled yet,
+    the case a further run over the whole quarter fixes."""
     if start >= end:
         return "Keine Quartale im Zeitraum."
     quarters = Quarter.span(quarter_label(start), quarter_label(end - 1))
@@ -364,13 +427,20 @@ def quarter_table(
             value = built.get((market, q.label))
             if value is None:
                 fallback = default.get(market, FALLBACK_SPREAD)
-                cells.append(f"Standard {_percent(fallback)}")
+                partial = complete is not None and (market, q.label) not in complete
+                note = " (nicht vollständig abgetastet)" if partial else ""
+                cells.append(f"Standard {_percent(fallback)}{note}")
             else:
                 cells.append(f"{_percent(value[0])} ({value[1]} Std.)")
         lines.append(f"| {q.label} | " + " | ".join(cells) + " |")
     lines.append(
-        "„Standard“: zu wenige Stunden mit mindestens "
-        f"{MIN_PAIRS} Gegenpaaren; der Wert ist eine vorsichtige Annahme."
+        "Ein Wert entsteht nur aus einem Quartal, dessen Stichproben-Stunden alle abgerufen "
+        f"sind; „(n Std.)“: so viele davon hatten mindestens {MIN_PAIRS} Gegenpaare (Kauf und "
+        "Verkauf kurz nacheinander) und gehen in den Wert ein."
+    )
+    lines.append(
+        "„Standard“: das Quartal ist nicht vollständig abgetastet oder keine Stunde hatte "
+        f"mindestens {MIN_PAIRS} Gegenpaare; dann gilt ein bewusst hoher, vorsichtiger Wert."
     )
     return "\n".join(lines)
 
@@ -407,7 +477,8 @@ def cli_main(
     """``trading-bot lab spread`` (Spec 016 AK6): sample, then print the quarter table.
 
     ``api`` is injectable for tests. The table is built only once every hour of the range is
-    sampled; a run stopped by ``--max-requests`` (exit 0) or a 429 (exit 3) is resumed by
+    sampled, and a quarter gets a value only when all its sample hours are stored (earlier
+    runs count); a run stopped by ``--max-requests`` (exit 0) or a 429 (exit 3) is resumed by
     calling again.
     """
     if command != "spread":
@@ -461,14 +532,18 @@ def cli_main(
                 print("Anfragen-Grenze erreicht; ein weiterer Aufruf setzt fort.", file=out)
                 return EXIT_OK
             built = build_quarter_spreads(archive, now=api.now())
+            whole = complete_quarters(archive)
     except RateLimited as exc:  # sample_spreads handles 429s itself; kept for any other path
         print(german_retry_message(exc.retry_at, api.now()), file=out)
         return EXIT_RATE_LIMITED
     except ArchiveError as exc:
         print(f"Kerzenarchiv-Fehler: {exc}", file=out)
         return EXIT_ERROR
+    except sqlite3.Error as exc:
+        print(database_error_message(exc), file=out)
+        return EXIT_ERROR
     except (HTTPFailure, TransportError, OSError) as exc:
         print(f"Abruf fehlgeschlagen: {exc}. Ein weiterer Aufruf setzt fort.", file=out)
         return EXIT_ERROR
-    print(quarter_table(built, start, end), file=out)
+    print(quarter_table(built, start, end, complete=whole), file=out)
     return EXIT_OK

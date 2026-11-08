@@ -1017,6 +1017,19 @@ def archive_path(folder: Path | None) -> Path:
     return (folder if folder is not None else lab_dir()) / CANDLES_FILE
 
 
+def database_error_message(exc: sqlite3.Error) -> str:
+    """German line for an SQLite failure in a lab CLI, instead of a traceback.
+
+    The likely causes are a second ``fetch``/``spread`` writing at the same time (locked) or a
+    damaged file; every window and sample commits on its own, so stored data stays intact.
+    """
+    return (
+        f"Kerzenarchiv-Fehler: die Datenbank meldet „{exc}“. Läuft gerade ein zweiter Abruf "
+        "auf demselben Archiv, warten und erneut aufrufen; sonst ist die Datei beschädigt "
+        "oder keine Archiv-Datei."
+    )
+
+
 def sealed_note(requested_end: int) -> str:
     return (
         f"Hinweis: Ende {format_utc(requested_end)} liegt im versiegelten Zeitraum; "
@@ -1128,6 +1141,9 @@ def _cli_fetch(argv: Sequence[str], out: TextIO, api: PublicApi | None) -> int:
     except ArchiveError as exc:
         print(f"Kerzenarchiv-Fehler: {exc}", file=out)
         return EXIT_ERROR
+    except sqlite3.Error as exc:
+        print(database_error_message(exc), file=out)
+        return EXIT_ERROR
     except (HTTPFailure, TransportError, OSError) as exc:
         print(f"Abruf fehlgeschlagen: {exc}. Ein weiterer Aufruf setzt fort.", file=out)
         return EXIT_ERROR
@@ -1153,6 +1169,9 @@ def _cli_check(argv: Sequence[str], out: TextIO) -> int:
             checks = cross_check(archive, start=start, end=end)
     except ArchiveError as exc:
         print(f"Kerzenarchiv-Fehler: {exc}", file=out)
+        return EXIT_ERROR
+    except sqlite3.Error as exc:
+        print(database_error_message(exc), file=out)
         return EXIT_ERROR
     print(f"Kerzenarchiv: {path}", file=out)
     print(f"Zeitraum: {format_utc(start)} bis {format_utc(end)}", file=out)

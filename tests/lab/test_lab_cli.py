@@ -2,6 +2,7 @@
 
 import calendar
 import io
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -280,7 +281,24 @@ def test_spread_end_clamped_to_seal(tmp_path: Path) -> None:
     code, text = run(spread_mod, "spread", argv, api)
     assert code == EXIT_OK and "versiegelten Zeitraum" in text
     assert fake.urls and all(s + 3600 <= SEAL_EPOCH for s in starts(fake))
-    assert "| 2025Q3 | 0,0400 % (" in text and "2025Q4" not in text
+    # Only September was sampled: 2025Q3 is partial and keeps the default (wave-2 check).
+    partial = " (nicht vollständig abgetastet)"
+    assert f"| 2025Q3 | Standard 0,1000 %{partial} | Standard 0,1500 %{partial} |" in text
+    assert "2025Q4" not in text
+    argv = ["--dir", str(tmp_path), "--start", "2025-07-01", "--end", "2026-03-01"]
+    code, text = run(spread_mod, "spread", argv, api)
+    assert code == EXIT_OK and "| 2025Q3 | 0,0400 % (" in text and "2025Q4" not in text
+
+
+def test_spread_range_inside_a_quarter_keeps_the_default(tmp_path: Path) -> None:
+    """``--end 2021-02-01`` alone used to store a 2021Q1 value from one month of samples."""
+    _fake, api = make_api(utc(2026, 11, 8))
+    code, text = run(spread_mod, "spread", ["--dir", str(tmp_path), "--end", "2021-02-01"], api)
+    assert code == EXIT_OK, text
+    assert "| 2021Q1 | Standard 0,1000 % (nicht vollständig abgetastet) |" in text
+    with Archive.open_readonly(tmp_path / "candles.db") as archive:
+        assert archive.db.execute("SELECT COUNT(*) FROM spreads").fetchone()[0] == 0
+        assert archive.db.execute("SELECT COUNT(*) FROM spread_samples").fetchone()[0] > 0
 
 
 def test_spread_stops_at_429_without_table(tmp_path: Path) -> None:
@@ -306,5 +324,51 @@ def test_quarter_table_marks_defaults() -> None:
     q = Quarter.parse("2021Q2")
     text = spread_mod.quarter_table({("BTC-EUR", "2021Q2"): (0.00065, 26)}, q.start, q.end)
     assert "| 2021Q2 | 0,0650 % (26 Std.) | Standard 0,1500 % |" in text
-    assert "„Standard“" in text
+    # The footer names both reasons for a default; it used to claim a minimum number of hours
+    # that does not exist (wave-2 check of Spec 016).
+    assert "zu wenige Stunden" not in text
+    assert "„Standard“: das Quartal ist nicht vollständig abgetastet oder keine Stunde" in text
+    assert "Stichproben-Stunden alle abgerufen" in text and "„(n Std.)“" in text
+    marked = spread_mod.quarter_table({}, q.start, q.end, complete={("BTC-EUR", "2021Q2")})
+    assert "| 2021Q2 | Standard 0,1000 % | Standard 0,1500 % (nicht vollständig abgetastet) |" in (
+        marked
+    )
     assert spread_mod.quarter_table({}, q.end, q.end) == "Keine Quartale im Zeitraum."
+
+
+@pytest.mark.parametrize(
+    ("module", "command", "extra"),
+    [
+        (archive_mod, "fetch", ["--start", "2023-11-15", "--end", "2023-11-16"]),
+        (archive_mod, "check", []),
+        (spread_mod, "spread", ["--start", "2021-01-01", "--end", "2021-01-08"]),
+    ],
+)
+def test_damaged_archive_is_a_german_error_not_a_traceback(
+    tmp_path: Path, module: Any, command: str, extra: list[str]
+) -> None:
+    (tmp_path / "candles.db").write_bytes(b"no sqlite file, just text " * 100)
+    _fake, api = make_api(D0 + 3 * 86_400)
+    argv = ["--dir", str(tmp_path), *extra]
+    code, text = run(module, command, argv, None if command == "check" else api)
+    assert code == EXIT_ERROR
+    assert "Kerzenarchiv-Fehler: die Datenbank meldet „file is not a database“" in text
+
+
+@pytest.mark.parametrize(("module", "command"), [(archive_mod, "fetch"), (spread_mod, "spread")])
+def test_locked_archive_is_a_german_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module: Any, command: str
+) -> None:
+    """A second writer at the same time ends in ``database is locked`` after the busy timeout;
+    raised directly here so the test does not wait 30 s."""
+
+    def locked(*_a: object, **_k: object) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(module, "fetch_archive" if command == "fetch" else "sample_spreads", locked)
+    _fake, api = make_api(D0 + 3 * 86_400)
+    argv = ["--dir", str(tmp_path), "--start", "2021-01-01", "--end", "2021-01-08"]
+    code, text = run(module, command, argv, api)
+    assert code == EXIT_ERROR
+    assert "Kerzenarchiv-Fehler: die Datenbank meldet „database is locked“" in text
+    assert "zweiter Abruf" in text
