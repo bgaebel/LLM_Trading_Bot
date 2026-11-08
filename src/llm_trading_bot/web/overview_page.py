@@ -200,6 +200,12 @@ def when_epoch(t: float) -> str:
 
 
 def _decisions(rows: Sequence[DecisionRow]) -> str:
+    if not rows:
+        return (
+            '<p class="hint">Noch kein Kauf- oder Verkaufssignal – alle Depots halten. '
+            "Halten wird nicht aufgeführt.</p>"
+        )
+
     def action(d: DecisionRow) -> str:
         return f'<span class="act {escape(d.action.lower())}">{escape(d.action)}</span>'
 
@@ -220,10 +226,15 @@ def _decisions(rows: Sequence[DecisionRow]) -> str:
         for d in rows
     ]
     head = ("Depot", "Markt", "Zeit", "Aktion", "Ziel", "Konf.", "Status", "Begründung")
-    return _table(head, body, "decisions")
+    return _table(head, body, "decisions") + (
+        '<p class="hint">Je Depot und Markt das letzte Kauf- oder Verkaufssignal; '
+        "Halten wird nicht aufgeführt.</p>"
+    )
 
 
-def _llm(rows: Sequence[LlmToday]) -> str:
+def _llm(rows: Sequence[LlmToday], *, public: bool = False) -> str:
+    """``public``: without login (ADR-0028) no error texts - they come from OpenAI and describe
+    internals - and no hint where the shares are configured."""
     if not rows:
         return '<p class="hint">Keine GPT-Depots aktiv.</p>'
     cards = []
@@ -231,7 +242,7 @@ def _llm(rows: Sequence[LlmToday]) -> str:
         share = r.share if r.share > 0 else None
         used = 0.0 if share is None else min(float(r.charged / share), 1.0)
         status = escape(r.last_status or "–") + (
-            f" · {escape(r.last_error)}" if r.last_error else ""
+            f" · {escape(r.last_error)}" if r.last_error and not public else ""
         )
         cards.append(
             f'<div class="llm-card{" over" if r.exceeded else ""}">'
@@ -247,12 +258,16 @@ def _llm(rows: Sequence[LlmToday]) -> str:
             f'<div class="llm-meta">Letzte Anfrage: {status} · {escape(when(r.last_at))}</div>'
             "</div>"
         )
+    where = (
+        ""
+        if public
+        else "Anteile aus <code>secrets.env</code> bzw. Standardwerten – setzt der laufende Bot "
+        "andere Werte per Umgebung, weicht die Anzeige ab."
+    )
     return (
         f'<div class="llm-cards">{"".join(cards)}</div>'
         '<p class="hint">Heute = UTC-Tag wie die Budgetsperre; Kosten inkl. offener '
-        "Reservierungen. "
-        "Anteile aus <code>secrets.env</code> bzw. Standardwerten – setzt der laufende Bot andere "
-        "Werte per Umgebung, weicht die Anzeige ab.</p>"
+        f"Reservierungen. {where}</p>"
     )
 
 
@@ -336,24 +351,33 @@ def _readouts(view: Overview) -> str:
 def overview_page(
     view: Overview | None,
     *,
-    csrf: str,
+    csrf: str | None,
     problem: str = "",
     now: float | None = None,
     trading: str = "",
+    public: bool = False,
+    live: bool = False,
 ) -> str:
     """``view`` is None when the database cannot be shown; ``problem`` then says why. ``now``
-    keeps the ticker running across reloads. ``trading`` is the pause note (Spec 011 AK6)."""
+    keeps the ticker running across reloads. ``trading`` is the pause note (Spec 011 AK6).
+    ``public``: the read-only view without a session (ADR-0028) - no error details, no hints to
+    files or commands, a login link instead of tabs; ``csrf`` is then None. ``live``: the
+    update request of /app.js - the same page without the backdrop it never swaps."""
     # The pause comes from the status file and secrets.env, not from the DB: show it always.
     banner = f'<div class="msg bad" role="status">{escape(trading)}</div>' if trading else ""
     if view is None:
+        hint = (
+            "Die Übersicht erscheint, sobald der Bot wieder Daten geschrieben hat."
+            if public
+            else "Die Übersicht liest die Datenbank des Bots nur lesend (ADR-0016). Sie erscheint, "
+            "sobald <code>trading-bot paper-cycle</code> einen Zyklus geschrieben hat."
+        )
         body = (
             banner
             + '<section class="panel">'
             + pages._head("00", "Übersicht", "amber")
             + f'<div class="msg bad" role="status">{escape(problem)}</div>'
-            '<p class="hint">Die Übersicht liest die Datenbank des Bots nur lesend (ADR-0016). '
-            "Sie erscheint, sobald <code>trading-bot paper-cycle</code> einen Zyklus geschrieben "
-            "hat.</p></section>"
+            f'<p class="hint">{hint}</p></section>'
         )
     else:
         body = (
@@ -367,7 +391,7 @@ def overview_page(
             "Zyklus und Kurse: läuft ≤ 15 min · verzögert ≤ 60 min. Danach steht.</p></section>"
             + '<section class="panel span-7">'
             + pages._head("02", "GPT heute", "amber")
-            + _llm(view.llm)
+            + _llm(view.llm, public=public)
             + "</section>"
             + '<section class="panel span-12">'
             + pages._head("03", "Depots", "warm")
@@ -379,7 +403,7 @@ def overview_page(
             + equity_chart(view.series)
             + "</section>"
             + '<section class="panel span-12">'
-            + pages._head("05", "Letzte Entscheidungen", "warm")
+            + pages._head("05", "Letzte Signale", "warm")
             + _decisions(view.decisions)
             + "</section>"
             + '<section class="panel span-12">'
@@ -399,4 +423,6 @@ def overview_page(
         ticker=pages.TICKER if view is None else ticker(view),
         now=now,
         script=True,
+        login=public,
+        backdrop=not live,
     )

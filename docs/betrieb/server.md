@@ -280,7 +280,17 @@ curl -s -D - -o /dev/null http://<domain>/login
 ```bash
 curl -s -D - -o /dev/null https://www.<domain>/login
 ```
-Erwartet: `308`/`301` auf `https://<domain>/login`. Auf dem Server – Bot-Ports nur auf `127.0.0.1`, kein Port 2019:
+Erwartet: `308`/`301` auf `https://<domain>/login`. Seit Spec 019 (ADR-0028) ist die Übersicht ohne Login
+lesbar, alles andere nicht:
+```bash
+curl -s -D - -o /dev/null https://<domain>/
+```
+```bash
+curl -s -D - -o /dev/null https://<domain>/settings
+```
+Erwartet: `/` mit `200`, `x-robots-tag: noindex, nofollow` und **ohne** `set-cookie`; `/settings` mit `303` auf
+`/login`. Abschalten ohne Deploy: Einstellungen → „Übersicht ohne Login“ → „Nur mit Login“.
+Auf dem Server – Bot-Ports nur auf `127.0.0.1`, kein Port 2019:
 ```bash
 ssh <alias> 'sudo ss -ltnp | grep -E ":(80|443|2019|8787|8788) "'
 ```

@@ -333,10 +333,22 @@ class DecisionRow:
     reason: str
 
 
+DECISION_WINDOW = 50_000
+"""Newest decisions searched for signals: about three months at ~500 decisions a day."""
+
+
 def latest_decisions(con: sqlite3.Connection) -> list[DecisionRow]:
+    """Per depot and market the newest BUY or SELL; holds are the norm and only crowd the table
+    (user 2026-11-08). A signal older than the window is not shown - the trades still are."""
+    # LEARNING(#performance): Sich selbst neu ladende Seite darf nicht die ganze Historie lesen
+    # MATERIALIZED: else SQLite groups over the (agent, symbol, bar_ts) index - the whole table.
     rows = con.execute(
-        "SELECT d.* FROM decisions d JOIN (SELECT agent, symbol, MAX(id) AS id FROM decisions"
-        " GROUP BY agent, symbol) m ON d.id = m.id"
+        "WITH w AS MATERIALIZED (SELECT id, agent, symbol FROM decisions"
+        " WHERE id > (SELECT COALESCE(MAX(id), 0) FROM decisions) - ?"
+        " AND action IN ('BUY', 'SELL'))"
+        " SELECT d.* FROM decisions d JOIN (SELECT MAX(id) AS id FROM w GROUP BY agent, symbol) m"
+        " ON d.id = m.id",
+        (DECISION_WINDOW,),
     ).fetchall()
     out = [
         DecisionRow(
@@ -458,18 +470,39 @@ class Overview:
     quotes: list[Quote] = field(default_factory=list)
 
 
+@dataclass
+class SignalCache:
+    """``latest_decisions`` reads the full rows of its window (no index covers ``action``): about
+    0.1 s at 50 000 decisions. New decisions come once a closed bar, the page every few seconds -
+    so the rows are kept until the newest decision changes (Spec 019 review)."""
+
+    key: tuple[int, str] | None = None
+    rows: list[DecisionRow] = field(default_factory=list)
+
+    def get(self, con: sqlite3.Connection) -> list[DecisionRow]:
+        # Id and time of the newest row: a restored or replaced database with the same newest id
+        # but another history still reads again.
+        newest = con.execute("SELECT id, ts FROM decisions ORDER BY id DESC LIMIT 1").fetchone()
+        key = None if newest is None else (int(newest[0]), str(newest[1]))
+        if key is None or key != self.key:
+            self.rows = latest_decisions(con) if key is not None else []
+            self.key = key
+        return list(self.rows)
+
+
 def load(
     con: sqlite3.Connection,
     now: float,
     shares: Mapping[str, Decimal],
     *,
     service: Pulse | None = None,
+    signals: SignalCache | None = None,
 ) -> Overview:
     return Overview(
         depots(con),
         equity_series(con),
         ([service] if service else []) + liveness(con, now),
-        latest_decisions(con),
+        latest_decisions(con) if signals is None else signals.get(con),
         llm_today(con, now, shares),
         recent_trades(con),
         quotes(con),

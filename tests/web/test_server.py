@@ -514,10 +514,14 @@ def test_overview_is_the_start_page_after_login(running: Running) -> None:
     assert (status, headers["location"]) == (303, "/")
 
 
-def test_overview_needs_a_session(running: Running) -> None:
+def test_overview_without_a_session_is_read_only(running: Running) -> None:
+    # ADR-0028: the overview is readable without login; the settings are not.
     setup(running)
     stranger = Browser(running.browser.port)
-    status, headers, _ = stranger.request("GET", "/")
+    status, headers, page = stranger.request("GET", "/")
+    assert status == 200 and "set-cookie" not in headers
+    assert "<form" not in page and 'href="/login"' in page
+    status, headers, _ = stranger.request("GET", "/settings")
     assert (status, headers["location"]) == (303, "/login")
 
 

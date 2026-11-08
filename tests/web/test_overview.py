@@ -298,25 +298,81 @@ def test_liveness_of_an_empty_database_says_stopped(tmp_path: Path) -> None:
 # ------------------------------------------------------------------ decisions (AK6)
 
 
-def test_decisions_show_the_newest_per_depot_and_market(tmp_path: Path) -> None:
+def _decided(path: Path, rows: list[tuple[str, str, int, str]]) -> None:
+    """Decisions (agent, symbol, bar_ts, action) in this order, so ids follow the list."""
+    open_db(path, agents=AGENTS).close()
+    con = sqlite3.connect(path)
+    try:
+        with con:
+            con.executemany(
+                "INSERT INTO decisions(ts,agent,symbol,bar_ts,model,action,target,confidence,"
+                "reason,inputs,status) VALUES (?,?,?,?,'m',?,0.25,0.5,?,'{}','OK')",
+                [(iso(NOW + b), a, s, b, act, f"{a} {s} {b}") for a, s, b, act in rows],
+            )
+    finally:
+        con.close()
+
+
+def test_decisions_leave_out_holds_and_keep_the_last_signal(tmp_path: Path) -> None:
+    path = tmp_path / "bot.db"
+    _decided(
+        path,
+        [
+            ("gpt-luna", "BTCEUR", 1, "BUY"),
+            ("gpt-luna", "BTCEUR", 2, "HOLD"),  # a later hold does not hide the signal
+            ("gpt-luna", "ETHEUR", 1, "SELL"),
+            ("gpt-luna", "ETHEUR", 2, "BUY"),  # the newest signal wins
+            ("gpt-sol", "BTCEUR", 1, "HOLD"),  # only holds: no row
+            (BUYHOLD, "BTCEUR", 1, "HOLD"),
+        ],
+    )
+    with reading(path) as con:
+        rows = overview.latest_decisions(con)
+    assert [(d.agent, d.market, d.action, d.reason) for d in rows] == [
+        ("gpt-luna", "BTC-EUR", "BUY", "gpt-luna BTCEUR 1"),
+        ("gpt-luna", "ETH-EUR", "BUY", "gpt-luna ETHEUR 2"),
+    ]
+
+
+def test_decisions_search_only_the_newest_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "bot.db"
+    holds = [("gpt-sol", "ETHEUR", b, "HOLD") for b in range(10, 13)]
+    _decided(path, [("gpt-luna", "BTCEUR", 1, "BUY"), ("gpt-sol", "BTCEUR", 2, "SELL"), *holds])
+    monkeypatch.setattr(overview, "DECISION_WINDOW", 4)  # ids 2-5 of 5
+    with reading(path) as con:
+        statements: list[str] = []
+        con.set_trace_callback(statements.append)
+        rows = overview.latest_decisions(con)
+        con.set_trace_callback(None)
+        (select,) = [s for s in statements if "FROM decisions" in s]
+        plan = [r[3] for r in con.execute("EXPLAIN QUERY PLAN " + select)]
+    assert [(d.agent, d.action) for d in rows] == [("gpt-sol", "SELL")]
+    # A rowid range, never a scan of the ever growing table on every reload of the page.
+    assert any("decisions USING INTEGER PRIMARY KEY (rowid>?)" in p for p in plan), plan
+    assert not any(p.startswith("SCAN decisions") for p in plan), plan
+
+
+def test_decisions_of_an_empty_database_are_empty(tmp_path: Path) -> None:
+    path = tmp_path / "bot.db"
+    open_db(path, agents=AGENTS).close()
+    with reading(path) as con:
+        assert overview.latest_decisions(con) == []
+
+
+def test_decisions_show_the_newest_signal_per_depot_and_market(tmp_path: Path) -> None:
     path = tmp_path / "bot.db"
     write(path, NOW, NOW + 3600)  # next hour: GPT is due again and decides a new bar
     with reading(path) as con:
         rows = overview.latest_decisions(con)
-        newest = {
-            (r["agent"], r["symbol"]): r["id"]
-            for r in con.execute("SELECT agent, symbol, MAX(id) AS id FROM decisions GROUP BY 1, 2")
-        }
-        ids = {
-            (r["agent"], r["symbol"]): r["id"]
-            for r in con.execute("SELECT id, agent, symbol FROM decisions")
-            if r["id"] in newest.values()
-        }
-    assert len(rows) == len(newest) == 6  # 3 depots x 2 markets
-    assert {(d.agent, d.market) for d in rows} == {
-        (a, m) for a in AGENTS for m in ("BTC-EUR", "ETH-EUR")
-    }
-    assert ids == newest
+        everything = con.execute("SELECT * FROM decisions ORDER BY id").fetchall()
+    newest = {}
+    for r in everything:
+        if r["action"] != "HOLD":
+            newest[(r["agent"], overview.market_label(r["symbol"]))] = r["ts"], r["action"]
+    assert {(d.agent, d.market): (d.ts, d.action) for d in rows} == newest
+    assert len(rows) == len(newest) > 0
     gpt = next(d for d in rows if d.agent == "gpt-luna")
     assert (gpt.action, gpt.target, gpt.status) == ("BUY", 0.25, "OK")
     assert gpt.reason == "Trend und Momentum stimmen überein"

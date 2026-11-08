@@ -1,6 +1,6 @@
 # ADR-0024: Weboberfläche öffentlich per HTTPS hinter Caddy; App bleibt auf 127.0.0.1
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0028](0028-uebersicht-ohne-login.md)
 - **Löst ab:** [ADR-0005](0005-betrieb-hetzner-cloud.md)
 - **Datum:** 2026-11-07
 - **Bereich:** #betrieb #web #sicherheit

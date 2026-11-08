@@ -11,7 +11,7 @@ from html import escape
 from llm_trading_bot.llm.agents import LLM_DEFAULTS, MAX_OUTPUT_TOKENS, MODEL_PRICES
 from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.web import chart
-from llm_trading_bot.web.credentials import AGENT_CHOICES, mask
+from llm_trading_bot.web.credentials import AGENT_CHOICES, PUBLIC_OVERVIEW_FIELD, mask
 from llm_trading_bot.web.style import CSS, TICKER_SECONDS
 
 __all__ = [
@@ -134,17 +134,22 @@ def _page(
     ticker: Sequence[tuple[str, str]] = TICKER,
     now: float | None = None,
     script: bool = False,
+    login: bool = False,
+    backdrop: bool = True,
 ) -> str:
     """``ticker``: (label, value) pairs for the strip under the header. ``now`` (wall clock) lets
     a reloading page continue the strip where the last load left it. ``script`` loads /app.js
-    (ADR-0019); the meta refresh then only works as a fallback without scripts."""
-    logout = (
-        '<form method="post" action="/logout">'
-        f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
-        '<button class="quiet" type="submit">Abmelden</button></form>'
-        if csrf
-        else ""
-    )
+    (ADR-0019); the meta refresh then only works as a fallback without scripts. ``login``: the
+    overview without a session (ADR-0028) links to the login instead of offering a logout.
+    ``backdrop`` False: an update request of /app.js, which keeps the backdrop it has."""
+    if csrf:
+        logout = (
+            '<form method="post" action="/logout">'
+            f'<input type="hidden" name="csrf" value="{escape(csrf)}">'
+            '<button class="quiet" type="submit">Abmelden</button></form>'
+        )
+    else:
+        logout = '<a class="quiet" href="/login">Anmelden</a>' if login else ""
     items = "".join(f"<span><b>{escape(head)}</b>{escape(text)}</span>" for head, text in ticker)
     phase = "" if now is None else f" tp-{int(now) % TICKER_SECONDS}"
     # Tabs only after login: before it, every route leads to login or setup anyway.
@@ -160,6 +165,10 @@ def _page(
         else ""
     )
     reload = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
+    # ADR-0028: the overview without login names no files. /app.js compares the views: an owner
+    # page that gets the view without login back has lost its session -> to the login.
+    view = "" if not script else ' data-view="owner"' if csrf else ' data-view="public"'
+    files = "" if login else "<span>Zugangsdaten in secrets.env (600)</span>"
     if script:
         # ADR-0019: our own file only - the CSP allows no inline script. Without scripts the
         # page still reloads itself.
@@ -174,7 +183,7 @@ def _page(
         + f"<title>{escape(title)} · LLM Trading Bot</title>"
         '<link rel="stylesheet" href="/app.css"></head>'
         + ('<body class="live">' if refresh else "<body>")
-        + BACKDROP
+        + (BACKDROP if backdrop else "")
         + f'<header><a class="brand" href="/">{LOGO}<div><p class="brand-name">LLM '
         '<span>Trading</span> Bot</p><div class="brand-sub">Paper-Terminal · BTC/EUR · ETH/EUR'
         f"</div></div></a>{tabs}"
@@ -183,12 +192,12 @@ def _page(
         f'<span class="chip net">127.0.0.1</span>{logout}</div></header>'
         # The track holds the items twice so the loop has no visible seam.
         f'<div class="ticker" aria-hidden="true"><div class="ticker-track{phase}">'
-        f"{items}{items}</div></div><main>{body}</main>"
+        f"{items}{items}</div></div><main{view}>{body}</main>"
         "<footer><span>Paper-Modus · kein Echtgeld (ADR-0004)</span>"
-        "<span>App nur auf 127.0.0.1 · von außen per HTTPS oder SSH-Tunnel (ADR-0024)</span>"
-        "<span>Zugangsdaten in secrets.env (600)</span>"
+        "<span>App nur auf 127.0.0.1 · von außen per HTTPS oder SSH-Tunnel (ADR-0028)</span>"
+        + files
         # Spec 014: on every page, also before login - a public site has to name its operator.
-        '<nav class="legal-links" aria-label="Rechtliches"><a href="/impressum">Impressum</a>'
+        + '<nav class="legal-links" aria-label="Rechtliches"><a href="/impressum">Impressum</a>'
         '<a href="/datenschutz">Datenschutz</a></nav></footer></body></html>'
     )
 
@@ -449,6 +458,15 @@ def trading_note(t: Trading) -> str:
     return ""
 
 
+def public_trading_note(t: Trading) -> str:
+    """The pause for the overview without login (ADR-0028): what happens, not where it is set."""
+    if t.applied_pause:
+        return "Handel pausiert – nur der Risikostopp verkauft noch"
+    if t.requested_pause:
+        return "Pause angefordert, greift in der nächsten Runde"
+    return ""
+
+
 def _when(ts: str | None) -> str:
     return "–" if ts is None else datetime.fromisoformat(ts).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -630,5 +648,31 @@ def settings_page(
         '<p class="hint">Für die Anmeldung aus dem Internet braucht es mindestens 12 Zeichen, '
         "die nicht leicht zu erraten sind. Andere Sitzungen werden danach abgemeldet.</p>"
         '<button type="submit">Passwort ändern</button></form></section>'
+        + _public_panel(values, hidden)
     )
     return _page("Einstellungen", body, csrf=csrf, active="/settings")
+
+
+def public_overview_on(values: Mapping[str, str]) -> bool:
+    """ADR-0028: on unless switched off; any other stored value counts as off (fail closed)."""
+    return values.get(PUBLIC_OVERVIEW_FIELD, "1") == "1"
+
+
+def _public_panel(values: Mapping[str, str], hidden: str) -> str:
+    on = public_overview_on(values)
+    want, label = ("0", "Nur mit Login") if on else ("1", "Ohne Login zeigen")
+    return (
+        '<section class="panel">'
+        + _head("07", "Übersicht ohne Login", "warm")
+        + f'<div class="keystate{"" if on else " off"}"><i class="led"></i>'
+        + ("Die Übersicht ist ohne Login lesbar." if on else "Die Übersicht verlangt den Login.")
+        + "</div>"
+        '<p class="hint">Ohne Login nur lesend: Depots, Equity, Signale, Trades, Lebenszeichen, '
+        "GPT-Kosten – ohne Fehlertexte. Einstellungen, Pause und Freigaben bleiben immer hinter "
+        "dem Login. Suchmaschinen werden gebeten, die Seite nicht aufzunehmen.</p>"
+        '<form method="post" action="/settings/public" class="inline">'
+        + hidden
+        + f'<input type="hidden" name="public" value="{want}">'
+        + f'<button type="submit"{' class="alt"' if on else ""}>{label}</button></form>'
+        "</section>"
+    )
