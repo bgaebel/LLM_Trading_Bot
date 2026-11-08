@@ -3,7 +3,9 @@
 One document model renders to Markdown and to a standalone HTML page, so both files always say
 the same. The text is German and written for a reader without statistics training: every number
 that has a band shows it, every pooled number shows its case count, and the sample-size label
-(``kein Urteil`` / ``indikativ`` / ``belastbar``) comes from ``metrics.verdict``.
+(``kein Urteil`` / ``indikativ`` / ``belastbar``) comes from ``metrics.verdict``. Every
+``metrics.DataIssue`` text is listed under "Datenqualität", and every benchmark, excess or band
+that misses days carries a "nur über n von m Tagen" marker where it is shown.
 
 What the report deliberately never does:
 
@@ -63,7 +65,12 @@ from llm_trading_bot.lab.register import (
     check_register_schema,
     code_state,
 )
-from llm_trading_bot.lab.spread import DEFAULT_SPREAD, FLOOR, QuarterSpreads
+from llm_trading_bot.lab.spread import (
+    DEFAULT_SPREAD,
+    FLOOR,
+    QuarterSpreads,
+    stored_quarter_spreads,
+)
 from llm_trading_bot.lab.spread import METHOD as SPREAD_METHOD
 from llm_trading_bot.paper.db import SchemaError
 from llm_trading_bot.paper.execution import BUYHOLD
@@ -485,7 +492,7 @@ def build_report(
     _costs(doc, kinds, summaries, base, base_rows, spread_sources or {})
     _cells(doc, base)
     _uncertainty(doc, base)
-    _quality(doc, base)
+    _quality(doc, kinds, base, summaries)
     _diagnosis(doc, kinds, visible, base_rows, draws)
     _fidelity(doc, fidelity)
     _assumptions(doc)
@@ -545,8 +552,8 @@ def _summary(
             beats.append(agent)
         items.append(
             f"{agent}: Übertrendite gegenüber Buy & Hold gleicher Quote {band_pct(u.excess)} "
-            f"pro Jahr, mit Zufall vereinbar: {chance(u.excess)}; {count(n)} Round-Trips, "
-            f"Einstufung: {base.labels[agent]}."
+            f"pro Jahr, mit Zufall vereinbar: {chance(u.excess)}{_band_days(u)}; "
+            f"{count(n)} Round-Trips, Einstufung: {base.labels[agent]}."
         )
     if beats:
         items.append(
@@ -581,6 +588,30 @@ def _summary(
         "bis 300 ist es nur indikativ.",
         "note",
     )
+
+
+DATA_QUALITY = "Datenqualität"
+"""Section the gap markers point to; every ``DataIssue`` text is listed there."""
+
+
+def _band_days(u: Uncertainty) -> str:
+    """Marker for a band that lost days to data gaps; empty when it covers every graded day."""
+    if not u.excluded_days:
+        return ""
+    total = u.days + u.excluded_days
+    return (
+        f" (Band nur über {count(u.days)} von {count(total)} Tagen, Datenlücken siehe "
+        f"„{DATA_QUALITY}“)"
+    )
+
+
+def _benchmark_days(d: DepotMetrics, quarters: Mapping[str, Quarter]) -> str:
+    """Marker for a quarter whose benchmark (and so excess) misses days the net return has."""
+    if d.benchmark_complete:
+        return ""
+    q = quarters.get(d.quarter)
+    total = len(metrics.quarter_days(q)) if q is not None else d.days
+    return f" (Benchmark nur über {count(d.benchmark_days)} von {count(total)} Tagen)"
 
 
 def _no_band_reason(graded: Sequence[QuarterResult], base: LabMetrics) -> str:
@@ -640,6 +671,7 @@ def _overall(doc: Doc, base: LabMetrics | None) -> None:
                 chance(u.excess if u else None),
                 band_num(u.sharpe if u else None),
                 count(u.days) if u else NOT_SHOWN,
+                count(u.excluded_days) if u else NOT_SHOWN,
                 count(base.round_trips[a]),
                 base.labels[a],
             ]
@@ -649,6 +681,15 @@ def _overall(doc: Doc, base: LabMetrics | None) -> None:
         "vergleicht mit Buy & Hold, das im Mittel genauso viel investiert war wie die Strategie, "
         "mit dessen Kosten; Bargeld bringt 0 %."
     )
+    short = [a for a in agents if (u := base.uncertainty.get(a)) and u.excluded_days]
+    if short:
+        doc.p(
+            "Nicht alle Tage der gewerteten Quartale stecken in den Bändern: "
+            + ", ".join(f"{depot_name(a)}{_band_days(base.uncertainty[a])}" for a in short)
+            + ". Fehlt einem Tag der Depotwert oder ein Tageskurs, bleibt er draußen, statt "
+            "eine Bewegung über mehrere Tage als einen Tag zu zählen.",
+            "warn",
+        )
     doc.table(
         [
             "Depot",
@@ -657,6 +698,7 @@ def _overall(doc: Doc, base: LabMetrics | None) -> None:
             "mit Zufall vereinbar",
             "Sharpe-Quote [Band]",
             "Tage",
+            f"ausgelassene Tage (siehe {DATA_QUALITY})",
             "Round-Trips",
             "Einstufung",
         ],
@@ -746,10 +788,16 @@ def _quarters(doc: Doc, base: LabMetrics | None, base_rows: Sequence[QuarterResu
     depot_rows: list[list[str]] = []
     depot_marked = []
     rank = {a: i for i, a in enumerate(_ordered(d.agent for d in base.depots))}
+    quarters = {r.quarter.label: r.quarter for r in base_rows}
+    partial = False
     # metrics lists depots alphabetically; the report keeps the bot's order within a quarter.
     for d in sorted(base.depots, key=lambda d: (_quarter_start(d.quarter), rank[d.agent])):
         if not d.graded:
             depot_marked.append(len(depot_rows))
+        # Benchmark and excess cover fewer days than the net return here; side by side they
+        # would read as like for like.
+        short = _benchmark_days(d, quarters)
+        partial = partial or bool(short)
         depot_rows.append(
             [
                 d.quarter,
@@ -757,8 +805,8 @@ def _quarters(doc: Doc, base: LabMetrics | None, base_rows: Sequence[QuarterResu
                 "ja" if d.graded else "nein",
                 pct(d.net_return_mid),
                 pct(d.net_return_liquidated),
-                pct(d.benchmark_cost),
-                pct(d.excess),
+                pct(d.benchmark_cost) + short,
+                pct(d.excess) + short,
                 pct(d.mean_quote, 1, sign=False),
                 count(d.round_trips),
                 pct(d.max_drawdown, 1, sign=False),
@@ -782,6 +830,14 @@ def _quarters(doc: Doc, base: LabMetrics | None, base_rows: Sequence[QuarterResu
         depot_rows,
         depot_marked,
     )
+    if partial:
+        doc.p(
+            "„Benchmark nur über n von m Tagen“: Für die übrigen Tage fehlt ein Depotwert oder "
+            "ein Tageskurs. Buy & Hold und Übertrendite decken dort weniger Tage ab als die "
+            "Nettorendite und sind nicht direkt vergleichbar; die Tage stehen unter "
+            f"„{DATA_QUALITY}“.",
+            "warn",
+        )
 
 
 def _costs(
@@ -845,7 +901,7 @@ def _costs(
                         pct(kinds.specs[name].roundtrip, 2, sign=False),
                         depot_name(a),
                         band_pct(u.mean_return if u else None),
-                        band_pct(u.excess if u else None),
+                        band_pct(u.excess if u else None) + (_band_days(u) if u else ""),
                         chance(u.excess if u else None),
                         count(s.round_trips[a]),
                         s.labels[a],
@@ -994,11 +1050,14 @@ def _uncertainty(doc: Doc, base: LabMetrics | None) -> None:
     if base is None:
         return
     doc.sub("Streuung über die Quartale")
-    rows = []
+    rows: list[list[str]] = []
+    marked: list[int] = []
     for a in _ordered(base.spreads):
         s = base.spreads[a]
         if s.net_return_mid.n == 0:
             continue
+        if s.incomplete:
+            marked.append(len(rows))
         rows.append(
             [
                 depot_name(a),
@@ -1010,6 +1069,7 @@ def _uncertainty(doc: Doc, base: LabMetrics | None) -> None:
                 pct(s.excess.mean),
                 pct(s.excess.stdev, sign=False),
                 f"{pct(s.excess.low)} bis {pct(s.excess.high)}",
+                _labels(s.incomplete) if s.incomplete else "keine",
             ]
         )
     doc.table(
@@ -1023,9 +1083,18 @@ def _uncertainty(doc: Doc, base: LabMetrics | None) -> None:
             "Übertrendite: Mittel",
             "Std.-Abw.",
             "Spanne",
+            "Übertrendite mit Benchmark nicht über alle Tage",
         ],
         rows,
+        marked,
     )
+    if marked:
+        doc.p(
+            "In den genannten Quartalen fehlen dem Benchmark Tage (Datenlücken, siehe "
+            f"„{DATA_QUALITY}“). Ihre Übertrendite ist in Mittel, Std.-Abw. und Spanne "
+            "enthalten, deckt aber weniger Tage ab als die Nettorendite.",
+            "warn",
+        )
 
 
 def _codes(row: QualityRow) -> str:
@@ -1065,18 +1134,51 @@ _QUALITY_HEADERS = [
 ]
 
 
-def _quality(doc: Doc, base: LabMetrics | None) -> None:
-    doc.section("Datenqualität", "datenqualitaet")
+def _quality(
+    doc: Doc, kinds: _Variants, base: LabMetrics | None, summaries: Mapping[str, LabMetrics]
+) -> None:
+    doc.section(DATA_QUALITY, "datenqualitaet")
     if base is None or not base.quality:
         doc.p("Keine Angaben.", "note")
-        return
+    else:
+        doc.p(
+            "Runden ohne Entscheidung je Markt, nach Fehlercode, und Stunden, in denen nur eine "
+            "Lücke in einem höheren Intervall den Markt sperrte (wie live: der Bot handelt nicht "
+            "auf lückenhaften Daten). Fällige Entscheidungen sind über die vier Strategien "
+            "summiert."
+        )
+        marked = [i for i, q in enumerate(base.quality) if q.eligible is False]
+        doc.table(_QUALITY_HEADERS, _quality_rows(base.quality), marked)
+    _data_issues(doc, kinds, summaries)
+
+
+def _data_issues(doc: Doc, kinds: _Variants, summaries: Mapping[str, LabMetrics]) -> None:
+    # metrics leaves every such day out instead of booking a several-day move as one day, and
+    # relies on the report to say so: unlisted, the bands would silently rest on fewer days.
+    doc.sub("Lücken in Depot- und Kursreihen")
     doc.p(
-        "Runden ohne Entscheidung je Markt, nach Fehlercode, und Stunden, in denen nur eine "
-        "Lücke in einem höheren Intervall den Markt sperrte (wie live: der Bot handelt nicht auf "
-        "lückenhaften Daten). Fällige Entscheidungen sind über die vier Strategien summiert."
+        "Tage ohne Depotwert, ohne Vortag oder ohne Tageskurs eines gehaltenen Markts zählen "
+        "weder für Buy & Hold gleicher Quote noch für die Bänder; Tage, die zwei Ergebnisse "
+        "zugleich tragen, bleiben ganz draußen. Jede solche Stelle steht hier."
     )
-    marked = [i for i, q in enumerate(base.quality) if q.eligible is False]
-    doc.table(_QUALITY_HEADERS, _quality_rows(base.quality), marked)
+    names = [n for n in ([kinds.base] if kinds.base else []) + kinds.grid if n in summaries]
+    found = False
+    for name in names:
+        issues = summaries[name].data_issues
+        if not issues:
+            continue
+        found = True
+        doc.p(f"Variante {name}: {count(len(issues))} Hinweis(e).")
+        doc.ul([i.text for i in issues])
+    if names and not found:
+        doc.p(
+            "Keine: Jeder Tag der Quartale hat einen Depotwert mit Vortag und die nötigen "
+            "Tageskurse."
+        )
+    elif not names:
+        doc.p("Keine Läufe mit Depotwerten.", "note")
+    if kinds.diagnostic:
+        doc.p("Lücken der Diagnose-Läufe stehen bei der jeweiligen Diagnose.", "note")
 
 
 def _labels(labels: Iterable[str]) -> str:
@@ -1162,7 +1264,7 @@ def _diagnosis_variant(
                 [
                     depot_name(a),
                     pct(ub.mean_return.estimate) if ub else NOT_SHOWN,
-                    band_pct(u.mean_return if u else None),
+                    band_pct(u.mean_return if u else None) + (_band_days(u) if u else ""),
                     pct(diff),
                     count(b.round_trips.get(a, 0)) if b else NOT_SHOWN,
                     count(s.round_trips[a]),
@@ -1179,6 +1281,9 @@ def _diagnosis_variant(
             ],
             rows,
         )
+        if s.data_issues:
+            doc.p(f"Lücken in den verglichenen Quartalen der Diagnose ({DATA_QUALITY}):")
+            doc.ul([i.text for i in s.data_issues])
     base_labels = {r.quarter.label for r in base_rows}
     shared = {r.quarter.label for r in diag_rows}
     if base_rows:
@@ -1520,24 +1625,26 @@ def newest_results(register: Register) -> tuple[dict[str, list[QuarterResult]], 
 
 
 def spread_sources_from_archive(path: Path) -> dict[tuple[str, str], SpreadSource]:
-    """Source of each stored quarter spread, read-only; empty without an archive."""
+    """Source of each stored quarter spread, read-only; empty without an archive.
+
+    Read through ``stored_quarter_spreads``, never from the ``spreads`` table itself: a row an
+    older sampler left for a partly sampled quarter is still in the table, and calling it a
+    sample would contradict the spread model, which treats that quarter as a default."""
     from llm_trading_bot.lab.archive import Archive, ArchiveError
 
     if not path.is_file():
         return {}
     try:
         with Archive.open_readonly(path) as archive:
-            rows = archive.db.execute(
-                "SELECT market, quarter, spread, samples FROM spreads WHERE method=?",
-                (SPREAD_METHOD,),
-            ).fetchall()
+            stored = stored_quarter_spreads(archive, method=SPREAD_METHOD)
     except ArchiveError:
         return {}
     return {
-        (str(q), str(m)): SpreadSource("sampled", float(s), int(n))
-        for m, q, s, n in rows
-        # The backtest never uses a sealed quarter's row either (ADR-0026).
-        if not Quarter.parse(str(q)).sealed
+        (quarter, market): SpreadSource("sampled", value, hours)
+        for (market, quarter), (value, hours) in stored.items()
+        # stored_quarter_spreads skips the sealed period already; kept as a second guard
+        # because a leak here would put a sealed number into the report (ADR-0026).
+        if not Quarter.parse(quarter).sealed
     }
 
 

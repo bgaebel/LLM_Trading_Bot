@@ -562,9 +562,11 @@ def test_gap_in_the_depot_series_is_flagged() -> None:
     b = benchmark(result({"trend": DepotResult("trend", points)}), "trend")
     # A cash depot needs no daily_mid; its own two-day step is still not a daily return.
     assert b.days == ["2022-01-01"]
-    (issue,) = b.issues
+    issue, hole = b.issues
     assert (issue.market, issue.missing_days) == (metrics.DEPOT_SERIES, ["2022-01-03"])
     assert "Depotwert ohne Vortag" in issue.text
+    # The skipped day itself is named too, not only the day after it.
+    assert (hole.kind, hole.missing_days) == (metrics.MISSING, ["2022-01-02"])
     # Day 1 is measured against the start capital, so it must be the quarter's first day.
     late = result({"trend": DepotResult("trend", points[:1])}, quarter=Quarter.parse("2022Q2"))
     outside, absent = benchmark(late, "trend").issues
@@ -679,14 +681,20 @@ def test_days_outside_the_quarter_are_never_graded() -> None:
     ]
     b = benchmark(result({"trend": DepotResult("trend", points)}, quarter=Q), "trend")
     assert b.days == []
-    outside, gap = b.issues
+    outside, gap, late = b.issues
     assert (outside.kind, outside.missing_days) == (metrics.OUTSIDE, ["2022-04-01"])
     assert outside.text == (
         "2022Q1 trend: Depotwert außerhalb des Quartals (2022-01-01 bis 2022-03-31) an 1 "
         "Tagen (2022-04-01); diese Tage werden nie gewertet"
     )
-    # The real problem is named too: the series starts late, so 03-31 has no predecessor.
+    # The real problem is named too: the series starts late, so 01-01 to 03-30 have no point
+    # and 03-31 has no predecessor (wave-3 D1: the 89 days used to go unnamed).
     assert (gap.kind, gap.missing_days) == (metrics.GAP, ["2022-03-31"])
+    assert (late.kind, late.missing_days) == (metrics.MISSING, metrics.quarter_days(Q)[:-1])
+    assert late.text == (
+        "2022Q1 trend: kein Depotwert an 89 von 90 Tagen (2022-01-01 bis 2022-03-30); "
+        "Benchmark und Unsicherheit ohne diese Tage"
+    )
 
     # A last point spilling into the sealed period never reaches the pooled days.
     q3 = Quarter.parse("2025Q3")
@@ -751,3 +759,66 @@ def test_quarter_spread_marks_incomplete_excess() -> None:
     spread = s.spreads["trend"]
     assert spread.excess.n == 2 and spread.incomplete == ["2022Q2"]
     assert summarize([q1], draws=10).spreads["trend"].incomplete == []
+
+
+# --- wave-3 review: every absent day is named, partial days count ----------------------------
+
+
+def _issue_days(issues: list[metrics.DataIssue]) -> int:
+    """Days an issue list takes out of the bootstrap (OUTSIDE labels are no quarter days)."""
+    return len({d for i in issues if i.kind != metrics.OUTSIDE for d in i.missing_days})
+
+
+def test_absent_days_at_start_and_inside_are_named_and_agree_with_excluded_days() -> None:
+    # Review probes (wave 3, D1): only days after the last point used to be MISSING, so a late
+    # start or a hole read as "1 von 90 Tagen" while the bootstrap lost 60 or 4 days.
+    late = _series(date(2022, 3, 1), 31)
+    hole = [*_series(date(2022, 1, 1), 1), *_series(date(2022, 1, 5), 86)]
+    spill = [DayPoint("2022-03-31", 1.0, 1.0, {}), DayPoint("2022-04-01", 1.0, 1.0, {})]
+    cases = [
+        (late, "2022-01-01 bis 2022-02-28", 59, 60),
+        (hole, "2022-01-02 bis 2022-01-04", 3, 4),
+        (spill, "2022-01-01 bis 2022-03-30", 89, 90),
+    ]
+    for points, blocks, absent, excluded in cases:
+        q = result({"trend": DepotResult("trend", points)}, quarter=Q)
+        m = depot_metrics(q, "trend")
+        assert not m.benchmark_complete
+        (missing,) = [i for i in m.data_issues if i.kind == metrics.MISSING]
+        assert len(missing.missing_days) == absent
+        assert f"an {absent} von 90 Tagen ({blocks})" in missing.text
+        s = summarize([q], draws=20)
+        unc = s.uncertainty.get("trend")
+        lost = unc.excluded_days if unc else 90
+        assert lost == excluded == _issue_days(s.data_issues)
+    # Holes at start, middle and end together, with an exposed market: still one count.
+    scattered = [p for p in _series(date(2022, 1, 1), 90, {BTC: 0.5}) if p.day[5:7] != "02"]
+    mids = _mids(date(2022, 1, 1), 90)
+    q = result({"trend": DepotResult("trend", scattered[2:-3])}, quarter=Q, daily_mid={BTC: mids})
+    s = summarize([q], draws=20)
+    (missing,) = [i for i in s.data_issues if i.kind == metrics.MISSING]
+    assert missing.missing_days[:2] == ["2022-01-01", "2022-01-02"]
+    assert missing.missing_days[-3:] == ["2022-03-29", "2022-03-30", "2022-03-31"]
+    assert "2022-02-01 bis 2022-02-28" in missing.text
+    # 33 absent days plus the GAP days 01-03 (late start) and 03-01 (after February).
+    assert s.uncertainty["trend"].excluded_days == _issue_days(s.data_issues) == 33 + 2
+
+
+def test_quarter_days_count_a_partial_last_day() -> None:
+    # Review probe (wave 3, D2): the partial last day was dropped and an 8-hour span had none,
+    # so every point of a short backtest read as outside the quarter.
+    start = Q.start + 86_400  # 2022-01-02 00:00 UTC
+    assert metrics.quarter_days(Quarter("x", start, start + 86_400 + 3_600)) == [
+        "2022-01-02",
+        "2022-01-03",
+    ]
+    short = Quarter("x", start, start + 8 * 3_600)
+    assert metrics.quarter_days(short) == ["2022-01-02"]
+    assert metrics.quarter_days(Quarter("x", start, start)) == []
+    # Midnight to midnight: the end day itself is not part of the span.
+    assert metrics.quarter_days(Quarter("x", start, start + 86_400)) == ["2022-01-02"]
+    assert len(metrics.quarter_days(Q)) == 90
+    # A short span's own day is not flagged as outside and has no absent days.
+    point = DayPoint("2022-01-02", 10_100.0, 10_100.0, {})
+    m = depot_metrics(result({"trend": DepotResult("trend", [point])}, quarter=short), "trend")
+    assert m.benchmark_complete and m.benchmark_days == 1 and m.data_issues == []

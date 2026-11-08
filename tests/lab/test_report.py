@@ -1,5 +1,6 @@
 """Spec 016 AK10: the base report (Markdown + standalone HTML), never overwritten."""
 
+import html
 import io
 import re
 import sqlite3
@@ -10,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from llm_trading_bot.lab import report
+from llm_trading_bot.lab import metrics, report
 from llm_trading_bot.lab.archive import Archive
 from llm_trading_bot.lab.model import (
     MARKETS,
@@ -34,7 +35,7 @@ from llm_trading_bot.lab.report import (
     round_trip_label,
     write_report,
 )
-from llm_trading_bot.lab.spread import DEFAULT_SPREAD
+from llm_trading_bot.lab.spread import DEFAULT_SPREAD, FLOOR, sample_hours
 from llm_trading_bot.lab.spread import METHOD as SPREAD_METHOD
 
 BTC = "BTC-EUR"
@@ -74,8 +75,12 @@ def result(
     error: str = "",
     drift: float = 0.0005,
     base_mid: bool = True,
+    fitted: bool = False,
 ) -> QuarterResult:
     q = Quarter.parse(label)
+    if fitted:
+        # Cut to the DAYS the depots carry, so the series covers the quarter: no data issue.
+        q = Quarter(q.label, q.start, q.start + DAYS * 86_400)
     base = [(_day(q.start - 86_400), 100.0)] if base_mid else []
     mids = {
         m: base
@@ -589,11 +594,12 @@ def test_spread_source_only_named_if_the_run_used_it() -> None:
 
 def test_spread_sources_from_archive_carry_the_value(tmp_path: Path) -> None:
     path = tmp_path / "candles.db"
+    q1 = Quarter.parse("2022Q1")
     with Archive(path) as archive:
-        archive.db.executemany(
-            "INSERT INTO spreads(market, quarter, method, spread, samples, computed_at) "
-            "VALUES (?, ?, ?, ?, ?, 0)",
-            [(BTC, "2022Q1", SPREAD_METHOD, 0.001, 26), (BTC, "2025Q4", SPREAD_METHOD, 0.002, 9)],
+        _insert_samples(archive, sample_hours(BTC, q1.start, q1.end))
+        _insert_spread_rows(
+            archive,
+            [(BTC, "2022Q1", 0.001, 26), (BTC, "2025Q4", 0.002, 9)],
         )
     sampled = report.spread_sources_from_archive(path)
     # The sealed quarter's row is never read into the report (ADR-0026).
@@ -633,3 +639,113 @@ def test_fidelity_needs_matching_indicators() -> None:
     (row,) = table_after(markdown, "## Treue zum Live-Bot")
     assert row[3:] == ["350 von 400", "Treue nicht belegt (Indikatoren weichen ab)"]
     assert "Treue nicht belegt (400 Vergleiche)" in section(markdown, "Kurzfazit")
+
+
+# --- wave-3 review: data issues reach the reader, spread rows go through the spread model ---
+
+
+def _insert_samples(archive: Archive, hours: list[int], median: float = 0.001) -> None:
+    archive.db.executemany(
+        "INSERT INTO spread_samples(market, method, hour, trades, pairs, median, fetched_at) "
+        "VALUES (?, ?, ?, 4, 3, ?, 1)",
+        [(BTC, SPREAD_METHOD, h, median) for h in hours],
+    )
+
+
+def _insert_spread_rows(archive: Archive, rows: list[tuple[str, str, float, int]]) -> None:
+    archive.db.executemany(
+        "INSERT INTO spreads(market, quarter, method, spread, samples, computed_at) "
+        "VALUES (?, ?, ?, ?, ?, 0)",
+        [(m, q, SPREAD_METHOD, s, n) for m, q, s, n in rows],
+    )
+
+
+OVERALL = "## Gesamt (gewertete Quartale zusammen)"
+
+
+def test_report_lists_every_data_issue() -> None:
+    # Review note: metrics flags every day left out of benchmark and bands, but the report
+    # showed none of them, so the bands silently rested on fewer days.
+    rows = [result("2022Q1", SMALL), result("2022Q2", SMALL)]
+    cheap = Variant(name="cost-0.3", fee_rate=0.001, slippage=0.0005)
+    grid = [result("2022Q1", SMALL, variant=cheap)]
+    gap = Variant(name="gap-tolerance", gap_window=3, diagnostic=True)
+    diag = [result("2022Q1", SMALL, variant=gap)]
+    markdown, html_text = build({"base": rows, "cost-0.3": grid, "gap-tolerance": diag})
+    quality = section(markdown, "Datenqualität")
+    base_issues = metrics.summarize(rows, draws=10).data_issues
+    grid_issues = metrics.summarize(grid, draws=10).data_issues
+    # Each depot carries 10 days of a 90- or 91-day quarter.
+    assert len(base_issues) == 10 and len(grid_issues) == 5
+    for issue in [*base_issues, *grid_issues]:
+        assert f"- {issue.text}" in quality
+        assert html.escape(issue.text) in html_text
+    assert "Variante base: 10 Hinweis(e)." in quality
+    assert "Variante cost-0.3: 5 Hinweis(e)." in quality
+    assert "Lücken der Diagnose-Läufe stehen bei der jeweiligen Diagnose" in quality
+    diagnosis = section(markdown, "Diagnose: Was kosten die Sperrzeiten?")
+    assert "Lücken in den verglichenen Quartalen der Diagnose" in diagnosis
+    for issue in metrics.summarize(diag, draws=10).data_issues:
+        assert f"- {issue.text}" in diagnosis
+    # A series that covers its quarter gives no issue, and the report says so.
+    clean, _ = build({"base": [result("2022Q1", SMALL, fitted=True)]})
+    assert "Keine: Jeder Tag der Quartale hat einen Depotwert" in section(clean, "Datenqualität")
+
+
+def test_partial_benchmark_is_marked_wherever_it_is_shown() -> None:
+    # Review note: benchmark_complete, excluded_days and QuarterSpread.incomplete never reached
+    # the reader, so an excess over 10 of 90 days read like one over the whole quarter.
+    cheap = Variant(name="cost-0.3", fee_rate=0.001, slippage=0.0005)
+    results = {
+        "base": [result("2022Q1", SMALL)],
+        "cost-0.3": [result("2022Q1", SMALL, variant=cheap)],
+    }
+    markdown, html_text = build(results)
+    marker = "(Benchmark nur über 10 von 90 Tagen)"
+    per_quarter = table_after(markdown, "### Ergebnis je Quartal und Depot")
+    assert len(per_quarter) == 5
+    assert all(r[5].endswith(marker) and r[6].endswith(marker) for r in per_quarter)
+    assert "„Benchmark nur über n von m Tagen“" in section(markdown, "Quartale")
+    overall = {r[0]: r for r in table_after(markdown, OVERALL)}
+    assert overall["trend"][5:7] == ["10", "80"]
+    band = "(Band nur über 10 von 90 Tagen, Datenlücken siehe „Datenqualität“)"
+    assert f"trend {band}" in section(markdown, OVERALL[3:])
+    summary = section(markdown, "Kurzfazit")
+    assert re.search(rf"trend: .* mit Zufall vereinbar: (ja|nein) {re.escape(band)};", summary)
+    grid = table_after(markdown, "### Kostenraster: Entscheidungen reagieren auf Kosten")
+    assert all(r[4].endswith(band) for r in grid)
+    spreads = table_after(markdown, "### Streuung über die Quartale")
+    assert spreads and all(r[-1] == "2022Q1" for r in spreads)
+    assert '<tr class="mark"><td>trend</td>' in html_text
+    # A complete series carries no marker anywhere.
+    clean, _ = build({"base": [result("2022Q1", SMALL, fitted=True)]})
+    assert "nur über" not in clean
+    assert {r[6] for r in table_after(clean, OVERALL)} == {"0"}
+    assert all(r[-1] == "keine" for r in table_after(clean, "### Streuung über die Quartale"))
+
+
+def test_spread_source_ignores_the_row_of_a_partly_sampled_quarter(tmp_path: Path) -> None:
+    # Review note (archive CHECK): a 1 bp row an older sampler left after one sampled hour of
+    # 2022Q3 was reported as "sampled", while the backtest's spread model calls it a default.
+    path = tmp_path / "candles.db"
+    q3 = Quarter.parse("2022Q3")
+    planned = sample_hours(BTC, q3.start, q3.end)
+    with Archive(path) as archive:
+        _insert_samples(archive, planned[:1], FLOOR)
+        _insert_spread_rows(archive, [(BTC, "2022Q3", FLOOR, 1)])
+    before = path.read_bytes()
+    assert report.spread_sources_from_archive(path) == {}
+    assert path.read_bytes() == before  # read-only
+    run = result("2022Q3", SMALL)
+    run.spread[BTC] = DEFAULT_SPREAD[BTC]  # what the backtest takes for that quarter
+    sources = report._with_defaults(report.spread_sources_from_archive(path), {"base": [run]}, True)
+    assert sources[("2022Q3", BTC)] == SpreadSource("default", DEFAULT_SPREAD[BTC])
+    markdown, _ = build({"base": [run]}, spread_sources=sources)
+    (btc, _eth) = table_after(markdown, "### Spread-Annahmen je Quartal")
+    assert btc[3] == "vorsichtiger Standardwert"
+    # Once every planned hour is stored, the same row is the quarter's sample.
+    with Archive(path) as archive:
+        _insert_samples(archive, planned[1:])
+    assert report.spread_sources_from_archive(path) == {
+        ("2022Q3", BTC): SpreadSource("sampled", FLOOR, 1)
+    }
