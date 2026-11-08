@@ -24,7 +24,16 @@ from llm_trading_bot.market.snapshot import (
     MarketSnapshot,
     build_snapshots,
 )
-from llm_trading_bot.ops.backup import KEEP, BackupError, backup_db, restore_db, verify_db
+from llm_trading_bot.ops.backup import (
+    BOT,
+    KEEP,
+    PROFILES,
+    BackupError,
+    Profile,
+    backup_db,
+    restore_db,
+    verify_db,
+)
 from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME, paper_cycle
 from llm_trading_bot.paper.db import SchemaError, open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
@@ -313,10 +322,25 @@ def run_service(
     return service.run()
 
 
-def run_backup(db: Path, directory: Path, *, keep: int, out: TextIO) -> int:
-    """Spec 009 AK1: one checked copy; the service keeps running (read-only, no WriterLock)."""
+def run_backup(
+    db: Path,
+    directory: Path,
+    *,
+    keep: int,
+    out: TextIO,
+    profile: Profile = BOT,
+    if_exists: bool = False,
+) -> int:
+    """Spec 009 AK1: one checked copy; the service keeps running (read-only, no WriterLock).
+
+    ``if_exists`` (Spec 015 AK6): a database that is not there yet - observations.db before the
+    first round of a release from Spec 015 on - is skipped with a line, not a failure.
+    """
+    if if_exists and not db.exists():
+        print(f"backup skipped: no database at {db} yet", file=out)
+        return EXIT_OK
     try:
-        done = backup_db(db, directory, keep=keep)
+        done = backup_db(db, directory, keep=keep, profile=profile)
     except BackupError as exc:
         print(f"backup failed: {exc}", file=out)
         return EXIT_INVALID
@@ -324,9 +348,9 @@ def run_backup(db: Path, directory: Path, *, keep: int, out: TextIO) -> int:
     return EXIT_OK
 
 
-def run_verify_db(db: Path, *, out: TextIO) -> int:
+def run_verify_db(db: Path, *, out: TextIO, profile: Profile = BOT) -> int:
     try:
-        checked = verify_db(db)
+        checked = verify_db(db, profile)
     except BackupError as exc:
         print(f"verify failed: {exc}", file=out)
         return EXIT_INVALID
@@ -334,9 +358,9 @@ def run_verify_db(db: Path, *, out: TextIO) -> int:
     return EXIT_OK
 
 
-def run_restore(backup: Path, db: Path, *, out: TextIO) -> int:
+def run_restore(backup: Path, db: Path, *, out: TextIO, profile: Profile = BOT) -> int:
     try:
-        restored = restore_db(backup, db)
+        restored = restore_db(backup, db, profile)
     except BackupError as exc:
         print(f"restore refused: {exc}", file=out)
         return EXIT_INVALID
@@ -371,11 +395,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     backup.add_argument("--db", type=Path, required=True, help="database to copy (read only)")
     backup.add_argument("--dir", type=Path, required=True, help="directory of the copies")
     backup.add_argument("--keep", type=int, default=KEEP, help=f"copies kept (default {KEEP})")
+    backup.add_argument(
+        "--if-exists", action="store_true", help="skip (exit 0) when --db does not exist yet"
+    )
     verify = commands.add_parser("verify-db", help="read-only check of a database or backup")
     verify.add_argument("--db", type=Path, required=True)
     restore = commands.add_parser("restore", help="checked copy of a backup to a new path")
     restore.add_argument("--backup", type=Path, required=True)
     restore.add_argument("--db", type=Path, required=True, help="new path; must not exist")
+    # Spec 015 AK6: bot.db (the default, what older units call) or observations.db (ADR-0027).
+    for sub in (backup, verify, restore):
+        sub.add_argument(
+            "--profile",
+            choices=tuple(PROFILES),
+            default=BOT.prefix,
+            help="kind of database: schema, file names (default bot)",
+        )
     web = commands.add_parser("web", help="local web UI: overview and credentials (127.0.0.1 only)")
     web.add_argument("--data-dir", type=Path, required=True, help="where secrets.env is kept")
     web.add_argument(
@@ -421,11 +456,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.keep < 1:
             print("backup refused: --keep must be at least 1")
             return EXIT_INVALID
-        return run_backup(args.db, args.dir, keep=args.keep, out=sys.stdout)
+        return run_backup(
+            args.db,
+            args.dir,
+            keep=args.keep,
+            out=sys.stdout,
+            profile=PROFILES[args.profile],
+            if_exists=args.if_exists,
+        )
     if args.command == "verify-db":
-        return run_verify_db(args.db, out=sys.stdout)
+        return run_verify_db(args.db, out=sys.stdout, profile=PROFILES[args.profile])
     if args.command == "restore":
-        return run_restore(args.backup, args.db, out=sys.stdout)
+        return run_restore(args.backup, args.db, out=sys.stdout, profile=PROFILES[args.profile])
     if args.command == "web":
         try:
             serve(

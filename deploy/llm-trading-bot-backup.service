@@ -4,7 +4,7 @@
 # Installed by deploy/release.sh: replaces __SERVICE_USER__, __APP_DIR__, __DATA_DIR__ and
 # __BACKUP_DIR__. Real user names never go into this file: the repo is public.
 [Unit]
-Description=LLM Trading Bot - checked copy of the database
+Description=LLM Trading Bot - checked copies of the databases
 After=local-fs.target
 # Before the first round (web UI only, Spec 009) there is nothing to copy: skip, do not fail.
 ConditionPathExists=__DATA_DIR__/bot.db
@@ -15,6 +15,10 @@ User=__SERVICE_USER__
 WorkingDirectory=__DATA_DIR__
 Environment=PYTHONUNBUFFERED=1
 ExecStart=__APP_DIR__/.venv/bin/trading-bot backup --db __DATA_DIR__/bot.db --dir __BACKUP_DIR__/daily --keep 14
+# Spec 015 AK6 (ADR-0027): observations.db in its own invocation, only after the trade history is
+# safe. "-": its failure is logged but never fails this unit; a missing file (no 015 round yet) is
+# skipped with a line. deploy/release.sh recognises a release from 015 on by "--profile observations".
+ExecStart=-__APP_DIR__/.venv/bin/trading-bot backup --profile observations --if-exists --db __DATA_DIR__/observations.db --dir __BACKUP_DIR__/observations/daily --keep 14
 Nice=10
 IOSchedulingClass=idle
 TimeoutStartSec=30min
