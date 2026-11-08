@@ -10,6 +10,8 @@ Explicit approximation: live, the forming bar is in the response only if it alre
 when the request arrived (about 5 s into the bar); the archive cannot tell, so a forming bar
 with a row always counts. The window then starts one row later than live would have. Its effect
 on the indicators is tiny and tested (``test_window_499_and_500_within_tolerance``).
+Where the live answer is known (the forming flag recorded per window, Spec 015), the fidelity
+check passes it as ``forming_hint`` and the window is rebuilt exactly.
 
 Never a value from the future: candles come only from rows that had closed at the clock, and the
 quote mid is the close of the last minute that had ended at the clock.
@@ -36,6 +38,10 @@ from llm_trading_bot.market.models import (
     Symbol,
 )
 from llm_trading_bot.market.snapshot import INTERVALS
+
+FormingHint = Callable[[Symbol, int, int], bool | None]
+"""``(symbol, interval, now_epoch)`` -> whether the live answer held the forming bar: True as
+the default approximation, False drops the archive's row for it, None means unknown."""
 
 CandleRow = Sequence[object]
 """One candle row as Bitvavo sends it: ``[ts_ms, open, high, low, close, volume]``, the prices
@@ -120,6 +126,8 @@ class HistoricalClient:
     Every series of ``markets`` and ``intervals`` is loaded once for ``[start, end)``. A window
     is complete only if ``CANDLE_LIMIT`` rows lie between ``start`` and the clock; the caller
     checks that (``rows_before``). ``quotes`` may be overridden, e.g. with a frozen live book.
+    ``forming_hint`` (optional, the fidelity check) says per request whether the live answer
+    held the forming bar; without it, or where it returns None, the approximation above holds.
     """
 
     def __init__(
@@ -133,6 +141,7 @@ class HistoricalClient:
         markets: Sequence[Symbol] = SYMBOLS,
         intervals: Sequence[int] = INTERVALS,
         quotes: Callable[[], QuoteBook] | None = None,
+        forming_hint: FormingHint | None = None,
     ) -> None:
         if start >= end:
             raise ValueError(f"empty preload range {start}..{end}")
@@ -141,6 +150,7 @@ class HistoricalClient:
         self._start = start
         self._end = end
         self._override = quotes
+        self._forming_hint = forming_hint
         self._markets = tuple(markets)
         self._series: dict[tuple[Symbol, int], _Series] = {}
         # The quotes need the 1m series even when the candles of 1m are not asked for.
@@ -169,6 +179,14 @@ class HistoricalClient:
         # What the live request returns: the newest rows that exist at the clock, i.e. opened
         # at or before it (the forming bar included when it has a row).
         hi = bisect_right(series.ts, now_epoch)
+        hint = (
+            None if self._forming_hint is None else self._forming_hint(symbol, interval, now_epoch)
+        )
+        if hint is False:
+            # Live had no trade in the forming bar yet, so its row was not in the answer and the
+            # window reaches one closed bar further back (the fidelity check knows this from
+            # the recorded forming flag, Spec 015).
+            hi = bisect_right(series.ts, now_epoch - step, 0, hi)
         lo = max(0, hi - CANDLE_LIMIT)
         # The live filter (bitvavo.py): a bar is closed when open + step <= now.
         closed = bisect_right(series.ts, now_epoch - step, lo, hi)
