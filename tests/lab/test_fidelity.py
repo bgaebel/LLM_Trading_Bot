@@ -389,6 +389,35 @@ def test_stale_quote_compared_with_fail_closed_hold(copy: Live, few: None) -> No
     assert s.established["BTC-EUR"] is False
 
 
+def test_stale_quote_expects_hold_whatever_the_signal(copy: Live, few: None) -> None:
+    """The fail-closed HOLD/0 is what the check expects even where the rebuilt signal says BUY:
+    a STALE_QUOTE row that kept the raw signal is a regression, the stored HOLD/0 is not."""
+    row_id, _ = classic_row(copy.bot, agent="breakout", round_at=ROUNDS[3])
+    con = sqlite3.connect(copy.bot)
+    try:
+        signal = con.execute(
+            "SELECT action, target FROM decisions WHERE id=?", (row_id,)
+        ).fetchone()
+    finally:
+        con.close()
+    assert signal == ("BUY", 0.45), "the row must carry a signal other than HOLD/0"
+    edit(
+        copy.bot,
+        "UPDATE decisions SET status='STALE_QUOTE', action='HOLD', target=0 WHERE id=?",
+        row_id,
+    )
+    s = checked(copy, obs=True)
+    assert failing(s) == []
+    assert s.equal_action == s.compared
+    # The raw signal stored under STALE_QUOTE: listed, although the rebuild gives the same BUY.
+    edit(copy.bot, "UPDATE decisions SET action='BUY', target=0.45 WHERE id=?", row_id)
+    s = checked(copy, obs=True)
+    got = {(d["agent"], d["field"], d["live"], d["rebuilt"], d["cause"]) for d in failing(s)}
+    assert got == {("breakout", "action", "BUY", "HOLD", ""), ("breakout", "target", 0.45, 0.0, "")}
+    assert s.equal_action["BTC-EUR"] == s.compared["BTC-EUR"] - 1
+    assert s.established["BTC-EUR"] is False
+
+
 def test_classic_decision_without_utc_is_listed(copy: Live) -> None:
     """Only buy & hold has no snapshot behind its decision; a classic row without ``utc`` is
     listed as unreadable, never dropped silently."""
@@ -413,6 +442,31 @@ def test_classic_decision_without_utc_is_listed(copy: Live) -> None:
     assert sum(s.compared.values()) == sum(before.compared.values()) - 2
     assert "2 Snapshots übersprungen" in s.note and "2 davon mit nicht lesbaren Eingaben" in s.note
     assert "Übersprungen: 2" in summary_text(s)
+
+
+def test_decision_neither_classic_nor_gpt_is_listed(copy: Live) -> None:
+    """A decision row of an agent the check does not know as classic and without GPT
+    provenance (``_llm``) has no snapshot to find: it is listed as unreadable, never dropped."""
+    before = checked(copy, obs=False)
+    assert not [d for d in before.deviations if d["kind"] == "skipped"]
+    con = sqlite3.connect(copy.bot)
+    try:
+        row_id, text = con.execute(
+            "SELECT id, inputs FROM decisions WHERE agent='gpt-luna' ORDER BY id LIMIT 1"
+        ).fetchone()
+    finally:
+        con.close()
+    inputs = json.loads(text)
+    del inputs["_llm"]
+    edit(copy.bot, "UPDATE decisions SET inputs=? WHERE id=?", json.dumps(inputs), row_id)
+    s = checked(copy, obs=False)
+    skipped = [d for d in s.deviations if d["kind"] == "skipped"]
+    assert [(d["agent"], d["cause"]) for d in skipped] == [("gpt-luna", UNREADABLE)]
+    assert "_llm" in skipped[0]["rebuilt"]
+    # Its call row still carries the snapshot: nothing else is lost, nothing else fails.
+    assert s.compared == before.compared
+    assert "1 Snapshots übersprungen" in s.note
+    assert "Übersprungen: 1" in summary_text(s)
 
 
 def test_rounding_step_allowed(copy: Live, few: None) -> None:
