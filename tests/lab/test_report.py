@@ -2,13 +2,16 @@
 
 import io
 import re
+import sqlite3
 import time
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from llm_trading_bot.lab import report
+from llm_trading_bot.lab.archive import Archive
 from llm_trading_bot.lab.model import (
     MARKETS,
     DayPoint,
@@ -31,6 +34,8 @@ from llm_trading_bot.lab.report import (
     round_trip_label,
     write_report,
 )
+from llm_trading_bot.lab.spread import DEFAULT_SPREAD
+from llm_trading_bot.lab.spread import METHOD as SPREAD_METHOD
 
 BTC = "BTC-EUR"
 DAYS = 10
@@ -68,10 +73,12 @@ def result(
     status: str = "ok",
     error: str = "",
     drift: float = 0.0005,
+    base_mid: bool = True,
 ) -> QuarterResult:
     q = Quarter.parse(label)
+    base = [(_day(q.start - 86_400), 100.0)] if base_mid else []
     mids = {
-        m: [(_day(q.start - 86_400), 100.0)]
+        m: base
         + [(_day(q.start + i * 86_400), 100.0 * (1 + 0.01 * (i % 4 - 1.5))) for i in range(DAYS)]
         for m in MARKETS
     }
@@ -102,6 +109,12 @@ def result(
 
 
 SMALL = {"trend": 3, "breakout": 2, "meanrev": 1, "ensemble": 4, "buyhold": 0}
+
+
+def recordable(label: str, trips: Mapping[str, int], **kwargs: Any) -> QuarterResult:
+    """A result the register accepts: its day check refuses the benchmark's base entry labelled
+    the day before the quarter, and these tests only need the recording, not day 1's benchmark."""
+    return result(label, trips, base_mid=False, **kwargs)
 
 
 def build(
@@ -181,7 +194,7 @@ def test_labels_by_round_trips() -> None:
 
 def test_never_overwrites(tmp_path: Path) -> None:
     with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=CODE) as reg:
-        reg.record(result("2022Q1", SMALL))
+        reg.record(recordable("2022Q1", SMALL))
         first = write_report(
             tmp_path, "run-1", "# eins\n", "<p>eins</p>\n", register=reg, fidelity_json="{}"
         )
@@ -193,7 +206,7 @@ def test_never_overwrites(tmp_path: Path) -> None:
             "report.md",
         ]
         assert (first.directory / CHAIN_FILE).read_bytes() == (tmp_path / CHAIN_FILE).read_bytes()
-        reg.record(result("2022Q2", SMALL))
+        reg.record(recordable("2022Q2", SMALL))
 
         # The same run id again: refused, nothing in the old report changes.
         with pytest.raises(ReportExists):
@@ -312,8 +325,8 @@ def test_costs_grid_and_diagnosis() -> None:
         "gap-tolerance": [result("2022Q1", SMALL, variant=gap, drift=0.0006)],
     }
     sources = {
-        ("2022Q1", BTC): SpreadSource("sampled", 26),
-        ("2022Q1", "ETH-EUR"): SpreadSource("default"),
+        ("2022Q1", BTC): SpreadSource("sampled", 0.001, 26),
+        ("2022Q1", "ETH-EUR"): SpreadSource("default", 0.0015),
     }
     markdown, _ = build(results, spread_sources=sources, trial_count=3, config_count=3)
     costs = section(markdown, "Kosten")
@@ -359,22 +372,22 @@ def test_number_format_is_german() -> None:
 
 def test_newest_result_per_quarter_and_variant(tmp_path: Path) -> None:
     with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=CODE) as reg:
-        reg.record(result("2022Q1", SMALL, drift=0.001))
-        reg.record(result("2022Q1", SMALL, drift=0.002))
-        reg.record(result("2022Q2", SMALL))
-        reg.record(result("2025Q4", SMALL, status="sealed"))
+        reg.record(recordable("2022Q1", SMALL, drift=0.001))
+        reg.record(recordable("2022Q1", SMALL, drift=0.002))
+        reg.record(recordable("2022Q2", SMALL))
+        reg.record(recordable("2025Q4", SMALL, status="sealed"))
         results, used = newest_results(reg)
     assert list(results) == ["base"]
     assert [r.quarter.label for r in results["base"]] == ["2022Q1", "2022Q2"]
     # trend's first day falls by twice its drift: 0.2 % for the older run, 0.4 % for the newer.
     assert results["base"][0].depots["trend"].days[0].value == pytest.approx(9_960)
-    assert [u.run_id for u in used] == [2, 3]
+    assert [u.row.run_id for u in used] == [2, 3]
 
 
 def test_cli_writes_report_from_register(tmp_path: Path) -> None:
     with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=CODE) as reg:
-        reg.record(result("2022Q1", SMALL))
-        reg.record(result("2022Q2", SMALL))
+        reg.record(recordable("2022Q1", SMALL))
+        reg.record(recordable("2022Q2", SMALL))
     fidelity = tmp_path / "fid.json"
     fidelity.write_text(FidelitySummary(compared={BTC: 5}, equal_action={BTC: 5}).to_json())
     out = io.StringIO()
@@ -400,10 +413,222 @@ def test_cli_refuses_without_register(tmp_path: Path) -> None:
 
 def test_cli_refuses_broken_chain(tmp_path: Path) -> None:
     with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=CODE) as reg:
-        reg.record(result("2022Q1", SMALL))
+        reg.record(recordable("2022Q1", SMALL))
     chain = tmp_path / CHAIN_FILE
     chain.write_text(chain.read_text(encoding="utf-8").replace('"graded":true', '"graded":false'))
     out = io.StringIO()
     assert cli_main("report", ["--dir", str(tmp_path)], out) == 1
     assert "Kette fehlerhaft" in out.getvalue()
     assert not (tmp_path / REPORTS_DIR).exists()
+
+
+# --- review findings (Spec 016 report check) -----------------------------------------------
+
+
+def test_summary_without_any_band_gives_no_verdict() -> None:
+    # Nothing graded: nothing was tested, so no "no strategy beats buy & hold" either.
+    markdown, _ = build({"base": [result("2021Q1", SMALL), result("2021Q2", SMALL, share=0.5)]})
+    summary = section(markdown, "Kurzfazit")
+    assert "Gewertet sind 0 von 2 Quartalen (keines)" in summary
+    assert "Keine Strategie" not in summary
+    assert "Kein Urteil möglich: Kein Quartal ist gewertet, es wurde also nichts geprüft." in (
+        summary
+    )
+    # With bands the tested negative result stays.
+    markdown, _ = build({"base": [result("2022Q1", SMALL)]})
+    summary = section(markdown, "Kurzfazit")
+    assert "Kein Urteil möglich" not in summary
+    assert "Keine Strategie schlägt Buy & Hold gleicher Quote nachweisbar" in summary
+
+
+def test_diagnosis_compares_only_quarters_graded_in_both() -> None:
+    gap = Variant(name="gap-tolerance", gap_window=3, diagnostic=True)
+    trips = {"trend": 3, "buyhold": 0}
+    results = {
+        # The base run leaves 2022Q1 out (85 %); the wider gap tolerance grades it.
+        "base": [result("2022Q1", trips, share=0.85), result("2022Q2", trips)],
+        "gap-tolerance": [
+            result("2022Q1", trips, variant=gap, drift=0.0006),
+            result("2022Q2", trips, variant=gap, drift=0.0006),
+        ],
+    }
+    markdown, _ = build(results)
+    diagnosis = section(markdown, "Diagnose: Was kosten die Sperrzeiten?")
+    assert "nur Quartale, die in beiden Läufen gewertet sind: 2022Q2." in diagnosis
+    assert "Nur in der Diagnose gewertet und deshalb nicht verglichen: 2022Q1" in diagnosis
+    rows = {r[0]: r for r in table_after(markdown, "### Variante gap-tolerance")}
+    # Same period on both sides: 3 round trips each, not 3 against 6.
+    assert rows["trend"][4:] == ["3", "3"]
+    assert "Quartale, die in beiden Läufen vorliegen (gewertet oder nicht): 2022Q1, 2022Q2" in (
+        diagnosis
+    )
+
+
+def test_diagnosis_without_common_graded_quarter_compares_nothing() -> None:
+    gap = Variant(name="gap-tolerance", gap_window=3, diagnostic=True)
+    results = {
+        "base": [result("2022Q1", SMALL, share=0.85)],
+        "gap-tolerance": [result("2022Q1", SMALL, variant=gap)],
+    }
+    markdown, _ = build(results)
+    diagnosis = section(markdown, "Diagnose: Was kosten die Sperrzeiten?")
+    assert "Kein Quartal ist in beiden Läufen gewertet" in diagnosis
+    assert "Netto p. a. Basis" not in diagnosis
+
+
+def test_newest_is_the_last_recording_including_merged_repeats(tmp_path: Path) -> None:
+    main, branch = CodeState("a" * 40, True), CodeState("b" * 40, True)
+    for code, drift in ((main, 0.001), (branch, 0.002), (main, 0.001)):
+        with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=code) as reg:
+            recorded = reg.record(recordable("2022Q1", SMALL, drift=drift))
+    # The third execution repeats the first and is merged into run 1.
+    assert (recorded.run_id, recorded.merged, recorded.repeat) == (1, True, 2)
+    with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=main) as reg:
+        results, used = newest_results(reg)
+    assert [(u.row.run_id, u.row.commit) for u in used] == [(1, "a" * 40)]
+    assert results["base"][0].depots["trend"].days[0].value == pytest.approx(9_980)
+    markdown, _ = build_report(
+        results,
+        fidelity=None,
+        trial_count=2,
+        created_at=CREATED,
+        commit="c" * 40,
+        runs=used,
+        draws=DRAWS,
+    )
+    trials = section(markdown, "Zahl der Versuche")
+    assert "a" * 12 in trials and "b" * 12 not in trials
+    row = table_after(markdown, "## Zahl der Versuche")[0]
+    assert row[:4] == ["base", "2022Q1", "1", "a" * 12] and row[5:] == ["2", "ja"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"compared": {"BTC-EUR": 5}, "deviations": [{"utc": "x", "cause": ""}]}',
+        '{"compared": ["BTC-EUR"]}',
+        '{"compared": {"BTC-EUR": "5"}}',
+        '["not", "an", "object"]',
+        '{"compared": {}, "surprise": 1}',
+        '{"with_observations": "ja"}',
+        "{not json",
+    ],
+)
+def test_cli_refuses_malformed_fidelity(tmp_path: Path, payload: str) -> None:
+    with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=CODE) as reg:
+        reg.record(recordable("2022Q1", SMALL))
+    fidelity = tmp_path / "fid.json"
+    fidelity.write_text(payload, encoding="utf-8")
+    out = io.StringIO()
+    assert cli_main("report", ["--dir", str(tmp_path), "--fidelity", str(fidelity)], out) == 1
+    assert "Treue-Test nicht lesbar" in out.getvalue()
+    assert not (tmp_path / REPORTS_DIR).exists()
+
+
+def test_cli_never_writes_runs_db(tmp_path: Path) -> None:
+    runs = tmp_path / RUNS_FILE
+    runs.touch()
+    out = io.StringIO()
+    assert cli_main("report", ["--dir", str(tmp_path)], out) == 1
+    assert "ist leer" in out.getvalue()
+    assert runs.stat().st_size == 0 and not (tmp_path / REPORTS_DIR).exists()
+
+    # Another SQLite file is neither initialised nor changed; the user gets a German reason.
+    runs.unlink()
+    con = sqlite3.connect(runs)
+    con.execute("CREATE TABLE other(x)")
+    con.commit()
+    con.close()
+    before = runs.read_bytes()
+    out = io.StringIO()
+    assert cli_main("report", ["--dir", str(tmp_path)], out) == 1
+    assert "nicht lesbar" in out.getvalue() and runs.read_bytes() == before
+
+    runs.write_bytes(b"not a database at all")
+    out = io.StringIO()
+    assert cli_main("report", ["--dir", str(tmp_path)], out) == 1
+    assert "nicht lesbar" in out.getvalue() and runs.read_bytes() == b"not a database at all"
+
+
+def test_cli_leaves_the_register_byte_identical(tmp_path: Path) -> None:
+    with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=CODE) as reg:
+        reg.record(recordable("2022Q1", SMALL))
+    before = (tmp_path / RUNS_FILE).read_bytes(), (tmp_path / CHAIN_FILE).read_bytes()
+    out = io.StringIO()
+    assert cli_main("report", ["--dir", str(tmp_path)], out) == 0, out.getvalue()
+    assert ((tmp_path / RUNS_FILE).read_bytes(), (tmp_path / CHAIN_FILE).read_bytes()) == before
+
+
+def test_open_register_readonly_refuses_writes(tmp_path: Path) -> None:
+    with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=CODE):
+        pass
+    db, chain = tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE
+    with (
+        report.open_register_readonly(db, chain, code=CODE) as reg,
+        pytest.raises(sqlite3.OperationalError),
+    ):
+        reg.con.execute("CREATE TABLE sneaky(x)")
+    with pytest.raises(report.ReportError):
+        report.open_register_readonly(tmp_path / "missing.db", chain, code=CODE)
+
+
+def test_spread_source_only_named_if_the_run_used_it() -> None:
+    sources = {
+        # Samples added after the run: today's value is not what the run used (0,100 %).
+        ("2022Q1", BTC): SpreadSource("sampled", 0.0008, 40),
+        ("2022Q1", "ETH-EUR"): SpreadSource("default", 0.0015),
+    }
+    markdown, _ = build({"base": [result("2022Q1", SMALL)]}, spread_sources=sources)
+    assert table_after(markdown, "### Spread-Annahmen je Quartal") == [
+        ["2022Q1", BTC, "0,100 %", "Quelle geändert seit dem Lauf", "-"],
+        ["2022Q1", "ETH-EUR", "0,150 %", "vorsichtiger Standardwert", "-"],
+    ]
+    assert "Der Lauf rechnete mit dem Wert in der Spalte" in section(markdown, "Kosten")
+
+
+def test_spread_sources_from_archive_carry_the_value(tmp_path: Path) -> None:
+    path = tmp_path / "candles.db"
+    with Archive(path) as archive:
+        archive.db.executemany(
+            "INSERT INTO spreads(market, quarter, method, spread, samples, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, 0)",
+            [(BTC, "2022Q1", SPREAD_METHOD, 0.001, 26), (BTC, "2025Q4", SPREAD_METHOD, 0.002, 9)],
+        )
+    sampled = report.spread_sources_from_archive(path)
+    # The sealed quarter's row is never read into the report (ADR-0026).
+    assert sampled == {("2022Q1", BTC): SpreadSource("sampled", 0.001, 26)}
+    eth = result("2022Q1", SMALL)
+    eth.spread["ETH-EUR"] = DEFAULT_SPREAD["ETH-EUR"]
+    sources = report._with_defaults(sampled, {"base": [eth]}, True)
+    assert sources[("2022Q1", "ETH-EUR")] == SpreadSource("default", DEFAULT_SPREAD["ETH-EUR"])
+    markdown, _ = build({"base": [eth]}, spread_sources=sources)
+    rows = table_after(markdown, "### Spread-Annahmen je Quartal")
+    assert [r[3] for r in rows] == ["Stichprobe öffentlicher Trades", "vorsichtiger Standardwert"]
+
+
+def test_incomplete_quarter_listed_with_reason() -> None:
+    rows = [result("2022Q1", SMALL, status="incomplete", error="BTC-EUR 1m window open")]
+    rows.append(result("2022Q2", SMALL))
+    markdown, _ = build({"base": rows})
+    quarters = {r[0]: r for r in table_after(markdown, "## Quartale")}
+    assert quarters["2022Q1"][1] == "nicht gewertet"
+    assert "Kerzenarchiv für dieses Quartal noch unvollständig" in quarters["2022Q1"][2]
+    assert "BTC-EUR 1m window open" in quarters["2022Q1"][2]
+    assert "Status incomplete" not in markdown
+
+
+def test_cell_labels_unknown_to_the_report_shown_raw() -> None:
+    assert report._label(report._DIRECTION, "up") == "steigend"
+    assert report._label(report._DIRECTION, "n/a") == "unbekannt"
+    assert report._label(report._DIRECTION, "sideways-ish") == "sideways-ish"
+    assert report._label(report._VOL, "extreme") == "extreme"
+
+
+def test_fidelity_needs_matching_indicators() -> None:
+    fid = FidelitySummary(
+        compared={BTC: 400}, equal_action={BTC: 400}, indicators_ok={BTC: 350}, deviations=[]
+    )
+    markdown, _ = build({"base": [result("2022Q1", SMALL)]}, fidelity=fid)
+    (row,) = table_after(markdown, "## Treue zum Live-Bot")
+    assert row[3:] == ["350 von 400", "Treue nicht belegt (Indikatoren weichen ab)"]
+    assert "Treue nicht belegt (400 Vergleiche)" in section(markdown, "Kurzfazit")
