@@ -223,6 +223,16 @@ class HistoricalClient:
         series = self._series[(symbol, interval)]
         return series.candles[bisect_left(series.ts, start) : bisect_left(series.ts, end)]
 
+    def newest_candles(
+        self, symbol: Symbol, interval: int, last_open: int, n: int
+    ) -> tuple[Candle, ...]:
+        """The newest ``n`` loaded candles opened at or before ``last_open``. The fidelity
+        check reads with it, apart from ``closed_candles``, what the archive holds for a
+        recorded live request: the window ``closed_candles`` chose is what it checks."""
+        series = self._series[(symbol, interval)]
+        hi = bisect_right(series.ts, last_open)
+        return series.candles[max(0, hi - n) : hi]
+
     def closed_candles(self, symbol: Symbol, interval: int, *, now_epoch: int) -> ClosedCandles:
         if interval not in TIMEFRAMES:
             raise MarketDataError(f"unsupported interval: {interval} min")

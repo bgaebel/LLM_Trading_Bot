@@ -867,14 +867,14 @@ M += [
     ),
     (
         "lab/fidelity.py",
-        "and live < have[-1].volume",
-        "and live != have[-1].volume",
+        "and live < archive[-1].volume",
+        "and live != archive[-1].volume",
         "lab fidelity more volume live is late",
     ),
     (
         "lab/fidelity.py",
-        "if (have := trial.windows.get(tf)) is not None and _same_window(windows[tf], have)",
-        "if (have := trial.windows.get(tf)) is not None",
+        "if tf in tried and _same_window(windows[tf], tried[tf])",
+        "if tf in tried",
         "lab fidelity cut without the checksum",
     ),
     (
@@ -900,6 +900,46 @@ M += [
         'return not name.endswith(".roundtrip_cost_pct")',
         "return True",
         "lab fidelity costs explained by another input",
+    ),
+    (
+        # A bug in the rebuild's choice of rows that hits only some windows (one interval, part
+        # of the time): the exact snapshots elsewhere must not hide it (review of AK5).
+        "lab/history.py",
+        "lo = max(0, hi - CANDLE_LIMIT)",
+        "lo = max(0, hi - CANDLE_LIMIT) + int(interval == 240 and now_epoch % 14400 > 3600)",
+        "lab window partial 500->499",
+    ),
+    # Review of the AK5 change: a window difference is Bitvavo's only where the rebuild equals
+    # what the archive holds for live's request; exact needs the unrounded indicators.
+    (
+        "lab/fidelity.py",
+        "    if lab is None or not _same_rows(lab, archive):",
+        "    if lab is None:",
+        "lab fidelity rebuild not checked against the archive",
+    ),
+    (
+        "lab/fidelity.py",
+        "    if not all(c for c, _ in causes.values()):",
+        "    if False:",
+        "lab fidelity unproven window lends its cause",
+    ),
+    (
+        "lab/fidelity.py",
+        "epoch if want.forming else epoch - step",
+        "epoch",
+        "lab fidelity archive answer ignores the forming flag",
+    ),
+    (
+        "lab/fidelity.py",
+        "        elif clean and not raw:",
+        "        elif False:",
+        "lab fidelity exact without unrounded indicators",
+    ),
+    (
+        "lab/fidelity.py",
+        "    return all(name in raw for name in ind)",
+        "    return True",
+        "lab fidelity incomplete unrounded indicators",
     ),
     (
         "lab/fidelity.py",

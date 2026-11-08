@@ -25,11 +25,17 @@ the same input, and every other deviation needs a proven cause. Per recorded win
 - LATE: the last closed bar had less volume live than in the archive (late trades);
 - OTHER_WINDOW: any other difference.
 
-A snapshot with a LATE or OTHER_WINDOW window has a proven different input: its window
-deviations carry that cause, its data, indicator, signal and action deviations
-``Eingang verschieden (...)``. A deviation of a snapshot with the same input keeps an empty
-cause and fails - a code bug is never explained away. Fidelity is established for a market
-only with ``FIDELITY_MIN`` such exactly equal snapshots (``FidelitySummary.exact``).
+LATE and OTHER_WINDOW need proof that the difference is Bitvavo's, not the rebuild's choice of
+rows: the rebuilt window (cut to live's row count) must equal what the archive holds for live's
+request, read apart from ``closed_candles`` (``archive_answer``: the newest rows at the clock,
+as many as live got, the forming bar as live had it). If it does not, the window keeps an
+empty cause. A snapshot with a LATE or OTHER_WINDOW window, and none without a cause, has a
+proven different input: its window deviations carry that cause, its data, indicator, signal
+and action deviations ``Eingang verschieden (...)``. A deviation of a snapshot with the same
+input keeps an empty cause and fails - a code bug is never explained away. Fidelity is
+established for a market only with ``FIDELITY_MIN`` such exactly equal snapshots
+(``FidelitySummary.exact``); exactly equal also needs the unrounded indicators recorded
+(``decision_meta``), else the snapshot is listed in ``no_raw``.
 
 Costs come from the stored quote (``quote_bid``/``quote_ask``) and the stored fee/slippage
 percentages, the weight from the stored ``current_weight`` (rounded to 4 places; for a classic
@@ -72,8 +78,9 @@ import time
 from bisect import bisect_left, bisect_right
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from itertools import combinations
 from pathlib import Path
 from typing import Any, TextIO
@@ -961,6 +968,16 @@ def _same_window(want: ObservedWindow, have: ClosedCandles) -> bool:
     )
 
 
+def _same_rows(a: ClosedCandles, b: ClosedCandles) -> bool:
+    return (
+        a.received == b.received
+        and a.first_open == b.first_open
+        and a.last_open == b.last_open
+        and a.forming == b.forming
+        and rows_sha256(a) == rows_sha256(b)
+    )
+
+
 def _truncated(
     rec: Recorded,
     rebuilder: Rebuilder,
@@ -968,53 +985,105 @@ def _truncated(
     route: Mapping[Symbol, Quote] | None,
     windows: Mapping[int, ObservedWindow],
     got: Rebuilt,
-) -> dict[int, int]:
+) -> tuple[dict[int, int], dict[int, ClosedCandles]]:
     """The windows live got shorter than the rebuild and whose rows the archive holds exactly:
     cut to live's row count (same newest row), the rebuilt window must equal the recorded one
     in rows, open times, forming flag and checksum. Only then is the input the same; a cut that
-    does not reproduce live's window is never applied."""
+    does not reproduce live's window is never applied. Also returns every cut window tried
+    (the rebuild's window for live's row count, which ``_window_cause`` checks)."""
     wanted = {
         tf: w.rows
         for tf, w in windows.items()
         if (have := got.windows.get(tf)) is not None and w.rows < have.received
     }
     if not wanted:
-        return {}
+        return {}, {}
     trial = rebuilder.rebuild(rec, hint, route, wanted)
-    return {
-        tf: n
-        for tf, n in wanted.items()
-        if (have := trial.windows.get(tf)) is not None and _same_window(windows[tf], have)
+    tried = {tf: have for tf in wanted if (have := trial.windows.get(tf)) is not None}
+    caps = {
+        tf: n for tf, n in wanted.items() if tf in tried and _same_window(windows[tf], tried[tf])
     }
+    return caps, tried
+
+
+def archive_answer(
+    client: HistoricalClient, symbol: Symbol, epoch: int, interval: int, want: ObservedWindow
+) -> ClosedCandles:
+    """What the archive holds for live's request as the recording describes it: the newest
+    ``want.rows`` rows at the clock, the forming bar only if live had it. Read with
+    ``newest_candles``, not through ``closed_candles``: a bug in the rebuild's choice of rows
+    must show as a difference of the rebuild to this, never as one of live to the archive."""
+    step = interval * 60
+    rows = client.newest_candles(
+        symbol, interval, epoch if want.forming else epoch - step, want.rows
+    )
+    closed = tuple(c for c in rows if c.ts <= epoch - step)
+    return ClosedCandles(
+        closed,
+        received=len(rows),
+        first_open=rows[0].ts if rows else None,
+        last_open=rows[-1].ts if rows else None,
+        forming=len(closed) < len(rows),
+    )
 
 
 def _when(epoch: int | None) -> str:
     return "-" if epoch is None else _iso(epoch)
 
 
-def _window_cause(tf: int, want: ObservedWindow, have: ClosedCandles | None) -> tuple[str, str]:
-    """Why a recorded window differs from the rebuilt one: LATE if its last closed bar (the
-    same bar: same newest row and forming flag) had less volume live than in the archive -
-    late trades are only ever added, so more volume live is no late bar; else OTHER_WINDOW."""
-    if have is None:
-        return OTHER_WINDOW, f"{tf}m: live {want.rows} Zeilen, im Archiv kein Fenster"
-    rows = "" if want.rows == have.received else f"; live {want.rows} statt {have.received} Zeilen"
+def _shape(w: ClosedCandles | None) -> str:
+    if w is None:
+        return "kein Fenster"
+    return (
+        f"{w.received} Zeilen {_when(w.first_open)} bis {_when(w.last_open)}, "
+        f"Prüfsumme {rows_sha256(w)[:12]}"
+    )
+
+
+def _late_only(want: ObservedWindow, archive: ClosedCandles, volume: float) -> bool:
+    """True if live's window is the archive's with only the last closed bar's volume live's."""
+    late = (*archive[:-1], replace(archive[-1], volume=volume))
+    return rows_sha256(late) == want.sha256
+
+
+def _window_cause(
+    tf: int, want: ObservedWindow, lab: ClosedCandles | None, archive: ClosedCandles
+) -> tuple[str, str]:
+    """Why a recorded window differs from the rebuilt one; an empty cause if nothing is proven.
+
+    ``lab`` is the rebuild's window for live's row count, ``archive`` what the archive holds for
+    live's request (``archive_answer``). The rebuild must equal the archive: otherwise it chose
+    other rows than the archive holds - a code bug, never a cause, whatever live got. Only
+    where it does is live's difference one of Bitvavo's answer to the archive: LATE if the
+    window is the archive's one (same rows, open times, forming flag) and its last closed bar
+    had less volume live - late trades are only ever added, so more volume live is no late
+    bar; else OTHER_WINDOW (the archive's rows over live's request differ from live's)."""
+    if lab is None or not _same_rows(lab, archive):
+        # Also where the archive holds exactly what live got: the rebuild should have
+        # reproduced it. (Equal to the archive, the rebuild differs from live only where the
+        # archive does: a deviating window then cannot equal the archive's.)
+        return "", f"{tf}m: Nachbau {_shape(lab)}; Archiv für die Live-Anfrage {_shape(archive)}"
+    cut = "" if want.rows == CANDLE_LIMIT else f"; Live-Fenster gekürzt auf {want.rows} Zeilen"
     live = want.last_closed_volume
     if (
         live is not None
-        and len(have) > 0
-        and want.last_open == have.last_open
-        and want.forming == have.forming
-        and live < have[-1].volume
+        and len(archive) > 0
+        and (want.rows, want.first_open, want.last_open, want.forming)
+        == (archive.received, archive.first_open, archive.last_open, archive.forming)
+        and live < archive[-1].volume
     ):
+        rest = (
+            "übrige Werte gleich"
+            if _late_only(want, archive, live)
+            else "auch Preise der Kerze oder weitere Zeilen anders"
+        )
         return LATE, (
-            f"{tf}m: Volumen der letzten geschlossenen Kerze ({_iso(have[-1].ts)}) live {live} "
-            f"statt {have[-1].volume} im Archiv{rows}"
+            f"{tf}m: Volumen der letzten geschlossenen Kerze ({_iso(archive[-1].ts)}) live "
+            f"{live} statt {archive[-1].volume} im Archiv, {rest}{cut}"
         )
     return OTHER_WINDOW, (
         f"{tf}m: live {want.rows} Zeilen {_when(want.first_open)} bis {_when(want.last_open)}, "
-        f"Prüfsumme {want.sha256[:12]}; Archiv {have.received} Zeilen {_when(have.first_open)} "
-        f"bis {_when(have.last_open)}, Prüfsumme {rows_sha256(have)[:12]}"
+        f"Prüfsumme {want.sha256[:12]}; Archiv {_shape(archive)}"
     )
 
 
@@ -1038,23 +1107,34 @@ def _interval(name: str) -> int:
 
 
 def _observed_cause(
-    found: list[dict[str, Any]], windows: Mapping[int, ObservedWindow], got: Rebuilt
+    found: list[dict[str, Any]],
+    windows: Mapping[int, ObservedWindow],
+    got: Rebuilt,
+    lab: Mapping[int, ClosedCandles],
+    archive: Callable[[int, ObservedWindow], ClosedCandles],
 ) -> str | None:
-    """With a recorded round: None if every window is the same input; else the proven cause
-    (OTHER_WINDOW over LATE), written into the deviations in place (module doc)."""
+    """With a recorded round: None if every window is the same input, or if a window's
+    difference is not proven to be Bitvavo's (``_window_cause``: the snapshot then only fails);
+    else the proven cause (OTHER_WINDOW over LATE), written into the deviations in place
+    (module doc). ``lab``: the rebuild's window per interval for live's row count."""
     causes: dict[int, tuple[str, str]] = {}
     for tf, want in windows.items():
         have = got.windows.get(tf)
         if have is None or not _same_window(want, have):
-            causes[tf] = _window_cause(tf, want, have)
+            causes[tf] = _window_cause(tf, want, lab.get(tf), archive(tf, want))
     if not causes:
+        return None
+    for d in found:
+        if d["kind"] == WINDOW:
+            d["cause"], d["detail"] = causes[_interval(str(d["field"]))]
+    if not all(c for c, _ in causes.values()):
+        # One window the rebuild got wrong: nothing about this snapshot's input is proven, so
+        # none of its deviations may inherit a cause (a code bug is never explained away).
         return None
     cause = OTHER_WINDOW if any(c == OTHER_WINDOW for c, _ in causes.values()) else LATE
     inherited = DIFFERENT_INPUT.format(cause)
     for d in found:
-        if d["kind"] == WINDOW:
-            d["cause"], d["detail"] = causes[_interval(str(d["field"]))]
-        elif d["kind"] in _INHERITS and not d["cause"] and _from_candles(d):
+        if d["kind"] in _INHERITS and not d["cause"] and _from_candles(d):
             d["cause"] = inherited
     return cause
 
@@ -1100,16 +1180,28 @@ class _Tally:
         s.indicators_ok[market] = s.indicators_ok.get(market, 0) + int(ind_ok)
 
     def classify(
-        self, market: str, *, observed: bool, cause: str | None, cut: bool, clean: bool
+        self,
+        market: str,
+        *,
+        observed: bool,
+        cause: str | None,
+        cut: bool,
+        clean: bool,
+        raw: bool,
     ) -> None:
-        """One comparison into exact / different / unrecorded (``FidelitySummary``); one with
-        a recorded, equal input that still deviates goes nowhere: it fails as unexplained."""
+        """One comparison into exact / no_raw / different / unrecorded (``FidelitySummary``);
+        one with a recorded, equal input that still deviates goes nowhere: it fails as
+        unexplained. ``raw``: its unrounded indicators were recorded and all compared."""
         s = self.summary
         if cause is not None:
             causes = s.different.setdefault(market, {})
             causes[cause] = causes.get(cause, 0) + 1
         elif not observed:
             s.unrecorded[market] = s.unrecorded.get(market, 0) + 1
+        elif clean and not raw:
+            # AK5 needs the unrounded indicators at 1e-12 for "exakt gleich"; the rounded
+            # payload alone lets a code bug below one rounding step through.
+            s.no_raw[market] = s.no_raw.get(market, 0) + 1
         elif clean:
             s.exact[market] = s.exact.get(market, 0) + 1
             s.truncated[market] = s.truncated.get(market, 0) + int(cut)
@@ -1135,7 +1227,7 @@ def check(
     for market in MARKETS:
         summary.compared[market] = summary.equal_action[market] = 0
         summary.indicators_ok[market] = summary.exact[market] = 0
-        summary.truncated[market] = summary.unrecorded[market] = 0
+        summary.truncated[market] = summary.unrecorded[market] = summary.no_raw[market] = 0
     summary.deviations.extend(unreadable)
     tally.skipped += len(unreadable)
     tally.unreadable = len(unreadable)
@@ -1177,8 +1269,9 @@ def check(
         route = routes[0] if routes else None
         got = rebuilder.rebuild(rec, hint, route)
         caps: dict[int, int] = {}
+        tried: dict[int, ClosedCandles] = {}
         if windows is not None:
-            caps = _truncated(rec, rebuilder, hint, route, windows, got)
+            caps, tried = _truncated(rec, rebuilder, hint, route, windows, got)
             if caps:
                 got = rebuilder.rebuild(rec, hint, route, caps)
         found = compare(rec, got, windows, raw)
@@ -1200,7 +1293,10 @@ def check(
             if d["kind"] == ROUGH_KIND:
                 d["cause"] = ROUGH
         if windows is not None:
-            cause = _observed_cause(found, windows, got)
+            # The rebuild's window for live's row count: the cut one where live got fewer rows.
+            lab = {**got.windows, **{tf: w for tf, w in tried.items() if tf not in caps}}
+            answer = partial(archive_answer, rebuilder.client, rec.symbol, rec.epoch)
+            cause = _observed_cause(found, windows, got, lab, answer)
         else:
             cause = _unrecorded_cause(found)
         summary.deviations.extend(found)
@@ -1211,9 +1307,18 @@ def check(
             cause=cause,
             cut=bool(caps),
             clean=not _failing(found),
+            raw=_raw_complete(raw, got.indicators),
         )
     summary.note = _note(tally, obs is not None)
     return summary
+
+
+def _raw_complete(raw: Mapping[str, Any] | None, ind: Indicators | None) -> bool:
+    """True if the unrounded indicators were recorded for every indicator the rebuild has:
+    only then did ``compare`` check all of them at ``RAW_TOL``."""
+    if not raw or ind is None:
+        return False
+    return all(name in raw for name in ind)
 
 
 def _note(tally: _Tally, with_obs: bool) -> str:
@@ -1409,6 +1514,10 @@ def summary_text(summary: FidelitySummary, *, limit: int = 20) -> str:
         lines.append(
             f"  exakt gleich bei belegt gleichem Eingang: {exact}"
             + (f" (davon {cut} mit gekürztem Live-Fenster)" if cut else "")
+        )
+        lines.append(
+            "  gleicher Eingang, ungerundete Indikatoren nicht aufgezeichnet: "
+            f"{summary.no_raw.get(market, 0)}"
         )
         lines.append("  Eingang verschieden: " + causes_text(summary.different.get(market, {})))
         lines.append(f"  ohne Aufzeichnung nicht prüfbar: {summary.unrecorded.get(market, 0)}")

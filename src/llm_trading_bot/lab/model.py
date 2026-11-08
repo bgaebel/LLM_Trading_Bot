@@ -300,7 +300,8 @@ class FidelitySummary:
     """What the fidelity check against live found (AK5); the report shows it as it is.
 
     Per market a comparison is one rebuilt live decision. Those with a recorded round fall
-    into ``exact`` (same input, nothing strict deviates), ``different`` (the recording proves
+    into ``exact`` (same input, nothing strict deviates, unrounded indicators recorded),
+    ``no_raw`` (the same without the unrounded indicators), ``different`` (the recording proves
     another input) or neither (same input, but a deviation: never explained). Those without a
     recorded round are ``unrecorded``, or ``different`` if a candle field already differs.
     """
@@ -327,6 +328,11 @@ class FidelitySummary:
     unrecorded: dict[str, int] = field(default_factory=dict)
     """Market -> comparisons without a recorded round and without a differing candle field:
     their indicators cannot be checked (``ohne Aufzeichnung nicht prüfbar``)."""
+    no_raw: dict[str, int] = field(default_factory=dict)
+    """Market -> comparisons with proven equal input and no strict deviation whose unrounded
+    indicators were not recorded (``decision_meta``): not ``exact``, because AK5 needs them at
+    1e-12 and the rounded payload lets a difference below one rounding step through. Missing
+    in a JSON written before: {}."""
 
     def unexplained(self, market: str) -> int:
         return sum(1 for d in self.deviations if d.get("market") == market and not d.get("cause"))

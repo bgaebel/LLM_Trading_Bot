@@ -54,7 +54,7 @@ from llm_trading_bot.lab.paths import CANDLES_FILE, REPORTS_DIR
 from llm_trading_bot.llm.agents import BotConfig, load_config
 from llm_trading_bot.market.bitvavo import CANDLE_LIMIT, BitvavoClient
 from llm_trading_bot.market.models import ClosedCandles, Quote, Symbol
-from llm_trading_bot.market.snapshot import INTERVALS, MarketClient
+from llm_trading_bot.market.snapshot import INTERVALS, MarketClient, MarketSnapshot
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import Costs
@@ -62,6 +62,7 @@ from llm_trading_bot.paper.observations import ObservationBuffer, ObservationWri
 from llm_trading_bot.paper.observations_schema import create
 from llm_trading_bot.paper.risk import Controls
 from llm_trading_bot.paper.usdc import BUYHOLD_USDC
+from llm_trading_bot.strategy.indicators import Indicators, indicators
 
 P = 1_793_577_600
 """2026-11-02T00:00:00Z, aligned to every interval; the first round is P + 5 s."""
@@ -920,6 +921,145 @@ def test_deviation_with_the_same_input_is_never_explained(copy: Live, few: None)
     assert s.exact["ETH-EUR"] == s.compared["ETH-EUR"] - n3 - 1
 
 
+def drop_oldest(
+    monkeypatch: pytest.MonkeyPatch, symbol: Symbol, interval: int, at: set[int]
+) -> None:
+    """A simulated bug in the rebuild's choice of rows (the archive is unchanged): the windows
+    of ``interval`` asked for at the clocks ``at`` lose their oldest row. Patched only after
+    the live fixture was written, so live got the full windows."""
+    original = HistoricalClient.closed_candles
+
+    def buggy(self: HistoricalClient, sym: Symbol, tf: int, *, now_epoch: int) -> ClosedCandles:
+        got = original(self, sym, tf, now_epoch=now_epoch)
+        if sym is not symbol or tf != interval or now_epoch not in at:
+            return got
+        return ClosedCandles(
+            got[1:],
+            received=got.received - 1,
+            first_open=got[1].ts,
+            last_open=got.last_open,
+            forming=got.forming,
+        )
+
+    monkeypatch.setattr(HistoricalClient, "closed_candles", buggy)
+
+
+def test_rebuild_window_bug_is_never_another_input(
+    copy: Live, few: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review D1: a window the rebuild got wrong differs from live without the archive doing
+    so. It must stay unexplained - even when it hits only some windows, so that the exact
+    snapshots before it still reach the minimum."""
+    late = set(ROUNDS[4:])
+    drop_oldest(monkeypatch, ETH, 240, late)
+    s = checked(copy, obs=True)
+    found = failing(s)
+    assert found and {d["cause"] for d in found} == {""}
+    assert {d["market"] for d in found} == {"ETH-EUR"}
+    assert {fidelity._epoch(d["utc"]) for d in found} == late
+    windows = [d for d in found if d["kind"] == "window"]
+    assert {d["field"] for d in windows} == {
+        "window.240m.rows",
+        "window.240m.first_open",
+        "window.240m.rows_sha256",
+    }
+    assert all("Nachbau 499 Zeilen" in d["detail"] for d in windows)
+    assert all("Archiv für die Live-Anfrage 500 Zeilen" in d["detail"] for d in windows)
+    assert s.different == {}
+    assert s.exact["ETH-EUR"] == sum(snapshots_at(copy, ETH, at) for at in ROUNDS[:4]) >= 5
+    assert s.established == {"BTC-EUR": True, "ETH-EUR": False}
+    assert "Abweichungen ohne Ursache" in s.verdict("ETH-EUR")[1]
+
+
+def test_rebuild_window_bug_hides_not_behind_a_late_bar(
+    copy: Live, few: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review D1: live's last bar had late trades AND the rebuild dropped a row of that window.
+    Live and archive differ, but so do rebuild and archive: no cause, nothing inherited."""
+    at = ROUNDS[5]
+    late_bar(copy, at, 0.5)
+    drop_oldest(monkeypatch, ETH, 1, {at})
+    s = checked(copy, obs=True)
+    found = failing(s)
+    assert found and {d["cause"] for d in found} == {""}
+    assert {fidelity._epoch(d["utc"]) for d in found} == {at}
+    windows = [d for d in found if d["kind"] == "window"]
+    assert {d["field"] for d in windows} >= {"window.1m.rows", "window.1m.first_open"}
+    assert all("Nachbau 499 Zeilen" in d["detail"] for d in windows)
+    assert s.different == {} and s.established["ETH-EUR"] is False
+    # Without the rebuild's bug the same recording is a proven late bar.
+    monkeypatch.undo()
+    monkeypatch.setattr(model, "FIDELITY_MIN", 5)
+    monkeypatch.setattr(fidelity, "FIDELITY_MIN", 5)
+    assert checked(copy, obs=True).different == {"ETH-EUR": {LATE: snapshots_at(copy, ETH, at)}}
+
+
+def test_live_without_the_newest_closed_bar_is_another_input(copy: Live, few: None) -> None:
+    """Bitvavo had not yet published the newest closed bar (the 09:30 case of the live copy):
+    live's window ends one bar earlier than the archive's for the same request. The rebuild
+    equals the archive, so the difference is Bitvavo's: OTHER_WINDOW."""
+    at = ROUNDS[2]
+    row = window_row(copy.obs, ETH, 1, at)
+    early = archive_window(ETH, 1, at - 60)
+    assert early.received == row["rows"] and early.last_open < row["last_open"]
+    edit(
+        copy.obs,
+        "UPDATE windows SET first_open=?, last_open=?, rows_sha256=?, last_closed_volume=?"
+        " WHERE id=?",
+        early.first_open,
+        early.last_open,
+        rows_sha256(early),
+        early[-1].volume,
+        row["id"],
+    )
+    s = checked(copy, obs=True)
+    found = failing(s)
+    n = snapshots_at(copy, ETH, at)
+    assert found and {d["cause"] for d in found} == {OTHER_WINDOW}
+    assert {d["field"] for d in found} == {
+        "window.1m.first_open",
+        "window.1m.last_open",
+        "window.1m.rows_sha256",
+    }
+    assert s.different == {"ETH-EUR": {OTHER_WINDOW: n}} and s.unexplained("ETH-EUR") == 0
+
+
+def test_without_unrounded_indicators_never_exact(
+    copy: Live, few: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review D2: AK5 needs the unrounded indicators at 1e-12 for "exakt gleich". A round whose
+    decision_meta is missing (or incomplete) lands in no_raw, never in exact - a code bug below
+    one rounding step would pass the rounded payload."""
+    con = sqlite3.connect(copy.obs)
+    meta_id, ind = con.execute(
+        "SELECT id, indicators FROM decision_meta WHERE symbol='BTCEUR' AND agent='meanrev'"
+        " ORDER BY id LIMIT 1"
+    ).fetchone()
+    con.close()
+    raw = json.loads(ind)
+    del raw["ema24_1h"]
+    edit(copy.obs, "UPDATE decision_meta SET indicators=? WHERE id=?", json.dumps(raw), meta_id)
+    s = checked(copy, obs=True)
+    assert failing(s) == []
+    assert s.no_raw == {"BTC-EUR": 1, "ETH-EUR": 0}
+    assert s.exact["BTC-EUR"] == s.compared["BTC-EUR"] - 1
+    assert "ungerundete Indikatoren nicht aufgezeichnet: 1" in summary_text(s)
+
+    edit(copy.obs, "DELETE FROM decision_meta")
+
+    def below_one_step(snap: MarketSnapshot, cost: float) -> Indicators:
+        ind = indicators(snap, cost)
+        ind["sma20_15m"] *= 1 + 1e-10
+        return ind
+
+    monkeypatch.setattr(fidelity, "indicators", below_one_step)
+    s = checked(copy, obs=True)
+    # The rounded payload cannot see it, and nothing counts as exactly equal.
+    assert failing(s) == []
+    assert s.exact == {m: 0 for m in MARKETS} and s.no_raw == s.compared
+    assert s.established == {m: False for m in MARKETS}
+
+
 def test_unrecorded_round_with_another_input_candle(copy: Live, few: None) -> None:
     """Without a recorded round a candle field that differs proves another input; its
     indicators inherit the cause. Such snapshots are never exactly equal."""
@@ -960,7 +1100,7 @@ def test_old_summary_json_is_never_established() -> None:
         }
     )
     s = FidelitySummary.from_json(old)
-    assert s.exact == {} and s.different == {} and s.unrecorded == {}
+    assert s.exact == {} and s.different == {} and s.unrecorded == {} and s.no_raw == {}
     assert s.established == {"BTC-EUR": False}
     assert "zu wenige exakt gleiche Snapshots: 0 < 300" in summary_text(s)
 

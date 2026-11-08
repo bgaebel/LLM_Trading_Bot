@@ -315,6 +315,7 @@ def test_fidelity_shown_as_it_is() -> None:
         exact={BTC: 119, "ETH-EUR": 320},
         truncated={"ETH-EUR": 20},
         different={"ETH-EUR": {"Kerze live vorläufig (späte Trades)": 80}},
+        no_raw={"ETH-EUR": 3},
     )
     markdown, _ = build(base, fidelity=few)
     treue = section(markdown, "Treue zum Live-Bot")
@@ -325,6 +326,7 @@ def test_fidelity_shown_as_it_is() -> None:
         "119",
         "0",
         "0",
+        "0",
         "119 von 120",
         "Treue nicht belegt (zu wenige Vergleiche: 120 < 300; 1 Abweichungen ohne Ursache; "
         "zu wenige exakt gleiche Snapshots: 119 < 300)",
@@ -333,6 +335,7 @@ def test_fidelity_shown_as_it_is() -> None:
         "400",
         "400 von 400",
         "320 (davon 20 gekürzt)",
+        "3",
         "80 (Kerze live vorläufig (späte Trades): 80)",
         "0",
         "380 von 400",

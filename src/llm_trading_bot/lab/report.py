@@ -1603,7 +1603,8 @@ def _fidelity(doc: Doc, f: FidelitySummary | None) -> None:
         "Ziel müssen in allen Vergleichen gleich sein. Indikatoren müssen nur dort exakt gleich "
         "sein, wo die Aufzeichnung (Spec 015) gleichen Eingang belegt; jede andere Abweichung "
         "braucht eine belegte Ursache. Belegt ist die Treue je Markt erst ab "
-        f"{FIDELITY_MIN} exakt gleichen Snapshots mit belegt gleichem Eingang."
+        f"{FIDELITY_MIN} exakt gleichen Snapshots mit belegt gleichem Eingang. Exakt gleich "
+        "zählt nur mit aufgezeichneten ungerundeten Indikatoren (auf 1e-12 verglichen)."
     )
     if f is None:
         doc.p("Kein Treue-Test beigefügt: Treue nicht belegt.", "warn")
@@ -1619,6 +1620,7 @@ def _fidelity(doc: Doc, f: FidelitySummary | None) -> None:
                 count(n),
                 f"{count(f.equal_action.get(m, 0))} von {count(n)}",
                 count(exact) + (f" (davon {count(cut)} gekürzt)" if cut else ""),
+                count(f.no_raw.get(m, 0)),
                 _causes(f.different.get(m, {})),
                 count(f.unrecorded.get(m, 0)),
                 f"{count(f.indicators_ok.get(m, 0))} von {count(n)}",
@@ -1633,6 +1635,7 @@ def _fidelity(doc: Doc, f: FidelitySummary | None) -> None:
             "Vergleiche",
             "Aktion und Ziel gleich",
             "Exakt gleich bei belegt gleichem Eingang",
+            "Gleicher Eingang, ungerundete Indikatoren nicht aufgezeichnet",
             "Eingang verschieden (Ursache)",
             "Ohne Aufzeichnung nicht prüfbar",
             "Indikatoren gleich (± 1 Stelle, Information)",
@@ -1962,7 +1965,15 @@ class FidelityUnreadable(ReportError):
     """The fidelity JSON is not a fidelity summary; the message is German, for the CLI."""
 
 
-_INT_MAPS = ("compared", "equal_action", "indicators_ok", "exact", "truncated", "unrecorded")
+_INT_MAPS = (
+    "compared",
+    "equal_action",
+    "indicators_ok",
+    "exact",
+    "truncated",
+    "unrecorded",
+    "no_raw",
+)
 
 
 def _count_map(value: object) -> bool:
