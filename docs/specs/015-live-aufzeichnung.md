@@ -1,6 +1,6 @@
 # Spec 015: Strategie-Labor I – Live-Aufzeichnung in der Beobachtungs-DB
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s015-live-aufzeichnung` · **Meilenstein:** M3 (vorgezogen: Strategie-Labor)
 - **Erstellt:** 2026-11-07
 
@@ -11,13 +11,13 @@ Entscheidung, GPT-Rohantwort, ungekapptes Ziel und Auslöser. Am Handeln ändert
 für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
 
 ## Akzeptanzkriterien
-- [ ] AK1: **Quote-Tiefe ohne Rückwirkung:** Der Marktdaten-Client liest `bidSize`/`askSize` aus `/ticker/book` getrennt
+- [x] AK1: **Quote-Tiefe ohne Rückwirkung:** Der Marktdaten-Client liest `bidSize`/`askSize` aus `/ticker/book` getrennt
   von der Quote (eigene Zuordnung `QuoteBook.depth`, nach bestem Bemühen außerhalb der Gültigkeitsprüfung). `Quote`,
   ihr Vergleich, die Duplikatprüfung, Snapshot, `feature_payload`, LLM-Kontext, Entscheidungen und Orders bleiben
   unverändert; alle Golden-Fixtures grün, `PROMPT_VERSION` gleich. — Nachweis:
   `tests/market/test_quote_depth.py::test_missing_size_keeps_quote`, `::test_garbage_size_keeps_quote`,
   `::test_size_not_in_duplicate_check`, `::test_quote_positional_construction_unchanged`, bestehende Golden-Tests
-- [ ] AK2: **Gründe und Auslöser als Codes, gleiches Verhalten:**
+- [x] AK2: **Gründe und Auslöser als Codes, gleiches Verhalten:**
   - `MarketDataError` bekommt einen stabilen Code (`gap_1m` … `gap_240m`, `stale`, `spread`, `quote_missing`,
     `conflict`, `http`, `parse`), Meldetext unverändert;
   - `llm_due` liefert einen Grund (`first` | `interval` | `move` | `signal_change` | `new_market` | `None`), dessen
@@ -25,7 +25,7 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
 
   — Nachweis: `tests/market/test_error_codes.py`, `tests/llm/test_due_reason.py::test_reason_truth_equals_old_bool`
   (Tabellentest über Zeit/Bewegung/Signalwechsel), Golden-LLM-Fälle unverändert
-- [ ] AK3: **Beobachtungs-DB** `observations.db` (ADR-0027) im Datenverzeichnis, eigene Schemaversion, nur anhängend:
+- [x] AK3: **Beobachtungs-DB** `observations.db` (ADR-0027) im Datenverzeichnis, eigene Schemaversion, nur anhängend:
   - **Wer schreibt:** nur der Inhaber der `bot.db`-Schreibsperre, also der Dienst; keine zweite Sperre.
     `paper-cycle` schreibt keine Beobachtungen.
   - **Wann:** Während `paper_cycle` landen Beobachtungen nur in einem Puffer im Speicher (keine Ein-/Ausgabe, kann
@@ -39,7 +39,7 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
 
   — Nachweis: `tests/paper/test_observations.py`, `tests/service/test_observations_wired.py::test_golden_rounds_same_with_raising_recorder`,
   `::test_busy_lock_keeps_trading`, `::test_v99_file_keeps_trading`, `::test_corrupt_file_not_recreated`
-- [ ] AK4: **Was aufgezeichnet wird** (Bezug über den natürlichen Schlüssel `agent, symbol, bar_ts` bzw. `llm_call_id`):
+- [x] AK4: **Was aufgezeichnet wird** (Bezug über den natürlichen Schlüssel `agent, symbol, bar_ts` bzw. `llm_call_id`):
   - je Runde und Markt: jede Buch-Abfrage mit Zweck (Start, Nachprüfung, nach GPT), Zeit, Bid, Ask, Größen;
     Snapshot-Ergebnis (`ok` oder Code) und ob eine Entscheidung fiel;
   - je Runde, Markt und Intervall: erhaltene Zeilen, erste und letzte Öffnungszeit, ob die laufende Kerze dabei war,
@@ -51,20 +51,20 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
 
   Größe gemessen mit einem synthetischen Tag in echter Zeilenrate; Aufbewahrung danach festgelegt und im Verlauf
   vermerkt. — Nachweis: `tests/paper/test_observations.py::test_records_*`, `::test_size_of_one_day`
-- [ ] AK5: **Statusdatei:** neue Felder `observations_written`, `observations_failed`, `observations_last_error` mit
+- [x] AK5: **Statusdatei:** neue Felder `observations_written`, `observations_failed`, `observations_last_error` mit
   Standardwerten in `ADDED` (ältere Leser vertragen die neue Datei, neue Leser die alte); `release.sh status` zeigt
   sie. — Nachweis: `tests/service/test_status.py::test_observation_fields_*`, `tests/deploy/test_release.py::test_status_observations`
-- [ ] AK6: **Sicherung:** `observations.db` wird in einem eigenen Aufruf (eigenes Profil: Schema, Namensmuster
+- [x] AK6: **Sicherung:** `observations.db` wird in einem eigenen Aufruf (eigenes Profil: Schema, Namensmuster
   `observations-…`, Unterordner, 7 tägliche Kopien) gesichert; ein Fehler dabei lässt die `bot.db`-Sicherung, die
   Sicherung vor dem Update und jeden Deploy unberührt. Wiederherstellen nur in ein neues Ziel. — Nachweis:
   `tests/ops/test_backup.py::test_observations_profile_*`, `::test_corrupt_observations_keeps_bot_backup`,
   `tests/deploy/test_release.py::test_observations_backup_*`
-- [ ] AK7: **Rückfall und Isolation:** Ein Release vor 015 ignoriert `observations.db`; ein Rollback von einer späteren
+- [x] AK7: **Rückfall und Isolation:** Ein Release vor 015 ignoriert `observations.db`; ein Rollback von einer späteren
   Beobachtungs-Version stellt nur die Aufzeichnung ab. — Nachweis: `tests/deploy/test_release.py::test_rollback_before_015_*`
-- [ ] AK8: [manuell] Mit Zustimmung: Deploy; danach zeigt `release.sh status` steigende `observations_written` und
+- [x] AK8: [manuell] Mit Zustimmung: Deploy; danach zeigt `release.sh status` steigende `observations_written` und
   `observations_failed = 0`; eine Stichprobe (Zeilenzahlen je Tabelle, keine Inhalte) bestätigt Quotes je Runde,
   Snapshot-Codes und eine GPT-Rohantwort.
-- [ ] AK9: Doku: ADR-0026, ADR-0027, ARCHITEKTUR (Beobachtungs-DB, Puffer), `docs/betrieb/server.md` (Sicherung,
+- [x] AK9: Doku: ADR-0026, ADR-0027, ARCHITEKTUR (Beobachtungs-DB, Puffer), `docs/betrieb/server.md` (Sicherung,
   Status), Datenschutz unverändert (keine Besucherdaten). — Nachweis: `scripts/docs-check.sh`, Review
 
 ## Abgrenzung
@@ -100,7 +100,7 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
 - [x] 5. Statusfelder (AK5)
 - [x] 6. Sicherungsprofil und Deploy-Anpassung (AK6, AK7)
 - [x] 7. Doku, ADR, Prüfung (Workflow), PR (AK9)
-- [ ] 8. Mit Zustimmung: Deploy, Stichprobe (AK8)
+- [x] 8. Mit Zustimmung: Deploy, Stichprobe (AK8)
 
 ## Risiken & offene Fragen
 - **M1 „7 Tage ununterbrochen“:** Der Nutzer hat entschieden (2026-11-08): Die 7 Tage zählen ab dem letzten Deploy.
@@ -131,8 +131,17 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Der Bot schreibt seit dem Deploy (2026-11-08 08:23 UTC, Release aac30e4) jede Runde in die eigene
+  `observations.db`: Quotes mit Tiefe (auch abgelehnte, mit Code), Kerzenfenster nur bei Änderung, Snapshot-Ergebnisse,
+  Entscheidungs-Metadaten (Version, Release, ungerundete Werte), GPT-Versuche mit Auslöser und Rohantwort. Handel und
+  `bot.db` unverändert (byte-gleich mit und ohne Aufzeichnung, auch bei erzwungenem Fehler). AK1–AK9 erfüllt.
+- **Abweichungen vom Plan:** Fenster nur bei Änderung (verlustfrei) und 7 statt 14 tägliche Sicherungen wegen der
+  gemessenen Größe; Statusleser ignorieren unbekannte Felder; Sicherung und Deploy parallel in Worktrees gebaut.
+- **Nachweise:** PR #22 (CI grün, Mutationsprüfung 208/208). Auf dem Server nach dem Deploy (nur Zeilenzahlen, keine
+  Inhalte): nach 1 Runde 1 Start, 1 Runde, 4 Bücher, 2 Snapshots, 8 Fenster; nach 46 Runden (09:09 UTC) 186 Bücher
+  (≈ 4 je Runde), 92 Snapshots (2 je Runde), 99 Fenster, 24 Entscheidungs-Metadaten, 2 GPT-Versuche mit Rohantwort;
+  `release.sh status`: `observations: written` 2 → 6 → 47, `failed 0, last error: none`; Datei 119 KB
+  (≈ 2 MB/Tag wie gemessen).
+- **Offen / Folgearbeit:** Ausdünnung/Archivierung der Beobachtungs-DB vor 2027-05 (neues ADR); Auswertung in Spec 017
+  frühestens nach 4 Wochen Aufzeichnung; erste Sicherung von `observations.db` läuft mit dem nächsten Backup-Timer.
+- **Neue ADRs / Learnings:** ADR-0026, ADR-0027.
