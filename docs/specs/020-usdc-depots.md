@@ -1,6 +1,6 @@
 # Spec 020: USDC-Depots – BTC über BTC/USDC ausführen, Geld bleibt in Euro
 
-- **Status:** in Arbeit
+- **Status:** fertig
 - **Issue:** – · **Branch:** `feat/s020-usdc-depots` · **Meilenstein:** M1 (Nachtrag, Paper)
 - **Erstellt:** 2026-11-08
 
@@ -39,11 +39,11 @@ Depots laufen unverändert weiter – so zeigt der Vergleich, was die günstiger
   `uv run python tools/golden/mutation_check.py usdc`
 - [x] AK7: **Weboberfläche:** USDC-Depots mit Kennzeichen „USDC“, Trades mit Markt BTC-USDC, Kurse im Laufband;
   öffentliche Ansicht wie ADR-0028. — Nachweis: `tests/web/test_usdc_overview.py`
-- [ ] AK8: **Labor:** Spec 016 bekommt die Variante `usdc` (USDC-Kostenweg auf BTC-EUR-Kursen, da BTC-USDC erst
+- [ ] AK8 (nach Spec 016 verschoben): **Labor:** Spec 016 bekommt die Variante `usdc` (USDC-Kostenweg auf BTC-EUR-Kursen, da BTC-USDC erst
   ab 2024-07-01 existiert); im Bericht als „Ausführung über USDC“. — Nachweis: `tests/lab/test_backtest.py::test_usdc_variant`
 - [x] AK9: Doku: ADR-0029 (löst ADR-0026 ab: Ausführungsvarianten ohne Regeländerung brauchen keine Hürden),
   ADR-0030 (USDC-Depots), PROJEKT (Märkte), ARCHITEKTUR, `docs/betrieb/server.md`. — Nachweis: `scripts/docs-check.sh`
-- [ ] AK10: [manuell] Mit Zustimmung: Deploy; die neuen Depots erscheinen, Buy & Hold USDC kauft einmal, Kurse
+- [x] AK10: [manuell] Mit Zustimmung: Deploy; die neuen Depots erscheinen, Buy & Hold USDC kauft einmal, Kurse
   BTC-USDC/USDC-EUR frisch in der Übersicht.
 
 ## Abgrenzung
@@ -79,9 +79,9 @@ Depots laufen unverändert weiter – so zeigt der Vergleich, was die günstiger
 - [x] 3. Ausführungsweg und Kosten je Depot, Golden der v0.3.1 unverändert (AK2, AK3, AK6)
 - [x] 4. Depots, Bewertung, Risiko, fail closed (AK4, AK5)
 - [x] 5. Weboberfläche (AK7)
-- [ ] 6. Laborvariante (AK8) – zurückgestellt als Folgearbeit (Workflow 2026-11-08)
-- [ ] 7. Doku, Prüfung (Workflow), PR (AK9) – Doku und Prüfung erledigt, PR offen
-- [ ] 8. Mit Zustimmung: Deploy (AK10)
+- [ ] 6. Laborvariante (AK8) – nach Spec 016 verschoben (das Labor liegt dort)
+- [x] 7. Doku, Prüfung (Workflow), PR (AK9)
+- [x] 8. Mit Zustimmung: Deploy (AK10)
 
 ## Risiken & offene Fragen
 - **Gebührenwährung** auf BTC-USDC (vermutlich USDC) nicht bestätigt – im Paper-Modell in € umgerechnet.
@@ -109,8 +109,17 @@ Depots laufen unverändert weiter – so zeigt der Vergleich, was die günstiger
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->
-- **Erreicht:** …
-- **Abweichungen vom Plan:** …
-- **Nachweise:** …
-- **Offen / Folgearbeit:** …
-- **Neue ADRs / Learnings:** …
+- **Erreicht:** Fünf USDC-Depots (`v0.3.1-usdc`) handeln BTC über BTC/USDC mit Geld in Euro und Umrechnung je
+  Trade; Signale aus BTC/EUR; die v0.3.1-, GPT- und Buy-&-Hold-Depots sind unverändert. Live seit 2026-11-08
+  16:56 UTC (Release a44ef78). AK1–AK7, AK9, AK10 erfüllt.
+- **Abweichungen vom Plan:** Auswahl der USDC-Depots im eigenen Feld `BOT_USDC_AGENTS` (fehlt = alle an), damit ein
+  Rollback auf einen älteren Release weiter startet; USDC-Kurse erscheinen in Lebenszeichen und Laufband nur, solange
+  USDC-Depots sie nutzen. AK8 (Laborvariante) nach Spec 016 verschoben, weil das Labor dort liegt.
+- **Nachweise:** PR #24 (CI grün, auch auf `main`); lokal 2154 Tests, Mutationsprüfung 280/280 (Gruppe `usdc` 72
+  Mutanten), Golden-Fixtures v0.3.1 unverändert. Auf dem Server nach dem Deploy (nur lesend, 16:59 UTC): 12 Depots,
+  davon 5 USDC; Kurse BTCUSDC und USDCEUR in derselben Runde wie BTCEUR/ETHEUR gespeichert; `buyhold-usdc` kaufte
+  einmal (BTC über BTC-USDC, ETH über ETH-EUR); jedes USDC-Depot mit Entscheidung und Equity-Punkten; Dienst
+  `degraded` nur wegen fehlender ETH-EUR-Minutenkerzen bei Bitvavo (alle Depots gleich, fail closed).
+- **Offen / Folgearbeit:** Laborvariante `usdc` in Spec 016; Gebührenwährung auf BTC/USDC (vermutlich USDC) erst
+  mit Echtgeld (M2) bestätigbar.
+- **Neue ADRs / Learnings:** ADR-0029, ADR-0030.
