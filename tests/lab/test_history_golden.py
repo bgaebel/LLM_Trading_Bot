@@ -19,14 +19,16 @@ from lab_captures import MARKETS, Capture, captures, merged
 from llm_trading_bot.lab.history import ConstantSpreads, HistoricalClient, MemorySource
 from llm_trading_bot.llm.agents import BotConfig
 from llm_trading_bot.market.bitvavo import TIMEFRAMES, BitvavoClient
-from llm_trading_bot.market.models import ClosedCandles, QuoteBook, Symbol
+from llm_trading_bot.market.models import QUOTE_MARKETS, SYMBOLS, ClosedCandles, QuoteBook
 from llm_trading_bot.market.snapshot import MarketClient
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
 from llm_trading_bot.paper.risk import Controls
+from llm_trading_bot.paper.usdc import BUYHOLD_USDC
 
 CLASSIC = ("trend", "breakout", "meanrev", "ensemble")
+USDC = tuple(f"{name}-usdc" for name in CLASSIC)
 OFFSET = 5
 """Captures are taken at k*60 + 5 s, like the service's rounds."""
 
@@ -66,7 +68,12 @@ def test_fixture_is_real_and_shaped_like_the_live_request() -> None:
     assert any(b - a == 60 for a, b in pairwise(ats))
     assert any(a // 900 != b // 900 for a, b in pairwise(ats))
     for capture in items:
-        assert {s.market for s in frozen_book(capture)} == set(MARKETS)
+        book = frozen_book(capture)
+        # Since Spec 020 the live client also reads the quote-only markets of the USDC route
+        # from the same /ticker/book response; the frozen bodies hold them, unchanged.
+        assert {s.market for s in book if s in SYMBOLS} == set(MARKETS)
+        assert all(s in book for s in QUOTE_MARKETS), book.errors
+        assert not book.errors
         for market in MARKETS:
             for interval in TIMEFRAMES:
                 rows = capture.rows(market, interval)
@@ -104,7 +111,9 @@ def test_closed_candles_equal_live_client(capture: Capture) -> None:
     forming_seen = 0
     # At the round time and at the exact minute edge before it (open + step == now there).
     for now in (capture.at, capture.at - OFFSET):
-        for symbol in Symbol:
+        # The candle markets only: live never requests candles of BTC-USDC or USDC-EUR
+        # (Spec 020), and the frozen captures hold none.
+        for symbol in SYMBOLS:
             for interval in TIMEFRAMES:
                 want = real.closed_candles(symbol, interval, now_epoch=now)
                 got = hist.closed_candles(symbol, interval, now_epoch=now)
@@ -127,9 +136,12 @@ def _digest(con: sqlite3.Connection) -> dict[str, str]:
     return out
 
 
-def _run(clients: list[tuple[int, MarketClient]]) -> tuple[dict[str, str], sqlite3.Connection]:
-    con = open_db(Path(":memory:"), agents=(*CLASSIC, BUYHOLD))
-    config = BotConfig(CLASSIC, None)
+def _run(
+    clients: list[tuple[int, MarketClient]], usdc: tuple[str, ...] = ()
+) -> tuple[dict[str, str], sqlite3.Connection]:
+    # Explicit: without USDC depots unless asked for, never the BOT_USDC_AGENTS default.
+    config = BotConfig(CLASSIC, None, usdc)
+    con = open_db(Path(":memory:"), agents=config.depots)
     for at, client in clients:
         report = paper_cycle(
             con,
@@ -143,7 +155,7 @@ def _run(clients: list[tuple[int, MarketClient]]) -> tuple[dict[str, str], sqlit
     return _digest(con), con
 
 
-def _hist_run(source: str) -> tuple[dict[str, str], sqlite3.Connection]:
+def _hist_run(source: str, usdc: tuple[str, ...] = ()) -> tuple[dict[str, str], sqlite3.Connection]:
     items = captures()
     end = items[-1].at + 1
     shared = merged(items)
@@ -159,11 +171,11 @@ def _hist_run(source: str) -> tuple[dict[str, str], sqlite3.Connection]:
             quotes=fixed(frozen_book(capture)),
         )
         clients.append((capture.at, hist))
-    return _run(clients)
+    return _run(clients, usdc)
 
 
-def _live_run() -> tuple[dict[str, str], sqlite3.Connection]:
-    return _run([(c.at, live(c)) for c in captures()])
+def _live_run(usdc: tuple[str, ...] = ()) -> tuple[dict[str, str], sqlite3.Connection]:
+    return _run([(c.at, live(c)) for c in captures()], usdc)
 
 
 def test_paper_cycle_checksums_equal() -> None:
@@ -178,6 +190,29 @@ def test_paper_cycle_checksums_equal() -> None:
     assert con_live.execute("SELECT COUNT(*) FROM trades WHERE agent=?", (BUYHOLD,)).fetchone()[0]
     points = con_live.execute("SELECT COUNT(DISTINCT agent) FROM equity").fetchone()[0]
     assert points == len(CLASSIC) + 1
+    # Without USDC depots the bot stores exactly the v0.3.1 markets, as before Spec 020.
+    stored = {r[0] for r in con_live.execute("SELECT symbol FROM market")}
+    assert stored == {s.name for s in SYMBOLS}
+    con_live.close()
+    con_hist.close()
+
+
+def test_paper_cycle_checksums_equal_with_usdc_depots() -> None:
+    """Spec 020 in the lab: the USDC depots decide on the same candles and trade on the frozen
+    BTC-USDC and USDC-EUR quotes; the historical client gives the same rows as live."""
+    want, con_live = _live_run(USDC)
+    got, con_hist = _hist_run("per-capture", USDC)
+    assert got == want
+    decided = con_live.execute(
+        "SELECT COUNT(*) FROM decisions WHERE agent LIKE '%-usdc' AND agent != ?", (BUYHOLD_USDC,)
+    ).fetchone()[0]
+    assert decided >= 8
+    bought = con_live.execute(
+        "SELECT symbol FROM trades WHERE agent=? ORDER BY symbol", (BUYHOLD_USDC,)
+    ).fetchall()
+    assert [r[0] for r in bought] == ["BTCUSDC", "ETHEUR"]
+    points = con_live.execute("SELECT COUNT(DISTINCT agent) FROM equity").fetchone()[0]
+    assert points == 2 * len(CLASSIC) + 2
     con_live.close()
     con_hist.close()
 
