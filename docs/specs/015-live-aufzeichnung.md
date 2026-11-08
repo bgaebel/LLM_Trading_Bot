@@ -99,7 +99,7 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
 - [x] 4. Aufzeichnungspunkte in Snapshot, Zyklus, GPT; Größenmessung (AK4)
 - [x] 5. Statusfelder (AK5)
 - [x] 6. Sicherungsprofil und Deploy-Anpassung (AK6, AK7)
-- [ ] 7. Doku, ADR, Prüfung (Workflow), PR (AK9)
+- [x] 7. Doku, ADR, Prüfung (Workflow), PR (AK9)
 - [ ] 8. Mit Zustimmung: Deploy, Stichprobe (AK8)
 
 ## Risiken & offene Fragen
@@ -123,6 +123,11 @@ für Treue-Test (Spec 016) und Signal-Auswertung (Spec 017).
   halben Jahres planen (neues ADR, da nur anhängend). Statusleser ignorieren jetzt unbekannte Felder (ältere Leser
   vertragen neuere Dateien ab 015); `llm_due` bleibt `bool`, `due_reason` liefert den Grund; vierter Buch-Zweck
   `snapshot` (Abfrage in `build_snapshots`).
+- 2026-11-08: Review-Workflow (4 Blickwinkel, 12 bestätigt nach Gegenprüfung, dedupliziert 8; 4 widerlegt), behoben:
+  Codes und Rohzeilen abgelehnter Quotes (`spread`/`parse`/`conflict`, HTTP-Ausfall `http`) statt immer
+  `quote_missing`; budget-blockierte GPT-Versuche und Verweigerungstexte aufgezeichnet; Snapshot-Ergebnisse auch bei
+  einer Runde, die danach scheitert; ignorierte Doppelzeilen gemeldet (nach `bot.db`-Restore); atomares Anlegen
+  (Temp-Datei + Link); WAL bei jedem Öffnen; letzter Fehler nach Erfolg gelöscht.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

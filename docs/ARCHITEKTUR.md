@@ -109,7 +109,13 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
     `trade_to_target`, `mark(con, agent, qs, now, costs) -> RiskStop | None` (Drawdown-Stopp, `DRAWDOWN_KILL =
     0.10`), `initialize_buyhold`, `record_quotes` (je Markt), `fresh_quotes` (je Markt), `latest_quotes` (beide
     oder None), `value`, `current_weight`, `covers`, `unquoted_holdings`
-  - `cycle`: `paper_cycle(con, client, config, costs=, model=, clock=, stop_requested=, controls=) -> CycleReport`
+  - `observations` (Spec 015, ADR-0027): `ObservationBuffer` (während der Runde, nur Speicher, `note` schluckt jeden
+    Fehler), `ObservationWriter(path)` (schreibt nach der Runde in `observations.db`, nie eine Ausnahme, zählt
+    Fehler, schaltet bei beschädigter/anderer Version ab), `changed_windows` (Fenster nur bei Änderung),
+    `release_sha`; `observations_schema`: `create` (atomar über Temp-Datei), `check_observations_schema`,
+    `OBS_SCHEMA_VERSION = 1`
+  - `cycle`: `paper_cycle(con, client, config, costs=, model=, clock=, stop_requested=, controls=, observations=)
+    -> CycleReport`
     (bei Stopp-Wunsch keine GPT-Anfrage, Status `STOPPING`; bewertet wird trotzdem), `STRATEGY_TIMEFRAME`,
     `quote_problem`
   - `risk`: `read_controls(env, secrets) -> Controls` (Handelspause, Freigaben; fail-closed),
@@ -247,6 +253,10 @@ die nächste Runde am nächsten freien Termin. Anders als in der Arena (getrennt
 alles in einer Runde (ADR-0017); einen schnellen Kurs-/Risiko-Worker gibt es bewusst nicht (ADR-0021, neu
 bewerten mit M2). Die Weboberfläche liest
 parallel nur lesend (ADR-0016) und dazu `service-status.json`.
+Beobachtungen (Spec 015, ADR-0027): Während der Runde landen Buch-Abfragen, Kerzenfenster, Snapshot-Ergebnisse,
+Entscheidungs-Metadaten und GPT-Versuche nur in einem Puffer; nach der Runde schreibt der Dienst ihn in
+`observations.db`, außerhalb jeder `bot.db`-Transaktion (≤ 1 s Wartezeit). Ein Fehler dort ändert weder Handel noch
+Rundenergebnis, nur die Zähler `observations_*` in der Statusdatei.
 
 ## Externe Schnittstellen
 | Schnittstelle | Protokoll / Format | Spezifikation |
