@@ -85,8 +85,8 @@ def test_fifo_cases_from_arena() -> None:
     # Arena test_fifo_realized_profit_allocates_buy_and_sell_fees: 0.5 * (118.8 - 101) = 8.9.
     a = fifo([trade(0, "BUY", 1, 100, 1), trade(60, "SELL", 0.5, 60, 0.6)])
     assert a.realized_pnl == pytest.approx(8.9)
-    assert a.open_lots[BTC].quantity == 0.5
-    assert a.open_lots[BTC].cost_basis == pytest.approx(50.5)
+    assert a.open_lots[("trend", BTC)].quantity == 0.5
+    assert a.open_lots[("trend", BTC)].cost_basis == pytest.approx(50.5)
     (only,) = a.round_trips
     assert [only.qty, only.cost, only.proceeds] == pytest.approx([0.5, 50.5, 59.4])
     assert a.round_trips[0].net_return == pytest.approx(8.9 / 50.5)
@@ -112,8 +112,8 @@ def test_fifo_cases_from_arena() -> None:
     assert [first.context, second.context] == [{"regime": "TREND"}, {"regime": "RANGE"}]
     assert [t.opened - Q.start for t in c.round_trips] == [0, 60]
     assert c.realized_pnl == pytest.approx(1.75)
-    assert c.open_lots[BTC].quantity == pytest.approx(0.5)
-    assert c.open_lots[BTC].cost_basis == pytest.approx(60.6)
+    assert c.open_lots[("trend", BTC)].quantity == pytest.approx(0.5)
+    assert c.open_lots[("trend", BTC)].cost_basis == pytest.approx(60.6)
 
     # Lots are per agent and market; the drawdown stop's RISK_SELL closes like a SELL.
     d = fifo(
@@ -127,7 +127,8 @@ def test_fifo_cases_from_arena() -> None:
     assert d.realized_pnl is None and d.opening_inventory_unknown
     assert [(t.market, t.agent) for t in d.round_trips] == [(ETH, "trend")]
     assert d.round_trips[0].pnl == pytest.approx(17.82 - 20.2)
-    assert d.open_lots[BTC].quantity == 1
+    # Only open positions are listed: ETH is closed, meanrev never held anything.
+    assert list(d.open_lots) == [("trend", BTC)] and d.open_lots[("trend", BTC)].quantity == 1
 
     with pytest.raises(ValueError, match="side"):
         fifo([trade(0, "SHORT", 1, 100, 1)])
@@ -159,6 +160,7 @@ def test_depot_metrics_hand_case() -> None:
     assert m.turnover == pytest.approx(8100 / 10_000)
     assert m.roundtrip_volume == pytest.approx(4050)
     assert m.round_trips == 1 and m.trades == 2
+    assert m.drawdown_basis == "Tagesende"
     assert m.realized_pnl == pytest.approx(4100 - 10.25 - 4010)
     # Peak 10,200 on day 2, then 10,079.75.
     assert m.max_drawdown == pytest.approx(1 - end / 10_200)
@@ -467,3 +469,147 @@ def test_summary_is_json_friendly_and_refuses_mixed_variants() -> None:
     other = result({}, quarter=Quarter.parse("2022Q2"), variant=Variant(name="fee x2"))
     with pytest.raises(ValueError, match="mix variants"):
         summarize([q, other])
+    assert s.data_issues == [] and s.uncertainty_missing == {}
+
+
+# --- wave-1 review: open lots, daily_mid convention, data gaps, drawdown basis ------------
+
+
+def test_open_lots_per_agent_and_market() -> None:
+    # Review finding: keyed by market alone, zeta's empty queue overwrote alpha's open lot.
+    f = fifo(
+        [
+            trade(0, "BUY", 1, 100, 1, agent="alpha"),
+            trade(5, "BUY", 2, 20, 0.2, market=ETH, agent="zeta"),
+            trade(9, "SELL", 1, 100, 1, agent="zeta"),
+        ]
+    )
+    assert list(f.open_lots) == [("alpha", BTC), ("zeta", ETH)]
+    assert f.open_lots[("alpha", BTC)] == metrics.OpenLots(1, 101)
+    assert f.open_lots[("zeta", ETH)].quantity == 2
+    assert f.open_lots[("zeta", ETH)].cost_basis == pytest.approx(20.2)
+    assert f.opening_inventory_unknown  # zeta sold BTC it never bought
+    closed = fifo([trade(0, "BUY", 1, 100, 1), trade(9, "SELL", 1, 110, 1)])
+    assert closed.open_lots == {}
+
+
+FREE = Variant(fee_rate=0.0, slippage=0.0)
+
+
+def test_daily_mid_first_entry_is_the_base_labelled_the_previous_day() -> None:
+    depot = DepotResult("trend", days([10_100.0, 10_000.0], [{BTC: 1.0}] * 2), end_mid=10_000.0)
+    rows = [("2021-12-31", 100.0), ("2022-01-01", 101.0), ("2022-01-02", 100.0)]
+    b = benchmark(result({"trend": depot}, daily_mid={BTC: rows}, variant=FREE), "trend")
+    # The base (quarter's first round, labelled 2021-12-31) is never a benchmark day itself;
+    # it only gives day 1 its return.
+    assert b.days == ["2022-01-01", "2022-01-02"]
+    assert b.returns == [pytest.approx(0.01), pytest.approx(100 / 101 - 1)]
+    assert b.issues == []
+
+    # Without the base, day 1 has no return: left out, but flagged instead of dropped silently.
+    q = result({"trend": depot}, daily_mid={BTC: rows[1:]}, variant=FREE)
+    short = benchmark(q, "trend")
+    assert short.days == ["2022-01-02"]
+    (issue,) = short.issues
+    assert (issue.quarter, issue.agent, issue.market) == ("2022Q1", "trend", BTC)
+    assert (issue.missing_days, issue.depot_days) == (["2022-01-01"], 2)
+    assert issue.text == (
+        "2022Q1 trend: Tageskurs BTC-EUR ohne Vortag an 1 von 2 Tagen (2022-01-01); "
+        "Benchmark und Unsicherheit ohne diese Tage"
+    )
+    m = depot_metrics(q, "trend")
+    assert not m.benchmark_complete and m.benchmark_days == 1 and m.data_issues == [issue]
+    full = depot_metrics(result({"trend": depot}, daily_mid={BTC: rows}, variant=FREE), "trend")
+    assert full.benchmark_complete and full.benchmark_days == 2 and full.data_issues == []
+
+
+def test_gap_in_daily_mid_is_never_booked_as_one_day() -> None:
+    depot = DepotResult("trend", days([10_000.0] * 3, [{BTC: 1.0}] * 3))
+    # 2022-01-02 is missing: the +21 % from 01-01 to 01-03 spans two days.
+    rows = [("2021-12-31", 100.0), ("2022-01-01", 100.0), ("2022-01-03", 121.0)]
+    b = benchmark(result({"trend": depot}, daily_mid={BTC: rows}, variant=FREE), "trend")
+    assert b.days == ["2022-01-01"] and b.returns == [0.0] and b.total == 0.0
+    (issue,) = b.issues
+    assert issue.missing_days == ["2022-01-02", "2022-01-03"]
+    assert "an 2 von 3 Tagen (2022-01-02 bis 2022-01-03)" in issue.text
+
+    # Broken input is an error, not a gap.
+    bad_rows: list[tuple[list[tuple[str, float]], str]] = [
+        ([("2022-01-01", 100.0), ("2022-01-01", 101.0)], "increase"),
+        ([("2022-01-02", 100.0), ("2022-01-01", 101.0)], "increase"),
+        ([("2021-12-31", 100.0), ("2022-01-01", 0.0)], "mid"),
+        ([("2021-12-31", 100.0), ("2022-01-01", math.nan)], "mid"),
+    ]
+    for bad, match in bad_rows:
+        with pytest.raises(ValueError, match=match):
+            benchmark(result({"trend": depot}, daily_mid={BTC: bad}), "trend")
+
+
+def test_gap_in_the_depot_series_is_flagged() -> None:
+    points = [
+        DayPoint("2022-01-01", 10_000.0, 10_000.0, {}),
+        DayPoint("2022-01-03", 9_000.0, 9_000.0, {}),
+    ]
+    b = benchmark(result({"trend": DepotResult("trend", points)}), "trend")
+    # A cash depot needs no daily_mid; its own two-day step is still not a daily return.
+    assert b.days == ["2022-01-01"]
+    (issue,) = b.issues
+    assert (issue.market, issue.missing_days) == (metrics.DEPOT_SERIES, ["2022-01-03"])
+    assert "Depotwert ohne Vortag" in issue.text
+    # Day 1 is measured against the start capital, so it must be the quarter's first day.
+    late = result({"trend": DepotResult("trend", points[:1])}, quarter=Quarter.parse("2022Q2"))
+    assert benchmark(late, "trend").issues[0].missing_days == ["2022-01-01"]
+
+
+def _with_depot(q: QuarterResult, agent: str, weights: dict[str, float]) -> QuarterResult:
+    values = [p.value for p in q.depots["trend"].days]
+    q.depots[agent] = DepotResult(agent, days(values, [weights] * len(values)))
+    return q
+
+
+def test_one_depot_without_mids_keeps_the_other_bands() -> None:
+    # Review finding: meanrev holds ETH, daily_mid has BTC only; the intersection over all
+    # depots used to drop to 0 days and wipe the bands of every depot.
+    q = _with_depot(_with_depot(_bootstrap_quarter(), "meanrev", {ETH: 0.3}), "breakout", {})
+    s = summarize([q], draws=50, seed=7)
+    alone = uncertainty([_bootstrap_quarter()], "trend", draws=50, seed=7)
+    assert s.uncertainty["trend"] == alone
+    # A cash depot needs no daily_mid and shares trend's days (and index stream).
+    assert s.uncertainty["breakout"].days == 12 and s.uncertainty["breakout"].excluded_days == 0
+    assert set(s.uncertainty) == {"breakout", "trend"}
+    assert s.uncertainty_missing == {
+        "meanrev": "keine Bänder: weniger als zwei gewertete Tage mit Benchmark (0)"
+    }
+    (issue,) = s.data_issues
+    assert (issue.agent, issue.market, len(issue.missing_days)) == ("meanrev", ETH, 12)
+    assert issue.text.startswith("2022Q1 meanrev: keine Tageskurse für ETH-EUR an 12 von 12")
+    complete = {m.agent: m.benchmark_complete for m in s.depots}
+    assert complete == {"breakout": True, "meanrev": False, "trend": True}
+    with pytest.raises(metrics.TooFewDays, match="got 0"):
+        uncertainty([q], "meanrev")
+
+
+def test_bands_per_depot_over_its_own_valid_days() -> None:
+    q = _with_depot(_bootstrap_quarter(), "meanrev", {ETH: 0.3})
+    eth = [("2021-12-31", 50.0)] + [(f"2022-01-{i + 1:02d}", 50.0 + i) for i in range(12)]
+    q.daily_mid[ETH] = [row for row in eth if row[0] != "2022-01-05"]
+    s = summarize([q], draws=50, seed=7)
+    # 01-05 is missing and 01-06 has no predecessor: two days out for meanrev only.
+    assert (s.uncertainty["meanrev"].days, s.uncertainty["meanrev"].excluded_days) == (10, 2)
+    assert (s.uncertainty["trend"].days, s.uncertainty["trend"].excluded_days) == (12, 0)
+    assert s.uncertainty["trend"] == uncertainty([_bootstrap_quarter()], "trend", draws=50, seed=7)
+    (issue,) = s.data_issues
+    assert issue.missing_days == ["2022-01-05", "2022-01-06"]
+
+
+def test_drawdown_basis_is_end_of_day() -> None:
+    # The stop fired intraday (halted_at), but only end-of-day values reach the metric.
+    depot = DepotResult(
+        "trend", days([9_500.0, 9_500.0], [{}, {}]), halted_at=Q.start + 3_600, end_mid=9_500.0
+    )
+    m = depot_metrics(result({"trend": depot}), "trend")
+    assert m.max_drawdown == pytest.approx(0.05) and m.halted_at is not None
+    assert m.drawdown_basis == metrics.DRAWDOWN_BASIS == "Tagesende"
+    s = summarize([result({"trend": depot})], draws=10)
+    assert s.drawdown_basis == "Tagesende"
+    assert json.loads(json.dumps(asdict(s), allow_nan=False))["drawdown_basis"] == "Tagesende"
