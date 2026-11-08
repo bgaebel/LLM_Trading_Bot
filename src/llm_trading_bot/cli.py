@@ -36,10 +36,11 @@ from llm_trading_bot.ops.backup import (
 )
 from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME, paper_cycle
 from llm_trading_bot.paper.db import SchemaError, open_db
-from llm_trading_bot.paper.execution import BUYHOLD, Costs
+from llm_trading_bot.paper.execution import Costs
 from llm_trading_bot.paper.lock import WriterLock, WriterLockBusy
 from llm_trading_bot.paper.report import CycleReport, LlmOutcome, MarketResult
 from llm_trading_bot.paper.risk import read_controls
+from llm_trading_bot.paper.usdc import strategy_of
 from llm_trading_bot.service.logs import setup_logging
 from llm_trading_bot.service.notify import Notifier
 from llm_trading_bot.service.run import Service, install_stop_signals
@@ -181,8 +182,8 @@ def _market_line(m: MarketResult) -> str:
     if m.error:
         return f"{m.agent} {m.symbol.market}: no decision - {m.error}"
     assert m.bar_ts is not None
-    if m.agent in STRATEGY_TIMEFRAME:
-        when = f"{STRATEGY_TIMEFRAME[m.agent]}m bar opened {_utc(m.bar_ts)}"
+    if (strategy := strategy_of(m.agent)) in STRATEGY_TIMEFRAME:
+        when = f"{STRATEGY_TIMEFRAME[strategy]}m bar opened {_utc(m.bar_ts)}"
     else:
         when = f"attempt {m.attempt}"
     state = "new" if m.new else "already decided"
@@ -220,6 +221,8 @@ def print_cycle(report: CycleReport, costs: Costs, *, out: TextIO) -> None:
         return
     bought = report.buyhold_bought
     print(f"buy & hold: {f'bought {bought} market(s)' if bought else 'already invested'}", file=out)
+    if bought_usdc := report.buyhold_usdc_bought:
+        print(f"buy & hold USDC: bought {bought_usdc} market(s)", file=out)
     for o in report.llm:
         print(_llm_line(o), file=out)
     for m in report.markets:
@@ -264,7 +267,7 @@ def run_paper_cycle(
     model = model_factory(config.llm.api_key) if config.llm else None
     try:
         with WriterLock(db):
-            con = open_db(db, agents=(*config.agents, BUYHOLD))
+            con = open_db(db, agents=config.depots)
             try:
                 report = paper_cycle(
                     con,

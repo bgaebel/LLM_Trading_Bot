@@ -108,3 +108,33 @@ class ScenarioClient:
         if symbol in self.fail_candles:
             raise HTTPFailure(500)
         return tuple(Candle(*row) for row in build_bars(self.params[symbol])[interval])
+
+
+USDC_EUR = Quote(0.8975, 0.8976)
+"""Spec 020: USDC-EUR near the price measured on 2026-11-08 (mid 0.89775), spread 1.1 bp."""
+
+
+class UsdcScenarioClient(ScenarioClient):
+    """ScenarioClient whose book also holds BTC-USDC and USDC-EUR (Spec 020).
+
+    BTC-USDC follows the scenario's BTC-EUR price through ``USDC_EUR`` with a 2 bp spread, so
+    the route and BTC-EUR describe the same market. ``usdc_quotes`` overrides, ``drop_usdc``
+    leaves a quote-only market out of the book.
+    """
+
+    def __init__(self, btc: str = "up-calm-plain-s1", eth: str = "up-calm-plain-s1") -> None:
+        super().__init__(btc, eth)
+        bid, ask = quote_for(self.params[Symbol.BTCEUR], build_bars(self.params[Symbol.BTCEUR]))
+        mid = (bid + ask) / 2 / USDC_EUR.mid
+        self.usdc_quotes: dict[Symbol, Quote] = {
+            Symbol.BTCUSDC: Quote(mid * (1 - 0.0001), mid * (1 + 0.0001)),
+            Symbol.USDCEUR: USDC_EUR,
+        }
+        self.drop_usdc: set[Symbol] = set()
+
+    def quotes(self) -> QuoteBook:
+        book = super().quotes()
+        for symbol, quote in self.usdc_quotes.items():
+            if symbol not in self.drop_usdc:
+                book[symbol] = quote
+        return book
