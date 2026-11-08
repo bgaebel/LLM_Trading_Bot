@@ -190,6 +190,8 @@ def _page(
         '<link rel="stylesheet" href="/app.css"></head>'
         + ('<body class="live">' if refresh else "<body>")
         + (BACKDROP if backdrop else "")
+        # Header and ticker stay on screen while the page scrolls (user 2026-11-08).
+        + '<div class="masthead">'
         + f'<header><a class="brand" href="/">{LOGO}<div><p class="brand-name">LLM '
         '<span>Trading</span> Bot</p><div class="brand-sub">Paper-Terminal · BTC/EUR · ETH/EUR'
         f"</div></div></a>{tabs}"
@@ -198,7 +200,7 @@ def _page(
         f'<span class="chip net">127.0.0.1</span>{logout}</div></header>'
         # The track holds the items twice so the loop has no visible seam.
         f'<div class="ticker" aria-hidden="true"><div class="ticker-track{phase}">'
-        f"{items}{items}</div></div><main{view}>{body}</main>"
+        f"{items}{items}</div></div></div><main{view}>{body}</main>"
         "<footer><span>Paper-Modus · kein Echtgeld (ADR-0004)</span>"
         "<span>App nur auf 127.0.0.1 · von außen per HTTPS oder SSH-Tunnel (ADR-0028)</span>"
         + files
