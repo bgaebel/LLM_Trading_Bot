@@ -287,9 +287,19 @@ def trial_key(config: str, quarter: Quarter, variant: Variant) -> str:
     return sha256_text(canonical({"config": config, "window": window, "variant": variant.name}))
 
 
+def result_identity(result: QuarterResult) -> str:
+    """The result as ``to_json`` writes it, but with the variant as ``variant_identity`` gives
+    it: a later field at its old value is left out, exactly as in the config hash. Only then
+    does a run recorded before that field existed recompute to its stored outcome hash
+    (``verify``); ``to_json`` itself always writes every field."""
+    data = dataclasses.asdict(result)
+    data["variant"] = variant_identity(result.variant)
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+
 def outcome_sha256(result: QuarterResult) -> str:
     """Checksum of a result without its wall-clock runtime, which differs on every repeat."""
-    return sha256_text(dataclasses.replace(result, seconds=0.0).to_json())
+    return sha256_text(result_identity(dataclasses.replace(result, seconds=0.0)))
 
 
 def daily_returns(depot: DepotResult, start_cash: float = START_CASH) -> list[tuple[str, float]]:

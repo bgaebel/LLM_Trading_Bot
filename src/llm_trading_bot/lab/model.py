@@ -97,8 +97,8 @@ class Variant:
     usdc: bool = False
     """AK14: the USDC depots (``USDC_DEPOTS``) instead of v0.3.1, BTC over the USDC route with
     the costs of ``paper.usdc``; ``fee_rate``/``slippage`` stay the costs of ETH-EUR. Added after
-    the first runs: ``register.config_hash`` leaves it out while it is False, so the hashes of
-    earlier runs stay valid."""
+    the first runs: ``register.variant_identity`` leaves it out while it is False, for the config
+    hash and the outcome hash alike, so the hashes of earlier runs stay valid."""
 
     @property
     def roundtrip(self) -> float:

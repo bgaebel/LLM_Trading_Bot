@@ -3,6 +3,7 @@
 import dataclasses
 import html
 import io
+import json
 import re
 import sqlite3
 import time
@@ -430,6 +431,27 @@ def test_cli_refuses_broken_chain(tmp_path: Path) -> None:
     assert cli_main("report", ["--dir", str(tmp_path)], out) == 1
     assert "Kette fehlerhaft" in out.getvalue()
     assert not (tmp_path / REPORTS_DIR).exists()
+
+
+def test_cli_reports_runs_recorded_before_the_variant_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A register written by the code before ``Variant.usdc`` (no "usdc" key in the stored
+    results) still verifies, so the report is written instead of refused."""
+
+    def old_to_json(self: QuarterResult) -> str:
+        data = dataclasses.asdict(self)
+        del data["variant"]["usdc"]
+        return json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+    with monkeypatch.context() as m:
+        m.setattr(QuarterResult, "to_json", old_to_json)
+        with Register.open(tmp_path / RUNS_FILE, tmp_path / CHAIN_FILE, code=CODE) as reg:
+            reg.record(recordable("2022Q1", SMALL))
+    out = io.StringIO()
+    assert cli_main("report", ["--dir", str(tmp_path)], out) == 0, out.getvalue()
+    assert "Bericht geschrieben" in out.getvalue()
+    assert "Kette fehlerhaft" not in out.getvalue()
 
 
 # --- review findings (Spec 016 report check) -----------------------------------------------

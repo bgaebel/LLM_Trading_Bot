@@ -21,6 +21,7 @@ from llm_trading_bot.lab.model import (
     Trade,
     Variant,
 )
+from llm_trading_bot.lab import register as register_module
 from llm_trading_bot.lab.paths import CHAIN_FILE, LAB_DIR_ENV, RUNS_FILE
 from llm_trading_bot.lab.register import (
     CEILING_ENV,
@@ -282,6 +283,39 @@ def test_variant_field_added_later_keeps_earlier_hashes() -> None:
     old = QuarterResult.from_json(json.dumps(data))
     assert old.variant == Variant()
     assert config_hash(old.variant, COMMIT) == sha256_text(canonical(before))
+
+
+def old_to_json(self: QuarterResult) -> str:
+    """``QuarterResult.to_json`` of the code before ``Variant.usdc`` (commit 7891ed7): the same
+    serialisation, the variant without the key - what that code stored and hashed."""
+    data = dataclasses.asdict(self)
+    del data["variant"]["usdc"]
+    return json.dumps(data, sort_keys=True, separators=(",", ":"))
+
+
+def test_run_recorded_before_the_variant_field_still_verifies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review finding (Spec 016 AK14): the outcome hash hashed ``to_json``, which now always
+    writes ``"usdc": false``; a run the code before the field recorded then failed ``verify``
+    ("columns differ ... in outcome_sha256") and every report and chain copy was refused."""
+    with monkeypatch.context() as m:
+        m.setattr(QuarterResult, "to_json", old_to_json)
+        with open_reg(tmp_path) as reg:
+            reg.record(result())
+    with open_reg(tmp_path) as reg:
+        (stored,) = reg.con.execute("SELECT result_json FROM runs").fetchall()
+        assert '"usdc"' not in stored[0]  # really the old layout
+        check = reg.verify()
+        assert check.ok, check.problems
+        assert reg.copy_chain(tmp_path / "copy" / CHAIN_FILE).ok
+        # The same result recorded by today's code is the same outcome: merged as a repeat.
+        again = reg.record(result())
+        assert again.merged
+        assert reg.verify().ok
+    # The rule is shared with the config hash: the variant serialises without usdc=False only.
+    assert '"usdc"' not in register_module.result_identity(result())
+    assert '"usdc":true' in register_module.result_identity(result(variant=Variant(usdc=True)))
 
 
 def test_usdc_run_recorded_with_its_own_depots_and_version(tmp_path: Path) -> None:
