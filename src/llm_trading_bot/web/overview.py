@@ -6,8 +6,8 @@ after fees and slippage because the paper execution books them.
 """
 
 import sqlite3
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from decimal import Decimal
 
@@ -16,7 +16,7 @@ from llm_trading_bot.llm.due import iso
 from llm_trading_bot.market.models import QUOTE_MARKETS, SYMBOLS, Symbol
 from llm_trading_bot.paper.db import START_CASH
 from llm_trading_bot.paper.execution import BENCHMARKS, BUYHOLD
-from llm_trading_bot.paper.usdc import is_usdc
+from llm_trading_bot.paper.usdc import BUYHOLD_USDC, is_usdc
 from llm_trading_bot.service.status import ServiceStatus
 
 MAX_POINTS = 240
@@ -30,6 +30,13 @@ NO_SERVICE = "kein Dienst"
 SERVICE_RUNNING_SECONDS = 3 * 60
 """The service runs a round every minute (ADR-0017): three missed rounds are a delay."""
 SERVICE_DELAYED_SECONDS = 15 * 60
+ACTIVE_SECONDS = DELAYED_SECONDS
+"""Spec 021 (ADR-0031): a depot is shown while its newest equity point is at most this much
+older than the newest one of the database. The web cannot see which depots the bot runs
+(ADR-0016), but a running depot gets a point every round; a switched-off one leaves within an
+hour, while a depot that misses some rounds (a held market without a fresh quote) stays."""
+REFERENCES = (BUYHOLD_USDC, BUYHOLD)
+"""Spec 021: the reference of the "vs." column, preferred first, among the shown depots."""
 
 
 def epoch(ts: str) -> float:
@@ -57,11 +64,15 @@ class DepotRow:
     pnl_eur: float
     pnl_pct: float
     vs_buyhold_pp: float | None
-    """Percentage points ahead of (positive) or behind Buy & Hold; None for Buy & Hold itself."""
+    """Percentage points ahead of (positive) or behind the reference since the reference's
+    start (Spec 021); None for the reference itself, without reference, or for a depot without
+    an equity point at that start."""
     from_peak_pct: float = 0.0
     """Equity against the depot's all-time peak in percent (<= 0); ADR-0021 stops at -10 %."""
     stopped_at: str | None = None
     """Time of the depot's latest RISK_SELL (the stop); None if it never had one."""
+    active: bool = True
+    """Valued recently enough to be shown (``ACTIVE_SECONDS``, Spec 021)."""
 
     @property
     def reference(self) -> bool:
@@ -74,7 +85,51 @@ class DepotRow:
         return is_usdc(self.agent)
 
 
+@dataclass(frozen=True)
+class Reference:
+    """What the "vs." column compares with (Spec 021, ADR-0031)."""
+
+    agent: str
+    since: str
+    """Time of the reference's first equity point: the comparison starts there."""
+    start: float
+    """The reference's equity at ``since``."""
+
+
 def depots(con: sqlite3.Connection) -> list[DepotRow]:
+    """Every depot with a portfolio, also switched-off ones (the release of a stopped depot is
+    offered for each of them, Spec 011); ``active`` says which the overview shows."""
+    return _depots(con)[0]
+
+
+def _reference(con: sqlite3.Connection, rows: Sequence[DepotRow]) -> Reference | None:
+    shown = {d.agent for d in rows if d.active}
+    agent = next((a for a in REFERENCES if a in shown), None)
+    if agent is None:
+        return None
+    # Through the (ts, agent) index; rows before the reference's start are a fixed number.
+    first = con.execute(
+        "SELECT ts, value FROM equity WHERE agent=? ORDER BY ts LIMIT 1", (agent,)
+    ).fetchone()
+    if first is None or not first["value"] > 0:
+        return None
+    return Reference(agent, first["ts"], float(first["value"]))
+
+
+def _vs(con: sqlite3.Connection, d: DepotRow, ref: Reference, ref_now: float) -> float | None:
+    """Both returns over the same span: from the reference's first point until now."""
+    if d.agent == ref.agent or d.at is None or not d.active:
+        return None
+    base = con.execute(
+        "SELECT value FROM equity WHERE agent=? AND ts<=? ORDER BY ts DESC LIMIT 1",
+        (d.agent, ref.since),
+    ).fetchone()
+    if base is None or not base["value"] > 0:
+        return None
+    return (d.value / float(base["value"]) - 1) * 100 - (ref_now / ref.start - 1) * 100
+
+
+def _depots(con: sqlite3.Connection) -> tuple[list[DepotRow], Reference | None]:
     rows = con.execute(
         "SELECT p.agent, p.halted, p.peak, p.cash AS p_cash, p.btc AS p_btc, p.eth AS p_eth,"
         # The stop's forced sale is the depot's last trade; a stop without coins to sell has
@@ -91,12 +146,13 @@ def depots(con: sqlite3.Connection) -> list[DepotRow]:
             raw.append((r["agent"], r["p_cash"], r["p_cash"], r["p_btc"], r["p_eth"], None, r))
         else:
             raw.append((r["agent"], r["value"], r["cash"], r["btc"], r["eth"], r["ts"], r))
-    bench = next((v for agent, v, *_ in raw if agent == BUYHOLD), None)
-    bench_pct = None if bench is None else (bench / START_CASH - 1) * 100
+    # Equity stamps are whole seconds in one ISO format (due.iso): string order is time order.
+    stamps: list[str] = [r["ts"] for r in rows if r["ts"] is not None]
+    newest = max(stamps, default=None)
+    since = None if newest is None else iso(epoch(newest) - ACTIVE_SECONDS)
     out = []
     for agent, value, cash, btc, eth, at, r in raw:
         pct = (value / START_CASH - 1) * 100
-        vs = None if agent == BUYHOLD or bench_pct is None else pct - bench_pct
         peak = r["peak"]
         out.append(
             DepotRow(
@@ -109,14 +165,20 @@ def depots(con: sqlite3.Connection) -> list[DepotRow]:
                 bool(r["halted"]),
                 value - START_CASH,
                 pct,
-                vs,
+                None,
                 # The peak includes the latest point (mark updates both), so this is <= 0.
                 (value / peak - 1) * 100 if peak > 0 else 0.0,
                 r["stopped_at"],
+                # Before the first round no depot has a point: all are shown at their start cash.
+                since is None or (at is not None and at >= since),
             )
         )
-    # Trading depots first (alphabetical), the benchmark last as the reference line.
-    return sorted(out, key=lambda d: (d.reference, d.agent))
+    ref = _reference(con, out)
+    if ref is not None:
+        ref_now = next(d.value for d in out if d.agent == ref.agent)
+        out = [replace(d, vs_buyhold_pp=_vs(con, d, ref, ref_now)) for d in out]
+    # Trading depots first (alphabetical), the benchmarks last as the reference lines.
+    return sorted(out, key=lambda d: (d.reference, d.agent)), ref
 
 
 @dataclass(frozen=True)
@@ -204,10 +266,14 @@ def _agent_series(con: sqlite3.Connection, agent: str, limit: int) -> list[tuple
     return kept
 
 
-def equity_series(con: sqlite3.Connection, limit: int = MAX_POINTS) -> list[Series]:
-    agents = [r["agent"] for r in con.execute("SELECT DISTINCT agent FROM portfolios")]
+def equity_series(
+    con: sqlite3.Connection, limit: int = MAX_POINTS, agents: Collection[str] | None = None
+) -> list[Series]:
+    """One line per depot in ``agents`` (default: every depot with a portfolio)."""
+    if agents is None:
+        agents = [r["agent"] for r in con.execute("SELECT DISTINCT agent FROM portfolios")]
     series = [Series(a, tuple(points)) for a in agents if (points := _agent_series(con, a, limit))]
-    return sorted(series, key=lambda s: (s.agent == BUYHOLD, s.agent))
+    return sorted(series, key=lambda s: (s.agent in BENCHMARKS, s.agent))
 
 
 CYCLE_LABEL = "Letzter Zyklus"
@@ -395,7 +461,7 @@ def latest_decisions(con: sqlite3.Connection) -> list[DecisionRow]:
         )
         for r in rows
     ]
-    return sorted(out, key=lambda d: (d.agent == BUYHOLD, d.agent, d.market))
+    return sorted(out, key=lambda d: (d.agent in BENCHMARKS, d.agent, d.market))
 
 
 @dataclass(frozen=True)
@@ -470,11 +536,21 @@ class TradeRow:
     fee: float
 
 
-def recent_trades(con: sqlite3.Connection, limit: int = TRADES) -> list[TradeRow]:
+def recent_trades(
+    con: sqlite3.Connection, limit: int = TRADES, agents: Collection[str] | None = None
+) -> list[TradeRow]:
+    """The newest trades of ``agents`` (default: of every depot)."""
+    where = ""
+    args: tuple[str, ...] = ()
+    if agents is not None:
+        names = sorted(agents)
+        if not names:
+            return []
+        where, args = f" WHERE agent IN ({','.join('?' for _ in names)})", tuple(names)
     rows = con.execute(
         "SELECT ts, agent, symbol, side, qty, fill, notional, fee FROM trades"
-        " ORDER BY id DESC LIMIT ?",
-        (limit,),
+        f"{where} ORDER BY id DESC LIMIT ?",
+        (*args, limit),
     ).fetchall()
     return [
         TradeRow(
@@ -500,6 +576,8 @@ class Overview:
     llm: list[LlmToday]
     trades: list[TradeRow]
     quotes: list[Quote] = field(default_factory=list)
+    reference: Reference | None = None
+    """What the "vs." column compares with (Spec 021); None: no reference shown."""
 
 
 @dataclass
@@ -530,12 +608,18 @@ def load(
     service: Pulse | None = None,
     signals: SignalCache | None = None,
 ) -> Overview:
+    """Spec 021: only active depots, in every list (also on the public view, ADR-0028); the
+    history of the others stays in the database."""
+    rows, ref = _depots(con)
+    shown = {d.agent for d in rows if d.active}
+    decisions = latest_decisions(con) if signals is None else signals.get(con)
     return Overview(
-        depots(con),
-        equity_series(con),
+        [d for d in rows if d.active],
+        equity_series(con, agents=sorted(shown)),
         ([service] if service else []) + liveness(con, now),
-        latest_decisions(con) if signals is None else signals.get(con),
+        [d for d in decisions if d.agent in shown],
         llm_today(con, now, shares),
-        recent_trades(con),
+        recent_trades(con, agents=shown),
         quotes(con, now),
+        ref,
     )

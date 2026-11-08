@@ -50,8 +50,9 @@ def test_depots_list_the_usdc_depots_and_their_benchmark(view: overview.Overview
     assert rows["trend-usdc"].usdc and not rows["trend-usdc"].reference
     assert rows[BUYHOLD_USDC].usdc and rows[BUYHOLD_USDC].reference
     assert not rows["trend"].usdc and not rows[BUYHOLD].usdc
-    # The comparison stays against buy & hold: the USDC benchmark shows what the route brings.
-    assert rows[BUYHOLD_USDC].vs_buyhold_pp is not None and rows[BUYHOLD].vs_buyhold_pp is None
+    # Spec 021 (ADR-0031): Buy & Hold USDC is the reference now; Buy & Hold, while it runs,
+    # is compared with it like any other depot.
+    assert rows[BUYHOLD_USDC].vs_buyhold_pp is None and rows[BUYHOLD].vs_buyhold_pp is not None
 
 
 def test_page_marks_usdc_depots_and_shows_btc_usdc_trades(view: overview.Overview) -> None:
