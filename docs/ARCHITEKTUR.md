@@ -210,20 +210,26 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `app`: `WebApp(data_dir, db=, key_check=, public_host=, impressum=)` mit `handle(method, path, cookie, form, access)`
     (`Access`: Tunnel oder öffentlich mit Client-Adresse; für den Verbindungstest ein `KeyCheck`, den der Handler
     außerhalb der App-Sperre ausführt und mit `key_checked` beendet), `make_server(app, host, port, public=)` (nur
-    127.0.0.1), `serve(..., public_host=, public_port=, impressum=)`; Routen `/` (Übersicht), `/setup`, `/login`, `/logout`,
-    `/settings`, `/settings/test`, `/settings/pause`, `/settings/resume`, `/settings/password`, `/app.css`,
-    `/app.js`, `/impressum`, `/datenschutz` (ohne Login, auch vor der Einrichtung; Spec 014, ADR-0025)
+    127.0.0.1), `serve(..., public_host=, public_port=, impressum=)`; Routen `/` (Übersicht; ohne Sitzung eine
+    Lese-Ansicht, Spec 019, ADR-0028), `/setup`, `/login`, `/logout`, `/settings`, `/settings/test`,
+    `/settings/pause`, `/settings/resume`, `/settings/password`, `/settings/public`, `/app.css`, `/app.js`,
+    `/robots.txt`, `/impressum`, `/datenschutz` (ohne Login, auch vor der Einrichtung; Spec 014, ADR-0025)
+  - Lese-Ansicht ohne Login (ADR-0028): ohne Formular, Token, Reiter und Cookie, ohne Fehlerdetails und
+    Datei-Hinweise; DB-Teile (`OverviewParts`) 10 s im Speicher, gerendert je Abruf; abschaltbar per
+    `WEB_PUBLIC_OVERVIEW=0` in `secrets.env` (unlesbar → Login); `X-Robots-Tag: noindex, nofollow` auf jeder Antwort
   - `legal`: `render(text)` (kleine Auszeichnung, alles maskiert, nur `mailto:`-Links), `read_impressum(path)`
     (reguläre Datei, ≤ 16 KB, UTF-8, sonst `None` → 503); `datenschutz`: Text der Datenschutzerklärung, durch
     Tests an Cookies, Sperrwerte und Server-Dateien gebunden
   - `readonly`: `reading(db)` – ein Lese-Snapshot je Seitenaufruf (`mode=ro`, `query_only`, ADR-0016), sonst
     `DbUnavailable`
   - `overview`: `load(con, now, shares, service=)` → `Overview` (Depots, Equity-Reihen über den Index ausgedünnt,
-    Lebenszeichen, Entscheidungen, GPT heute, Trades, Kurse); `service_pulse(status, now)`
+    Lebenszeichen, letzte Kauf-/Verkaufssignale je Depot und Markt ohne HOLD aus den neuesten 50 000
+    Entscheidungen, GPT heute, Trades, Kurse); `service_pulse(status, now)`
   - `auth`: `PasswordStore` (scrypt; neue Passwörter ≥ 12 Zeichen, nicht häufig), `password_problem`,
     `LoginGuard` (5 Fehlversuche → 60 s; öffentlich verdoppelnd bis 1 h), `PublicGuard` (je Client-Adresse, IPv6
     je /64, globale Obergrenze, vergisst 24 h nach dem letzten Fehlversuch bzw. der Sperre), `DeviceKeys` (signiertes Geräte-Cookie, 90 Tage), `Sessions` (12 h, im Speicher)
   - `credentials`: `SecretsFile.update(form, agents=, clear_key=)` (prüft mit `load_config`), `set_paused`,
+    `set_public_overview` (`WEB_PUBLIC_OVERVIEW`, nur von der Weboberfläche gelesen),
     `request_resume` (schreiben `BOT_PAUSED`/`BOT_RESUME`, auch wenn andere Einstellungen kaputt sind),
     `load_env_file`, `mask`
   - `files`: `write_private` (atomar, 600)

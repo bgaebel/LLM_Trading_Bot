@@ -299,6 +299,11 @@ button.quiet { margin: 0; padding: 7px 12px; color: var(--muted); background: tr
   border: 1px solid var(--line-hot); clip-path: none; border-radius: 2px;
   font-size: 11px; letter-spacing: 0.14em; }
 button.quiet:hover { color: var(--magenta); border-color: var(--magenta); filter: none; }
+/* The login link of the overview without a session (ADR-0028) looks like the logout button. */
+a.quiet { padding: 7px 12px; color: var(--muted); border: 1px solid var(--line-hot);
+  border-radius: 2px; font: 700 11px/1 var(--mono); letter-spacing: 0.14em;
+  text-transform: uppercase; text-decoration: none; }
+a.quiet:hover { color: var(--magenta); border-color: var(--magenta); }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
 .actions .hint { flex: 1; min-width: 220px; margin: 20px 0 0; }
 

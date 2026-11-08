@@ -59,9 +59,9 @@ Verworfen: eigener Pfad, fertiges HTML im Speicher, Caddy-Ratenbegrenzung (siehe
 
 ## Plan
 - [x] 1. Signale ohne HOLD, begrenzte Abfrage (AK9)
-- [ ] 2. Lese-Ansicht, Ausblendungen, Zwischenspeicher, robots (AK1–AK5, AK7)
-- [ ] 3. Schalter in den Einstellungen und `secrets.env` (AK6)
-- [ ] 4. Datenschutz und Bindungstests (AK8)
+- [x] 2. Lese-Ansicht, Ausblendungen, Zwischenspeicher, robots (AK1–AK5, AK7)
+- [x] 3. Schalter in den Einstellungen und `secrets.env` (AK6)
+- [x] 4. Datenschutz und Bindungstests (AK8)
 - [ ] 5. Doku, Prüfung (Workflow), PR (AK10)
 - [ ] 6. Mit Zustimmung: Deploy, Prüfung von außen (AK11)
 

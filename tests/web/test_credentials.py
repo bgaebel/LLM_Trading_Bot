@@ -144,6 +144,19 @@ def test_pause_works_even_while_other_settings_are_broken(secrets_file: SecretsF
     assert secrets_file.read() == {"LLM_DAILY_BUDGET_EUR": "lots", "BOT_PAUSED": "1"}
 
 
+def test_public_overview_switch_writes_and_removes_the_field(secrets_file: SecretsFile) -> None:
+    # Spec 019 AK6 (ADR-0028): missing = readable without login, "0" = login again.
+    secrets_file.update({"OPENAI_API_KEY": KEY})
+    secrets_file.set_public_overview(False)
+    assert secrets_file.read() == {"OPENAI_API_KEY": KEY, "WEB_PUBLIC_OVERVIEW": "0"}
+    secrets_file.update({"LLM_EFFORT": "medium"})  # saving settings keeps the switch
+    secrets_file.set_paused(True)
+    assert secrets_file.read()["WEB_PUBLIC_OVERVIEW"] == "0"
+    secrets_file.set_public_overview(True)
+    assert "WEB_PUBLIC_OVERVIEW" not in secrets_file.read()
+    assert secrets_file.read()["BOT_PAUSED"] == "1"
+
+
 def test_resume_request_is_stored_per_depot(secrets_file: SecretsFile) -> None:
     secrets_file.request_resume("trend", "2026-11-07T08:00:00+00:00")
     secrets_file.request_resume("gpt-luna", "2026-11-07T08:05:00+00:00")

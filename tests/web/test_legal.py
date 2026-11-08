@@ -400,7 +400,7 @@ def test_datenschutz_has_the_short_policy_structure() -> None:
     assert TEXT.startswith("# Datenschutzerklärung\n")
     numbers = list(_sections())
     assert numbers == [str(n) for n in range(1, len(numbers) + 1)]
-    assert "Stand: 7. November 2026" in TEXT
+    assert "Stand: 8. November 2026" in TEXT
 
 
 def test_datenschutz_names_the_controller_by_the_impressum() -> None:
@@ -479,8 +479,9 @@ def test_datenschutz_cookies_need_no_banner() -> None:
     assert "§ 25 Abs. 2 Nr. 2 TDDDG" in section and "unbedingt erforderlich" in section
     assert "Einwilligungsbanner ist deshalb nicht nötig" in section
     assert "Secure" in section and "HttpOnly" in section and "SameSite=Strict" in section
-    assert "Beim Abruf von Impressum und Datenschutzerklärung werden keine Cookies gesetzt" in (
-        section
+    assert (
+        "Beim Abruf von Impressum, Datenschutzerklärung und der Übersicht ohne Anmeldung "
+        "werden keine Cookies gesetzt" in section
     )
 
 
@@ -499,6 +500,8 @@ def test_datenschutz_no_trackers_no_third_parties() -> None:
         "keine automatisierte Entscheidungsfindung",
         "nicht registrieren",
         "Nur der Betreiber kann sich anmelden",
+        "Die Übersicht ist ohne Anmeldung lesbar",
+        "keine Daten von Besuchern",
     ):
         assert item in overview, item
     nobody = _section("Keine Weitergabe an OpenAI oder Bitvavo")
@@ -616,6 +619,15 @@ def test_datenschutz_matches_cookies(site: Site) -> None:
     assert mentioned == names
     # The session cookie lives exactly as long as the session behind it.
     assert app_module.SESSION_COOKIE_SECONDS == auth.SESSION_SECONDS
+
+
+def test_datenschutz_overview_without_login_sets_no_cookie(site: Site) -> None:
+    # Spec 019 AK8 (ADR-0028): the policy says so - the real answers must agree.
+    for client in site.both():
+        for path in ("/", "/robots.txt"):
+            reply = client.request("GET", path)
+            assert reply.status == 200 and reply.set_cookies == [], path
+        assert client.cookies == {}
 
 
 def test_datenschutz_matches_lockout() -> None:

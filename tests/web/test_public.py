@@ -114,19 +114,19 @@ def site(tmp_path: Path) -> Iterator[Site]:
 
 
 def test_public_host_accepts_only_its_domain(site: Site) -> None:
-    assert site.outside().request("GET", "/")[0] == 303
+    assert site.outside().request("GET", "/settings")[0] == 303
     for host in ("evil.example", f"{DOMAIN}:443", f"x.{DOMAIN}", "127.0.0.1", ""):
         client = site.outside()
         client.host = host
         assert client.request("GET", "/")[0] == 421, host
     shouting = site.outside()
     shouting.host = DOMAIN.upper()
-    assert shouting.request("GET", "/")[0] == 303
+    assert shouting.request("GET", "/settings")[0] == 303
 
 
 def test_public_host_tunnel_refuses_the_domain_and_proxy_headers(site: Site) -> None:
     inside = site.inside()
-    assert inside.request("GET", "/")[0] == 303
+    assert inside.request("GET", "/settings")[0] == 303
     domain = site.inside()
     domain.host = DOMAIN
     assert domain.request("GET", "/")[0] == 421
@@ -195,7 +195,7 @@ def test_public_cookies_ignore_the_tunnel_names(site: Site) -> None:
     stolen = inside.cookies["ltb_session"]
     outside = site.outside()
     outside.cookies["ltb_session"] = stolen
-    status, _ = outside.request("GET", "/")
+    status, _ = outside.request("GET", "/settings")
     assert status == 303  # to the login: the tunnel cookie means nothing here
 
 
@@ -217,7 +217,7 @@ def test_public_cookies_logout_clears_the_secure_session(site: Site) -> None:
     (cleared,) = client.set_cookies
     assert cleared.startswith("__Host-ltb_session=;") and "Max-Age=0" in cleared
     assert cleared.endswith("; Secure")
-    assert client.request("GET", "/")[0] == 303
+    assert client.request("GET", "/settings")[0] == 303
 
 
 # ------------------------------------------------------------------ AK4: lockout
@@ -317,8 +317,8 @@ def test_change_password_through_the_settings(site: Site) -> None:
     assert change(PASSWORD, "password1234")[0] == 400
     status, page = change(PASSWORD, "ganz-neues-Passwort-1")
     assert status == 200 and "Passwort geändert" in page
-    assert other.request("GET", "/")[0] == 303  # the other session was logged out
-    assert client.request("GET", "/")[0] == 200  # this one stays
+    assert other.request("GET", "/settings")[0] == 303  # the other one was logged out
+    assert client.request("GET", "/settings")[0] == 200  # this one stays
     assert site.outside("203.0.113.30").login("ganz-neues-Passwort-1")[0] == 303
     # The device cookie from before the change lost its exemption (new key).
     assert site.app.devices.verify(other.cookies["__Host-ltb_device"]) is None

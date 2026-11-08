@@ -83,7 +83,14 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
+    # ADR-0028: the overview is readable without login, but not meant to be found.
+    "X-Robots-Tag": "noindex, nofollow",
 }
+ROBOTS = "User-agent: *\nDisallow: /\n"
+PUBLIC_VIEW_SECONDS = 10.0
+"""ADR-0028: without login the overview reads the database at most this often, for everyone."""
+PUBLIC_PROBLEM = "Daten gerade nicht lesbar."
+"""Without login no details: they name files, versions or exception types."""
 
 
 @dataclass
@@ -150,6 +157,16 @@ def is_local_host(host: str) -> bool:
 
 
 @dataclass(frozen=True)
+class OverviewParts:
+    """What the overview shows apart from the clock: rendered per request, kept by the view
+    without login for PUBLIC_VIEW_SECONDS (ADR-0028)."""
+
+    view: overview.Overview | None
+    problem: str
+    trading: pages.Trading
+
+
+@dataclass(frozen=True)
 class KeyCheck:
     """The connection test is due: ``key`` must be looked up, then ``WebApp.key_checked``."""
 
@@ -188,6 +205,9 @@ class WebApp:
         # Next to secrets.env, like paper-cycle expects it (Spec 007 AK10).
         self.db = db if db is not None else data_dir / "bot.db"
         self.wall_clock = wall_clock
+        self.clock = clock
+        self.public_view: tuple[float, OverviewParts] | None = None
+        """(monotonic time read, parts) of the overview without login (ADR-0028)."""
         self.public_host = public_host
         self.impressum = impressum
         self.passwords = PasswordStore(data_dir / "web-auth.json")
@@ -278,7 +298,45 @@ class WebApp:
         return pages.Trading(requested, applied, source, stopped)
 
     def _overview(self, session: Session) -> Response:
-        values = self.credentials.read()
+        parts = self._overview_parts(self.credentials.read())
+        page = overview_page(
+            parts.view,
+            csrf=session.csrf,
+            problem=parts.problem,
+            now=self.wall_clock(),
+            trading=pages.trading_note(parts.trading),
+        )
+        return Response(200, page)
+
+    def _readable_values(self) -> Mapping[str, str] | None:
+        """secrets.env when the overview may be shown without login (ADR-0028), else None;
+        unreadable counts as switched off (fail closed)."""
+        try:
+            values = self.credentials.read()
+        except (OSError, UnicodeDecodeError):
+            return None
+        return values if pages.public_overview_on(values) else None
+
+    def _anonymous_overview(self, values: Mapping[str, str]) -> Response:
+        """ADR-0028: read only, no form, no token, no cookie; the database at most every
+        PUBLIC_VIEW_SECONDS, the clock of the page on every request."""
+        at = self.clock()
+        cached = self.public_view
+        if cached is None or not 0 <= at - cached[0] < PUBLIC_VIEW_SECONDS:
+            cached = (at, self._overview_parts(values))
+            self.public_view = cached
+        parts = cached[1]
+        page = overview_page(
+            parts.view,
+            csrf=None,
+            problem=PUBLIC_PROBLEM if parts.problem else "",
+            now=self.wall_clock(),
+            trading=pages.public_trading_note(parts.trading),
+            public=True,
+        )
+        return Response(200, page)
+
+    def _overview_parts(self, values: Mapping[str, str]) -> OverviewParts:
         shares = {
             agent: pages.budget_value(
                 values, f"LLM_DAILY_BUDGET_EUR_{agent.upper().replace('-', '_')}", default
@@ -286,7 +344,7 @@ class WebApp:
             for agent, (_model, default) in LLM_DEFAULTS.items()
         }
         now = self.wall_clock()
-        note = pages.trading_note(self._trading(values, depots=False))
+        trading = self._trading(values, depots=False)
         try:
             service = overview.service_pulse(read_status(status_path(self.db)), now)
         except (OSError, ValueError, TypeError) as exc:  # TypeError: a field of the wrong type
@@ -303,9 +361,8 @@ class WebApp:
             # Busy past the timeout or an odd stored value: a message, not an empty response.
             problem = f"Datenbank nicht lesbar ({type(exc).__name__})."
         else:
-            return Response(200, overview_page(view, csrf=session.csrf, now=now, trading=note))
-        page = overview_page(None, csrf=session.csrf, problem=problem, now=now, trading=note)
-        return Response(200, page)
+            return OverviewParts(view, "", trading)
+        return OverviewParts(None, problem, trading)
 
     def _settings(
         self, session: Session, message: str = "", ok: bool = True, status: int = 200
@@ -349,6 +406,8 @@ class WebApp:
         if path in LEGAL_PATHS:
             # Before the setup gate: a site without a password still has to name its operator.
             return self._legal(method, path)
+        if path == "/robots.txt" and method == "GET":
+            return Response(200, ROBOTS, "text/plain; charset=utf-8")
         if not self.passwords.is_set():
             if access.public:
                 # ADR-0024: the setup code sits in the journal; never set a password from the
@@ -358,6 +417,11 @@ class WebApp:
         session = self._session(cookies, access)
         if path == "/login":
             return self._login_route(method, form, session, cookies, access)
+        if session is None and path == "/" and method == "GET":
+            # ADR-0028: read only without login, as long as the owner has not switched it off.
+            values = self._readable_values()
+            if values is not None:
+                return self._anonymous_overview(values)
         if session is None:
             return redirect("/login")
         if method == "POST" and not same(_one(form, "csrf"), session.csrf):
@@ -387,6 +451,8 @@ class WebApp:
             return self._pause(session, form)
         if path == "/settings/resume" and method == "POST":
             return self._resume(session, form)
+        if path == "/settings/public" and method == "POST":
+            return self._public_switch(session, form)
         if path == "/settings/password" and method == "POST":
             return self._change_password(session, form, cookies, access)
         return self._settings(session, "Seite nicht gefunden.", ok=False, status=404)
@@ -501,6 +567,21 @@ class WebApp:
         if wanted == "1":
             return self._settings(session, "Pause gespeichert – greift in der nächsten Runde.")
         return self._settings(session, "Fortsetzen gespeichert – greift in der nächsten Runde.")
+
+    def _public_switch(self, session: Session, form: Form) -> Response:
+        """ADR-0028: the overview without login on or off; applies to the next request."""
+        wanted = _one(form, "public")
+        if wanted not in ("0", "1"):
+            return self._settings(session, "Ungültige Anfrage.", ok=False, status=400)
+        try:
+            self.credentials.set_public_overview(wanted == "1")
+        except OSError as exc:
+            return self._settings(
+                session, f"Nicht gespeichert: {type(exc).__name__}", ok=False, status=500
+            )
+        if wanted == "1":
+            return self._settings(session, "Gespeichert – die Übersicht ist ohne Login lesbar.")
+        return self._settings(session, "Gespeichert – die Übersicht verlangt wieder den Login.")
 
     def _resume(self, session: Session, form: Form) -> Response:
         """ADR-0021: ask the service (the only writer) to release a stopped depot."""

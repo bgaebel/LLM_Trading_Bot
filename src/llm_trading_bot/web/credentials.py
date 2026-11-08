@@ -23,7 +23,11 @@ SETTING_FIELDS = (
 )
 CONTROL_FIELDS = ("BOT_PAUSED", "BOT_RESUME")
 """Trading pause and release requests (Spec 011, ADR-0021); read by the service every round."""
-FIELDS = SECRET_FIELDS + SETTING_FIELDS + CONTROL_FIELDS
+PUBLIC_OVERVIEW_FIELD = "WEB_PUBLIC_OVERVIEW"
+"""ADR-0028: ``0`` hides the overview behind the login again; missing means readable without."""
+WEB_FIELDS = (PUBLIC_OVERVIEW_FIELD,)
+"""Read by the web UI only; the bot ignores them."""
+FIELDS = SECRET_FIELDS + SETTING_FIELDS + CONTROL_FIELDS + WEB_FIELDS
 AGENT_CHOICES = (*LLM_DEFAULTS, *CLASSIC_AGENTS)
 _KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]{16,200}")
 _HEADER = "# llm-trading-bot credentials - written by `trading-bot web`; never commit this file\n"
@@ -123,6 +127,15 @@ class SecretsFile:
             values["BOT_PAUSED"] = "1"
         else:
             values.pop("BOT_PAUSED", None)
+        self._write(values)
+
+    def set_public_overview(self, readable: bool) -> None:
+        """ADR-0028: like the pause, written without checking the other settings."""
+        values = self.read()
+        if readable:
+            values.pop(PUBLIC_OVERVIEW_FIELD, None)
+        else:
+            values[PUBLIC_OVERVIEW_FIELD] = "0"
         self._write(values)
 
     def request_resume(self, agent: str, at: str) -> None:
