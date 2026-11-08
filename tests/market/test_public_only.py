@@ -4,7 +4,7 @@ import re
 
 from fakes import VALID_BOOK, FakeTransport
 from llm_trading_bot.market.bitvavo import TIMEFRAMES, BitvavoClient
-from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.market.models import SYMBOLS
 
 ALLOWED = re.compile(r"^https://api\.bitvavo\.com/v2/(ticker/book|[A-Z]+-EUR/candles\?.*)$")
 
@@ -18,7 +18,7 @@ def test_all_calls_only_hit_public_endpoints() -> None:
     transport = FakeTransport(lambda url: VALID_BOOK if url.endswith("ticker/book") else [])
     client = BitvavoClient(transport)
     client.quotes()
-    for symbol in Symbol:
+    for symbol in SYMBOLS:  # Spec 020: candles only for the candle markets
         for interval in TIMEFRAMES:
             client.closed_candles(symbol, interval, now_epoch=1_800_000_000)
     assert len(transport.urls) == 1 + 2 * len(TIMEFRAMES)

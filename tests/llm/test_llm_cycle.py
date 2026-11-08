@@ -23,7 +23,7 @@ from llm_trading_bot.llm.cycle import market_triggers, run_llm_depots
 from llm_trading_bot.llm.due import iso, llm_due, trigger_state
 from llm_trading_bot.llm.openai_client import ModelReply
 from llm_trading_bot.market.http import HTTPFailure
-from llm_trading_bot.market.models import Quote, QuoteBook, Symbol
+from llm_trading_bot.market.models import SYMBOLS, Quote, QuoteBook, Symbol
 from llm_trading_bot.market.snapshot import MarketSnapshot, build_snapshots
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db, write_tx
@@ -320,7 +320,7 @@ def test_reservation_covers_every_possible_request_and_retries_are_billed(
     cycle(con, FakeModel({"gpt-6-luna": retried}))
     row = calls(con)[0]
     luna_prices = Pricing(Decimal("0.10"), Decimal("0.50"))
-    chars = len(SYSTEM) + len(row["context"]) + len(json.dumps(response_schema(list(Symbol))))
+    chars = len(SYSTEM) + len(row["context"]) + len(json.dumps(response_schema(SYMBOLS)))
     one = Attempt(
         "gpt-luna",
         row["markets"],
