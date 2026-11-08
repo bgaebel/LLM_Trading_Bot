@@ -5,7 +5,7 @@ import json
 import math
 import random
 import statistics
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import date, timedelta
 from typing import Any
 
@@ -221,6 +221,9 @@ def test_benchmark_formula() -> None:
     m = depot_metrics(result({"trend": depot}, daily_mid=mids, spread=spread, variant=v), "trend")
     assert m.benchmark == pytest.approx(b.total)
     assert m.excess == pytest.approx(0.0 - b.total_cost)
+    # AK7 asks for both: the excess over buy & hold without its rebalancing costs as well.
+    assert m.excess_no_cost == pytest.approx(0.0 - b.total)
+    assert m.excess_no_cost < m.excess
 
 
 def test_benchmark_without_exposure_is_cash() -> None:
@@ -379,11 +382,43 @@ def test_cell_band_and_flag() -> None:
         trades.append(trade(k * 10 + 5, "SELL", 1, 100 * (1 + r), 0))
     q = result({"trend": DepotResult("trend", trades=trades)})
     (cell,) = market_cells([q], "trend")
-    half = 1.959963984540054 * statistics.stdev(rets) / math.sqrt(3)
+    # Student's t with 2 degrees of freedom, not the normal 1.96: three trips are few.
+    half = 4.302652729749464 * statistics.stdev(rets) / math.sqrt(3)
     assert (cell.regime, cell.vol, cell.direction) == ("RANGE", "n/a", "n/a")
     assert cell.mean == pytest.approx(statistics.fmean(rets))
     assert [cell.low, cell.high] == pytest.approx([cell.mean - half, cell.mean + half])
     assert cell.few and cell.pnl == pytest.approx(2.0)
+
+
+def test_cell_with_one_round_trip_has_no_band() -> None:
+    # Review evidence: one trip gave "-3,71 % [-3,71 % bis -3,71 %]", a band claiming certainty.
+    trades = [trade(0, "BUY", 1, 100, 0, regime="RANGE"), trade(5, "SELL", 1, 96.29, 0)]
+    (cell,) = market_cells([result({"trend": DepotResult("trend", trades=trades)})], "trend")
+    assert cell.count == 1 and cell.mean == pytest.approx(-0.0371)
+    assert (cell.low, cell.high) == (None, None)
+
+
+def _t_cdf(t: float, df: int, steps: int = 20_000) -> float:
+    """Student's t distribution function by Simpson's rule over the density (reference)."""
+    c = math.exp(math.lgamma((df + 1) / 2) - math.lgamma(df / 2)) / math.sqrt(df * math.pi)
+
+    def density(x: float) -> float:
+        return c * math.pow(1 + x * x / df, -(df + 1) / 2)
+
+    h = t / steps
+    inner = sum((4 if i % 2 else 2) * density(i * h) for i in range(1, steps))
+    return 0.5 + (density(0) + density(t) + inner) * h / 3
+
+
+@pytest.mark.parametrize("df", [*range(1, 32), 45, 100, 1000])
+def test_t95_is_the_975_quantile(df: int) -> None:
+    assert _t_cdf(metrics.t95(df), df) == pytest.approx(0.975, abs=1e-8)
+    assert metrics.t95(df) > metrics.Z95
+
+
+def test_t95_refuses_zero_degrees_of_freedom() -> None:
+    with pytest.raises(ValueError):
+        metrics.t95(0)
 
 
 # --- break-even (AK6) --------------------------------------------------------------------
@@ -430,30 +465,49 @@ def test_break_even_fixed_decisions() -> None:
 
 
 def test_quality_summary() -> None:
+    # Shaped like a backtest result: codes count minute rounds, due counts strategy bars.
     q = QuarterResult(
         Q,
         Variant(),
         quality={
-            BTC: MarketQuality(BTC, 200, 190, {"gap_1h": 6, "stale": 4}, 120),
-            ETH: MarketQuality(ETH, 200, 170, {"gap_1m": 30}, 0),
+            BTC: MarketQuality(BTC, 200, 190, {"gap_1h": 600, "stale": 400}, 120, rounds=2_000),
+            ETH: MarketQuality(ETH, 200, 170, {"gap_1m": 300}, 0, rounds=2_000),
         },
+        rounds=2_000,
     )
     q2 = QuarterResult(
-        Quarter.parse("2022Q2"), Variant(), quality={BTC: MarketQuality(BTC, 100, 100)}
+        Quarter.parse("2022Q2"),
+        Variant(),
+        quality={BTC: MarketQuality(BTC, 100, 100, {"stale": 10}, rounds=1_000)},
+        rounds=1_000,
     )
     rows = {(r.quarter, r.market): r for r in quality([q2, q])}
     btc = rows[("2022Q1", BTC)]
     assert btc.share == pytest.approx(0.95) and btc.eligible is True
-    assert btc.no_decision_share == {"gap_1h": 0.03, "stale": 0.02}
+    assert btc.rounds == 2_000
+    # Over the market's rounds, never over due bars (that gave 300 % and 200 % here).
+    assert btc.no_decision_share == {"gap_1h": 0.3, "stale": 0.2}
     assert btc.blocked_hours == 2.0
     assert rows[("2022Q1", ETH)].eligible is False
     total = rows[("all", BTC)]
     assert (total.due, total.decided, total.no_decision, total.eligible) == (
         300,
         290,
-        {"gap_1h": 6, "stale": 4},
+        {"gap_1h": 600, "stale": 410},
         None,
     )
+    assert total.rounds == 3_000
+    assert total.no_decision_share == {"gap_1h": 0.2, "stale": pytest.approx(410 / 3_000)}
+    assert all(0 <= x <= 1 for r in rows.values() for x in r.no_decision_share.values())
+
+
+def test_quality_of_an_older_result_uses_the_quarter_rounds() -> None:
+    # Recorded before MarketQuality.rounds existed: every round reports each market.
+    old = QuarterResult(Q, Variant(), quality={BTC: MarketQuality(BTC, 50, 40, {"stale": 30})})
+    old.rounds = 600
+    (row, total) = quality([old])
+    assert row.rounds == total.rounds == 600
+    assert row.no_decision_share == {"stale": 0.05}
 
 
 def test_labels_by_round_trips() -> None:
@@ -586,7 +640,10 @@ def test_one_depot_without_mids_keeps_the_other_bands() -> None:
     q = _with_depot(_with_depot(_bootstrap_quarter(), "meanrev", {ETH: 0.3}), "breakout", {})
     s = summarize([q], draws=50, seed=7)
     alone = uncertainty([_bootstrap_quarter()], "trend", draws=50, seed=7)
-    assert s.uncertainty["trend"] == alone
+    assert replace(s.uncertainty["trend"], group=()) == replace(alone, group=())
+    # trend and the cash depot share their days, so they share the draws; meanrev has none.
+    assert s.uncertainty["trend"].group == s.uncertainty["breakout"].group == ("breakout", "trend")
+    assert alone.group == ("trend",)
     # A cash depot needs no daily_mid and shares trend's days (and index stream).
     assert s.uncertainty["breakout"].days == 12 and s.uncertainty["breakout"].excluded_days == 0
     assert set(s.uncertainty) == {"breakout", "trend"}
@@ -611,6 +668,11 @@ def test_bands_per_depot_over_its_own_valid_days() -> None:
     assert (s.uncertainty["meanrev"].days, s.uncertainty["meanrev"].excluded_days) == (10, 2)
     assert (s.uncertainty["trend"].days, s.uncertainty["trend"].excluded_days) == (12, 0)
     assert s.uncertainty["trend"] == uncertainty([_bootstrap_quarter()], "trend", draws=50, seed=7)
+    # Other days, other draws: each depot is its own group.
+    assert (s.uncertainty["meanrev"].group, s.uncertainty["trend"].group) == (
+        ("meanrev",),
+        ("trend",),
+    )
     (issue,) = s.data_issues
     assert issue.missing_days == ["2022-01-05", "2022-01-06"]
 

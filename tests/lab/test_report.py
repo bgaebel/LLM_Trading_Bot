@@ -1,5 +1,6 @@
 """Spec 016 AK10: the base report (Markdown + standalone HTML), never overwritten."""
 
+import dataclasses
 import html
 import io
 import re
@@ -189,8 +190,9 @@ def test_labels_by_round_trips() -> None:
     }
     # Every pooled number carries its band and the number of days behind it.
     trend = by_depot["trend"]
-    assert all(" bis " in cell and "[" in cell for cell in (trend[1], trend[2], trend[4]))
-    assert trend[3] in ("ja", "nein") and trend[5] == str(DAYS)
+    cells = (trend[1], trend[2], trend[4], trend[5])
+    assert all(" bis " in cell and "[" in cell for cell in cells)
+    assert trend[3] in ("ja", "nein") and trend[6] == str(DAYS)
     summary = section(markdown, "Kurzfazit")
     assert "trend: Übertrendite" in summary and "Einstufung: kein Urteil" in summary
     assert "ensemble:" in summary and "Einstufung: belastbar" in summary
@@ -262,7 +264,9 @@ def test_quarters_list_not_graded_with_reason() -> None:
     assert quarters["2021Q4"][2] == "abgebrochen: boom"
     assert "Gewertet sind 1 von 5 Quartalen (2022Q1)" in section(markdown, "Kurzfazit")
     quality = section(markdown, "Datenqualität")
-    assert "gap_1h: 150 (15,0 %)" in quality and "2,0" in quality  # 120 blocked rounds = 2 h
+    # 150 of the quarter's 14,400 rounds (not of the 1,000 due bars); 120 blocked rounds = 2 h.
+    assert "gap_1h: 150 (1,0 %)" in quality and "2,0" in quality
+    assert "Runden ohne Entscheidung nach Code (Anteil der Runden)" in quality
 
 
 def test_html_is_standalone_and_escaped() -> None:
@@ -440,11 +444,31 @@ def test_summary_without_any_band_gives_no_verdict() -> None:
     assert "Kein Urteil möglich: Kein Quartal ist gewertet, es wurde also nichts geprüft." in (
         summary
     )
-    # With bands the tested negative result stays.
+    # Bands, but every strategy under 100 round trips: still no verdict, never "gültig".
     markdown, _ = build({"base": [result("2022Q1", SMALL)]})
     summary = section(markdown, "Kurzfazit")
     assert "Kein Urteil möglich" not in summary
-    assert "Keine Strategie schlägt Buy & Hold gleicher Quote nachweisbar" in summary
+    assert "Kein Urteil: Jede Strategie hat unter 100 Round-Trips." in summary
+    assert "Die Daten reichen nicht" in summary
+    assert "gültig" not in summary and "Keine Strategie" not in summary
+    assert "Band ganz über null:" not in summary
+
+
+def test_summary_judges_only_strategies_with_a_verdict() -> None:
+    trips = {"trend": 150, "breakout": 2, "meanrev": 1, "ensemble": 4, "buyhold": 0}
+    markdown, _ = build({"base": [result("2022Q1", trips)]})
+    summary = section(markdown, "Kurzfazit")
+    assert "Einstufung: indikativ" in summary
+    assert "Ohne Urteil (unter 100 Round-Trips, zu wenige Daten): breakout, meanrev, ensemble." in (
+        summary
+    )
+    judged = (
+        "Keine Strategie (mit Urteil: trend) schlägt Buy & Hold gleicher Quote nachweisbar"
+        in summary
+        or "Band ganz über null: trend (indikativ)." in summary
+    )
+    assert judged, summary
+    assert "Kein Urteil: Jede Strategie" not in summary
 
 
 def test_diagnosis_compares_only_quarters_graded_in_both() -> None:
@@ -704,10 +728,11 @@ def test_partial_benchmark_is_marked_wherever_it_is_shown() -> None:
     marker = "(Benchmark nur über 10 von 90 Tagen)"
     per_quarter = table_after(markdown, "### Ergebnis je Quartal und Depot")
     assert len(per_quarter) == 5
-    assert all(r[5].endswith(marker) and r[6].endswith(marker) for r in per_quarter)
+    # Buy & hold and excess, each without and with costs.
+    assert all(r[i].endswith(marker) for r in per_quarter for i in (5, 6, 7, 8))
     assert "„Benchmark nur über n von m Tagen“" in section(markdown, "Quartale")
     overall = {r[0]: r for r in table_after(markdown, OVERALL)}
-    assert overall["trend"][5:7] == ["10", "80"]
+    assert overall["trend"][6:8] == ["10", "80"]
     band = "(Band nur über 10 von 90 Tagen, Datenlücken siehe „Datenqualität“)"
     assert f"trend {band}" in section(markdown, OVERALL[3:])
     summary = section(markdown, "Kurzfazit")
@@ -720,7 +745,7 @@ def test_partial_benchmark_is_marked_wherever_it_is_shown() -> None:
     # A complete series carries no marker anywhere.
     clean, _ = build({"base": [result("2022Q1", SMALL, fitted=True)]})
     assert "nur über" not in clean
-    assert {r[6] for r in table_after(clean, OVERALL)} == {"0"}
+    assert {r[7] for r in table_after(clean, OVERALL)} == {"0"}
     assert all(r[-1] == "keine" for r in table_after(clean, "### Streuung über die Quartale"))
 
 
@@ -749,3 +774,92 @@ def test_spread_source_ignores_the_row_of_a_partly_sampled_quarter(tmp_path: Pat
     assert report.spread_sources_from_archive(path) == {
         ("2022Q3", BTC): SpreadSource("sampled", FLOOR, 1)
     }
+
+
+# --- final review: benchmark without costs, cost grid periods, bootstrap groups, cells -----
+
+
+def test_benchmark_and_excess_without_costs_are_shown() -> None:
+    rows = [result("2022Q1", SMALL, fitted=True)]
+    markdown, _ = build({"base": rows})
+    lines = markdown.split("\n")
+    start = lines.index("### Ergebnis je Quartal und Depot")
+    header = next(line for line in lines[start:] if line.startswith("| Quartal"))
+    assert "Buy & Hold gleicher Quote ohne Kosten | Buy & Hold gleicher Quote mit Kosten" in header
+    assert "Übertrendite ohne Kosten | Übertrendite mit Kosten" in header
+    s = metrics.summarize(rows, draws=DRAWS)
+    per_quarter = {r[1]: r for r in table_after(markdown, "### Ergebnis je Quartal und Depot")}
+    for d in s.depots:
+        row = per_quarter[report.depot_name(d.agent)]
+        assert row[5:9] == [
+            report.pct(d.benchmark),
+            report.pct(d.benchmark_cost),
+            report.pct(d.excess_no_cost),
+            report.pct(d.excess),
+        ]
+    overall = {r[0]: r for r in table_after(markdown, OVERALL)}
+    assert overall["trend"][4] == report.band_pct(s.uncertainty["trend"].excess_no_cost)
+    assert "Buy & Hold ohne Kosten [Band]" in section(markdown, OVERALL[3:])
+
+
+def test_cost_grid_compares_only_quarters_graded_in_every_variant() -> None:
+    # Review evidence: base over four quarters next to cost-1.2 over one read as a cost effect.
+    cheap = Variant(name="cost-0.3", fee_rate=0.001, slippage=0.0005)
+    base_rows = [result("2022Q1", SMALL), result("2022Q2", SMALL, drift=0.004)]
+    results = {"base": base_rows, "cost-0.3": [result("2022Q1", SMALL, variant=cheap)]}
+    markdown, _ = build(results)
+    costs = section(markdown, "Kosten")
+    assert "nur Quartale, die in jeder Variante gewertet sind: 2022Q1." in costs
+    assert "Nur in base gewertet und deshalb nicht verglichen: 2022Q2." in costs
+    grid = table_after(markdown, "### Kostenraster: Entscheidungen reagieren auf Kosten")
+    base_grid = {r[2]: r for r in grid if r[0] == "base"}
+    trend = metrics.summarize(base_rows[:1], draws=DRAWS).uncertainty["trend"]
+    assert base_grid["trend"][3] == report.band_pct(trend.mean_return)
+    assert base_grid["trend"][6] == str(SMALL["trend"])  # one quarter's round trips, not two
+    # The overall section keeps the base run over all its graded quarters.
+    pooled = metrics.summarize(base_rows, draws=DRAWS).uncertainty["trend"]
+    overall = {r[0]: r for r in table_after(markdown, OVERALL)}
+    assert overall["trend"][1] == report.band_pct(pooled.mean_return) != base_grid["trend"][3]
+
+    # No quarter graded in both: no comparison at all.
+    apart = {
+        "base": [result("2022Q2", SMALL)],
+        "cost-0.3": [result("2022Q1", SMALL, variant=cheap)],
+    }
+    markdown, _ = build(apart)
+    costs = section(markdown, "Kosten")
+    assert "Kein Quartal ist in allen Varianten gewertet; ein Vergleich entfällt." in costs
+    assert "Kosten je Round-Trip (ohne Spread)" not in costs
+
+
+def test_uncertainty_text_names_the_days_of_each_group() -> None:
+    # Review evidence: one depot's day count and "Alle Depots verwenden dieselben Ziehungen"
+    # although a depot with a data gap was resampled over other days with its own draws.
+    r = result("2022Q1", SMALL, fitted=True)
+    gappy = r.depots["breakout"]
+    r.depots["breakout"] = dataclasses.replace(gappy, days=gappy.days[:4] + gappy.days[5:])
+    markdown, _ = build({"base": [r]})
+    text = section(markdown, "Unsicherheit")
+    assert "den gewerteten Tagen des jeweiligen Depots" in text
+    assert (
+        "Dieselben Ziehungen teilen nur Depots mit denselben Tagen: trend, meanrev, ensemble, "
+        "Buy & Hold (10 Tage); breakout (8 Tage)."
+    ) in text
+    assert "Alle Depots verwenden dieselben Ziehungen" not in text
+
+    clean, _ = build({"base": [result("2022Q1", SMALL, fitted=True)]})
+    text = section(clean, "Unsicherheit")
+    assert f"Aus {DAYS} gewerteten Tagen aller Quartale" in text
+    assert "Alle Depots verwenden dieselben Ziehungen." in text
+
+
+def test_cell_with_one_round_trip_shows_no_band() -> None:
+    markdown, _ = build({"base": [result("2022Q1", SMALL)]})
+    rows = table_after(markdown, "## Marktphasen")
+    single = [r for r in rows if r[4] == "1"]
+    # Never "x [x bis x]" for a single round trip: one value has no spread to show.
+    assert single and all(
+        r[5].endswith("[Band: zu wenige]") and " bis " not in r[5] for r in single
+    )
+    assert any(" bis " in r[5] for r in rows if r[4] != "1")
+    assert "t-Verteilung" in section(markdown, "Marktphasen")

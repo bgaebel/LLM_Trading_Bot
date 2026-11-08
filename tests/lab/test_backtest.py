@@ -5,6 +5,7 @@ import io
 import json
 import math
 import os
+import sqlite3
 from collections.abc import Iterable, Iterator, Sequence
 from concurrent.futures import Future, as_completed
 from dataclasses import replace
@@ -13,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from lab_backtest_data import DAY, HOUR, T0, build_archive, crash, row, wavy
-from llm_trading_bot.lab import backtest
+from llm_trading_bot.lab import backtest, metrics
 from llm_trading_bot.lab.archive import Archive
 from llm_trading_bot.lab.backtest import (
     BASE,
@@ -36,6 +37,7 @@ from llm_trading_bot.lab.backtest import (
 from llm_trading_bot.lab.model import (
     LEAD_ROWS,
     SEAL_EPOCH,
+    DepotResult,
     MarketQuality,
     Quarter,
     QuarterResult,
@@ -51,6 +53,8 @@ from llm_trading_bot.lab.spread import (
 from llm_trading_bot.market import snapshot
 from llm_trading_bot.market.models import Candle, MarketDataError, Quote, Symbol
 from llm_trading_bot.market.snapshot import MarketSnapshot
+from llm_trading_bot.paper.execution import Costs
+from llm_trading_bot.paper.report import CycleReport, Equity
 
 MINUTE = 60
 
@@ -218,6 +222,18 @@ def test_missing_higher_bar_blocks_its_full_time(tmp_path: Path) -> None:
     eth = result.quality["ETH-EUR"]
     assert eth.no_decision == {"gap_60m": len(gap), "stale": len(stale)}  # live codes
     assert eth.blocked_rounds == len(stale) + len(gap)
+    # The codes count rounds (minutes), due counts bars: the share is over the market's rounds.
+    assert eth.rounds == result.rounds == len(rounds)
+    assert eth.due < len(gap)  # n / due would be far above 100 %
+    (row,) = [
+        r for r in metrics.quality([result]) if r.quarter == "2023Q1" and r.market == "ETH-EUR"
+    ]
+    assert row.rounds == len(rounds)
+    assert row.no_decision_share == {
+        "gap_60m": len(gap) / len(rounds),
+        "stale": len(stale) / len(rounds),
+    }
+    assert sum(row.no_decision_share.values()) <= 1.0
     assert result.quality["BTC-EUR"].no_decision == {}
     assert result.quality["BTC-EUR"].blocked_rounds == 0
 
@@ -270,10 +286,14 @@ def test_quarter_end_variants(tmp_path: Path) -> None:
         bh = result.depots["buyhold"]
         last = bh.days[-1]
         assert bh.end_mid == last.value
-        # Sold: every holding at bid (mid minus half the spread), minus slippage and fee.
+        # Sold: every holding at bid (mid minus half the spread), minus slippage and fee. The
+        # holding comes from the trades and the mid of the last round from daily_mid: the day
+        # point's weights are the day's mean, not the last round's.
         keep = (1 - variant.slippage) * (1 - variant.fee_rate)
+        held = {m: sum(t.qty for t in bh.trades if t.market == m) for m in DEFAULT_SPREAD}
+        mid = {m: result.daily_mid[m][-1][1] for m in DEFAULT_SPREAD}
         sold = last.cash + sum(
-            w * last.value * (1 - DEFAULT_SPREAD[m] / 2) * keep for m, w in last.weights.items()
+            held[m] * mid[m] * (1 - DEFAULT_SPREAD[m] / 2) * keep for m in DEFAULT_SPREAD
         )
         assert math.isclose(bh.end_liquidated, sold, rel_tol=1e-12)
         assert bh.end_liquidated < bh.end_mid
@@ -334,10 +354,59 @@ def test_day_points_and_daily_mid(tmp_path: Path) -> None:
         assert [p.day for p in depot.days] == ["2023-01-01", "2023-01-02"]
         for p in depot.days:
             assert set(p.weights) == {"BTC-EUR", "ETH-EUR"}
-            invested = sum(p.weights.values()) * p.value
-            assert math.isclose(p.cash + invested, p.value, rel_tol=1e-9)
+            assert all(0.0 <= w <= 1.0 for w in p.weights.values())
+            assert sum(p.weights.values()) <= 1.0 + 1e-9
+    # Buy & hold is fully invested from the first round on (minus the cash cap): its mean
+    # weight is close to, but not the same as, the weight at the day's last round.
+    bh = result.depots["buyhold"].days[-1]
+    invested = (bh.value - bh.cash) / bh.value
+    assert sum(bh.weights.values()) == pytest.approx(invested, rel=1e-2)
     actions = result.depots["buyhold"].actions
     assert actions == {"BUY/OK": 2}
+
+
+def _round(
+    track: backtest._Tracker, t: int, btc: float, price: float = 30_000.0, cash: float = 5_000.0
+) -> None:
+    """One round of a depot ``trend`` holding ``btc`` at mid ``price`` next to ``cash``."""
+    value = cash + btc * price
+    report = CycleReport(at=t, agents=("trend",))
+    report.equity.append(Equity("trend", value, cash, btc, 0.0))
+    quotes = {Symbol.BTCEUR: Quote(price - 1, price + 1), Symbol.ETHEUR: Quote(1999, 2001)}
+    track.round(t, report, {"BTC-EUR": "ok", "ETH-EUR": "ok"}, set(), quotes)
+
+
+def test_day_weights_are_the_mean_over_the_day() -> None:
+    # Review evidence: breakout held for hours each day but was flat at midnight, so the old
+    # day-end weight was 0, the mean quote 0 and the benchmark plain cash.
+    track = backtest._Tracker(Costs(BASE.fee_rate, BASE.slippage))
+    day1 = T0
+    # Day 1: flat, then half of 10,000 EUR in BTC for two of four rounds, flat again at the end.
+    _round(track, day1 + 5, 0.0, cash=10_000.0)
+    _round(track, day1 + 6 * HOUR + 5, 5_000.0 / 30_000.0)
+    _round(track, day1 + 12 * HOUR + 5, 5_000.0 / 30_000.0)
+    _round(track, day1 + 23 * HOUR + 5, 0.0, cash=10_000.0)
+    # Day 2: invested in every round.
+    _round(track, day1 + DAY + 5, 5_000.0 / 30_000.0)
+    _round(track, day1 + DAY + HOUR + 5, 5_000.0 / 30_000.0)
+    track.finish()
+    first, second = track.days["trend"]
+    assert first.day == "2023-01-02" and first.cash == first.value == 10_000.0
+    assert first.weights == {"BTC-EUR": pytest.approx(0.25), "ETH-EUR": 0.0}
+    assert second.weights == {"BTC-EUR": pytest.approx(0.5), "ETH-EUR": 0.0}
+    assert track.observed == {"BTC-EUR": 6, "ETH-EUR": 6}
+
+    # The benchmark of the same quote sees that exposure, not cash.
+    q = Quarter("2023Q1", T0, T0 + 2 * DAY)
+    depot = DepotResult("trend", days=track.days["trend"], end_mid=second.value)
+    mids = [("2023-01-01", 30_000.0), ("2023-01-02", 30_300.0), ("2023-01-03", 30_000.0)]
+    result = QuarterResult(q, BASE, depots={"trend": depot}, daily_mid={"BTC-EUR": mids})
+    bench = metrics.benchmark(result, "trend")
+    assert bench.exposure == {"BTC-EUR": pytest.approx(0.375)}
+    assert bench.total == pytest.approx(
+        (1 + 0.375 * 0.01) * (1 + 0.375 * (30_000 / 30_300 - 1)) - 1
+    )
+    assert metrics.depot_metrics(result, "trend").mean_quote == pytest.approx(0.375)
 
 
 def test_sealed_period_refused(tmp_path: Path) -> None:
@@ -625,6 +694,42 @@ def test_cli_reports_each_quarter_in_german(tmp_path: Path) -> None:
     out = io.StringIO()
     assert cli_main("backtest", ["--help"], out) == EXIT_OK
     assert "Lückentoleranz" in out.getvalue() and "Prozessorkerne" in out.getvalue()
+
+
+@pytest.mark.parametrize("damage", ["not_a_database", "old_schema", "no_archive_tables"])
+def test_cli_refuses_an_unreadable_archive_in_german(tmp_path: Path, damage: str) -> None:
+    path = tmp_path / "candles.db"
+    if damage == "not_a_database":
+        path.write_text("kein SQLite", encoding="utf-8")
+    elif damage == "old_schema":
+        build_archive(path, T0, T0 + HOUR, lead=5)
+        with Archive(path) as arch:
+            arch.db.execute("UPDATE meta SET value='0' WHERE key='schema_version'")
+    else:
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE other(x)")
+        con.close()
+    before = path.read_bytes()
+    out = io.StringIO()
+    args = ["--from", "2021Q2", "--to", "2021Q2", "--dir", str(tmp_path), "--workers", "1"]
+    assert cli_main("backtest", args, out) == EXIT_REFUSED
+    text = out.getvalue()
+    assert text.startswith(f"Kerzenarchiv {path} nicht lesbar - nichts gerechnet.")
+    assert "Traceback" not in text and len(text.splitlines()) == 1
+    # Refused before the register is touched, and the archive stays as it was.
+    assert not (tmp_path / "runs.db").exists()
+    assert path.read_bytes() == before
+
+
+def test_cli_refuses_an_unusable_register_in_german(tmp_path: Path) -> None:
+    build_archive(tmp_path / "candles.db", T0, T0 + HOUR, lead=5)
+    (tmp_path / "runs.db").write_text("kein Register", encoding="utf-8")
+    out = io.StringIO()
+    args = ["--from", "2021Q2", "--to", "2021Q2", "--dir", str(tmp_path), "--workers", "1"]
+    assert cli_main("backtest", args, out) == EXIT_REFUSED
+    text = out.getvalue()
+    assert text.startswith(f"Prüfregister unter {tmp_path / 'runs.db'} nicht nutzbar")
+    assert text.rstrip().endswith("nichts gerechnet.") and "Backtest 2021Q2" not in text
 
 
 def test_cli_skips_the_cost_point_equal_to_base(tmp_path: Path) -> None:
