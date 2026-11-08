@@ -182,8 +182,10 @@ Seit Spec 021 läuft das Euro-Depot `buyhold` nicht mehr; Referenz der Übersich
 - Danach steht im Journal kein `trade buyhold bought …` mehr, und die Rundenzeile `round ok … | equity …` nennt
   `buyhold` nicht mehr. Seine Zeilen in `bot.db` bleiben unverändert (Depot, Entscheidungen, Trades, Equity).
 - Die Übersicht zeigt ein Depot nur, solange sein neuester Equity-Punkt höchstens 1 h älter ist als der neueste
-  der DB: `buyhold` verschwindet also spätestens 1 h nach dem Deploy (auch aus Laufband, Signalen und Trades, mit
-  und ohne Login). Gleiches gilt für ein in den Einstellungen abgewähltes Depot.
+  der DB – oder als der letzte gespeicherte Kurs eines Markts, den es hält, wenn der älter ist: `buyhold`
+  verschwindet also spätestens 1 h nach dem Deploy (auch aus Laufband, Signalen und Trades, mit und ohne Login),
+  ein Kursausfall eines Markts blendet dagegen kein Depot aus, egal wie lange. Gleiches gilt für ein in den
+  Einstellungen abgewähltes Depot.
 - „vs.“ = Rendite des Depots seit dem ersten Equity-Punkt von `buyhold-usdc` minus dessen Rendite seit dort, in
   Prozentpunkten; „–“ für die Referenz selbst und für Depots, die erst danach begonnen haben. Ohne USDC-Depots ist
   `buyhold` die Referenz, falls es läuft, sonst gibt es keine.

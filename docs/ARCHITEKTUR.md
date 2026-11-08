@@ -253,8 +253,8 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `overview`: `load(con, now, shares, service=)` → `Overview` (Depots, Equity-Reihen über den Index ausgedünnt,
     Lebenszeichen, letzte Kauf-/Verkaufssignale je Depot und Markt ohne HOLD aus den neuesten 50 000
     Entscheidungen, GPT heute, Trades, Kurse, `reference`); `service_pulse(status, now)`. Spec 021: alle Listen
-    nur mit aktiven Depots (neuester Equity-Punkt ≤ `ACTIVE_SECONDS` = 1 h älter als der neueste der DB; vor der
-    ersten Runde alle); `depots(con)` liefert alle mit `active` (Freigabeliste). Referenz der Spalte „vs.“:
+    nur mit aktiven Depots (neuester Equity-Punkt ≤ `ACTIVE_SECONDS` = 1 h älter als der neueste der DB bzw. als
+    der letzte Kurs eines gehaltenen Markts in `market`, wenn der älter ist; vor der ersten Runde alle); `depots(con)` liefert alle mit `active` (Freigabeliste). Referenz der Spalte „vs.“:
     `buyhold-usdc`, sonst `buyhold`, falls aktiv; vs = Rendite seit dem ersten Equity-Punkt der Referenz minus
     deren Rendite seit dort, in Prozentpunkten („–“ ohne Punkt des Depots zu oder vor diesem Zeitpunkt)
   - `auth`: `PasswordStore` (scrypt; neue Passwörter ≥ 12 Zeichen, nicht häufig), `password_problem`,

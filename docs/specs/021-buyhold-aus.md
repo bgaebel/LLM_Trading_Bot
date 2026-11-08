@@ -31,13 +31,17 @@ Das Euro-Depot `buyhold` läuft im Paper-Bot nicht mehr: Es entscheidet, handelt
   `tests/paper/test_buyhold_off.py::test_old_database_with_buyhold_opens_with_buyhold_off`,
   `::test_switching_back_on_continues_valuing_without_buying_again`
 - [x] AK5: **Übersicht zeigt nur aktive Depots:** Ein Depot ist aktiv, wenn sein neuester Equity-Punkt höchstens
-  1 h (`DELAYED_SECONDS`) älter ist als der neueste Equity-Punkt der DB; vor der ersten Runde (kein Equity-Punkt)
-  sind alle Depots aktiv. Die Regel braucht nur `bot.db` (ADR-0016), nicht die Umgebung des Bots. Ein inaktives
+  1 h (`DELAYED_SECONDS`) älter ist als der neueste Equity-Punkt der DB – oder als der letzte gespeicherte Kurs
+  (Tabelle `market`) eines Markts, den es hält (bei USDC-Depots: dessen Route), wenn der älter ist; vor der ersten
+  Runde (kein Equity-Punkt) und bei einem gehaltenen Markt ganz ohne Kurs ist es aktiv. Ein Kursausfall eines Markts
+  blendet so kein Depot aus, egal wie lange. Die Regel braucht nur `bot.db` (ADR-0016), nicht die Umgebung des Bots. Ein inaktives
   Depot fehlt in Depottabelle, Equity-Verlauf, Laufband, letzten Signalen und letzten Trades – in der Ansicht mit
   Login und in der öffentlichen (ADR-0028); seine Historie bleibt in der DB. Die Freigabeliste der Einstellungen
   zeigt weiter jedes gestoppte Depot (Spec 011). — Nachweis:
   `tests/web/test_reference.py::test_stopped_depot_leaves_every_list`,
   `::test_a_depot_stays_shown_for_an_hour_after_its_last_valuation`,
+  `::test_a_long_quote_outage_of_one_market_hides_no_depot`,
+  `::test_the_active_window_ends_at_the_last_quote_of_a_held_market`,
   `::test_before_the_first_round_every_depot_is_shown`, `::test_public_view_hides_the_stopped_depot`
 - [x] AK6: **Spalte „vs. Buy & Hold USDC“:** Referenz ist `buyhold-usdc`, gemessen über seine Laufzeit:
   `vs = (E_jetzt / E_start − 1) − (R_jetzt / R_start − 1)` in Prozentpunkten; `R_start` ist der erste Equity-Punkt
@@ -78,10 +82,12 @@ Das Euro-Depot `buyhold` läuft im Paper-Bot nicht mehr: Es entscheidet, handelt
 - `llm/agents.py`: Feld `buyhold` in `BotConfig`, `benchmarks` nimmt `buyhold` nur, wenn an. Weil `open_db`, die
   Bewertung und das Anlegen neuer Depots `config.depots` nutzen, berührt die Runde `buyhold` dann nirgends.
 - `paper/cycle.py`: Erstkauf nur mit `config.buyhold` (sonst würde er auf einer alten DB in das ruhende Depot kaufen).
-- `web/overview.py`: Aktivregel aus den ohnehin gelesenen neuesten Equity-Punkten je Depot; Referenz und
+- `web/overview.py`: Aktivregel aus den ohnehin gelesenen neuesten Equity-Punkten je Depot, begrenzt durch den
+  letzten Kurs der gehaltenen Märkte (eine Abfrage auf `market`, höchstens vier Zeilen); Referenz und
   Startpunkte mit je einer Index-Abfrage mit `LIMIT`; `load` filtert alle Listen auf aktive Depots.
-- Verworfen: Sichtbarkeit „Equity-Punkt in der neuesten Runde“ (ein Depot mit Bestand in einem Markt ohne frischen
-  Kurs verschwände genau dann, wenn etwas nicht stimmt); die Liste der Depots aus der Umgebung des Bots (die
+- Verworfen: Sichtbarkeit „Equity-Punkt in der neuesten Runde“ oder „höchstens 1 h hinter dem neuesten Punkt der
+  DB“ ohne Blick auf die Kurse (ein Depot mit Bestand in einem Markt ohne frischen Kurs verschwände genau dann, wenn
+  etwas nicht stimmt – bei der zweiten nach 1 h, samt Referenz); die Liste der Depots aus der Umgebung des Bots (die
   Weboberfläche kennt sie nicht, ADR-0016); Zeilen löschen oder umbenennen (Historie).
 
 ## Plan
@@ -97,6 +103,12 @@ Das Euro-Depot `buyhold` läuft im Paper-Bot nicht mehr: Es entscheidet, handelt
   BTC-USDC; der Unterschied der Ausführungskosten steckt mit in „vs.“ (Nutzer informiert 2026-11-08).
 - **Depots jünger als die Referenz** zeigen „–“, solange es keinen Equity-Punkt zu Beginn der Referenz gibt.
 - **M1-Uhr:** der Deploy startet die 7 Tage neu.
+- **Labor (Spec 016) beim Zusammenführen:** `lab/backtest.py` baut `BotConfig(classic=CLASSIC, llm=None)` und
+  erwartet ein Depot `buyhold` (`lab/model.py`: `DEPOTS = (*CLASSIC, BUYHOLD)`). Nach dem Merge mit 021 ist
+  Buy & Hold dort aus, das Labor-Buy-&-Hold kauft und bewertet dann nichts (Git meldet keinen Konflikt in `src/`).
+  Beim Merge `buyhold=True` im Labor setzen; der Stolperdraht
+  `tests/paper/test_buyhold_off.py::test_strategy_lab_asks_for_buyhold_where_it_expects_it` schlägt sonst fehl
+  (bis dahin übersprungen, weil `lab` auf diesem Branch fehlt).
 
 ---
 
@@ -113,6 +125,11 @@ Das Euro-Depot `buyhold` läuft im Paper-Bot nicht mehr: Es entscheidet, handelt
   Nebenwirkung der Aktivregel: auch ein abgewähltes klassisches Depot verschwindet nach 1 h aus der Übersicht
   (bisher blieb es mit altem Wert stehen); die Freigabeliste zeigt gestoppte Depots weiter alle. README nennt die
   Standard-Depots neu.
+- 2026-11-08: Prüfung (Workflow) fand zwei Mängel, behoben: (1) Aktivregel blendete bei mehr als 1 h Kursausfall
+  eines Markts jedes Depot mit Bestand darin aus, auch Referenz und `gpt-luna` – jetzt begrenzt der letzte Kurs der
+  gehaltenen Märkte das Fenster (AK5 präzisiert, ADR-0031 auf dem Branch vor dem Merge angepasst), 5 neue Mutanten;
+  (2) Docstring behauptete, das Labor schalte Buy & Hold ein – korrigiert, Risiko oben, Stolperdraht-Test.
+  `CycleReport.buyhold` hat jetzt denselben Standard (aus) wie `BotConfig.buyhold`.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

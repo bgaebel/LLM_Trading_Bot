@@ -24,15 +24,18 @@ Er wurde darauf hingewiesen, dass die Euro-Depots damit keine genau passende Ref
   Rendite der Referenz seit demselben Punkt, in Prozentpunkten. Ist `buyhold-usdc` nicht aktiv, ist `buyhold` die
   Referenz, falls aktiv, sonst gibt es keine.
 - **Übersicht zeigt nur aktive Depots:** aktiv = neuester Equity-Punkt höchstens 1 h älter als der neueste der DB
-  (vor der ersten Runde alle). Die Regel braucht nur die DB (ADR-0016).
+  bzw. als der letzte gespeicherte Kurs eines Markts, den das Depot hält, wenn der älter ist (vor der ersten Runde
+  alle; ein gehaltener Markt ganz ohne Kurs: sichtbar). Der Bot bewertet ein Depot nur mit frischem Kurs für alles,
+  was es hält; so blendet ein Kursausfall kein Depot aus. Die Regel braucht nur die DB (ADR-0016).
 
 ## Verworfene Alternativen
 - **Nur ausblenden, weiter betreiben:** vom Nutzer verworfen („Ganz abschalten“).
 - **Zeilen löschen oder umbenennen:** verfälscht die Handelshistorie (CLAUDE.md, Kernwert in PROJEKT.md).
 - **Code entfernen:** das Labor (Spec 016) betreibt den Live-Zyklus mit v0.3.1 plus Buy & Hold; ein Rückweg ohne
   Codeänderung bleibt so möglich.
-- **Sichtbar, solange in der neuesten Runde bewertet:** ein Depot mit Bestand in einem Markt ohne frischen Kurs
-  verschwände genau dann, wenn etwas nicht stimmt.
+- **Sichtbar, solange in der neuesten Runde bewertet** oder **höchstens 1 h hinter dem neuesten Punkt der DB**
+  (ohne Blick auf die Kurse): ein Depot mit Bestand in einem Markt ohne frischen Kurs verschwände genau dann, wenn
+  etwas nicht stimmt – bei der zweiten Regel nach 1 h Kursausfall, samt Referenz und Haupt-Trader.
 - **„vs.“ weiter ab Startkapital:** `buyhold-usdc` begann später als die übrigen Depots; der Vergleich mischte dann
   unterschiedliche Zeiträume.
 
