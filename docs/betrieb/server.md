@@ -174,6 +174,14 @@ Pfad, den es noch nicht gibt:
 3. `trading-bot restore --backup <datei> --db /var/lib/llm-trading-bot/bot.db` als `<dienst>` (wie oben).
 4. `sudo systemctl start llm-trading-bot`, dann `deploy.sh … status`.
 
+`observations.db` bleibt dabei liegen (nicht beiseitelegen, nicht zurücksetzen): Sie ist nur anhängend und gehört
+zu keinem bestimmten Stand von `bot.db`. Nach der Wiederherstellung vergibt `bot.db` Entscheidungs-Bars und
+GPT-Aufruf-IDs (`llm_call_id`) ab dem Stand der Sicherung neu; dieselben Schlüssel können in den Beobachtungen also
+ein zweites Mal vorkommen. Solche Zeilen werden nicht doppelt geschrieben, sondern gezählt –
+`observations_last_error` zeigt dann `N decision/attempt rows ignored (duplicate keys) - bot.db restored?`, die
+Aufzeichnung läuft weiter. Auswertungen (Labor) verbinden Beobachtungen und `bot.db` deshalb immer zusätzlich über
+die Zeit (`ts`), nie über die ID allein.
+
 **Beobachtungs-DB (Spec 015, ADR-0027):** eigenes Profil mit eigenem Schema und eigenen Namen
 (`observations-<UTC>.db`), im selben Timer als zweiter, eigener Aufruf nach `bot.db`. Scheitert er (z. B.
 beschädigte Datei), ist die Sicherung von `bot.db` schon fertig und die Unit trotzdem erfolgreich; der Fehler steht im

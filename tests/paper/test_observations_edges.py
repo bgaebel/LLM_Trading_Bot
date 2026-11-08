@@ -23,9 +23,10 @@ from llm_trading_bot.paper.execution import BUYHOLD, Costs
 from llm_trading_bot.paper.observations import (
     ObservationBuffer,
     ObservationWriter,
+    ignored_message,
     rejected_purpose,
 )
-from llm_trading_bot.paper.observations_schema import OBS_FILE
+from llm_trading_bot.paper.observations_schema import OBS_FILE, create
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 TREND = BotConfig(("trend",), None)
@@ -185,3 +186,44 @@ def test_snapshots_are_recorded_when_the_round_fails_in_the_valuation(
         ("ETHEUR", "ok", None, 1),
     ]
     assert len(buffer.decisions) == 2 and buffer.dropped == 0
+
+
+# ------------------------------------------------------------------ repeated keys
+
+
+def test_repeated_keys_are_counted_and_recording_stays_on(tmp_path: Path) -> None:
+    path = tmp_path / OBS_FILE
+    writer = ObservationWriter(path)
+    writer.write(small_buffer())
+    assert writer.last_error is None
+    # As after a restore of bot.db: the same call id and bar come round again.
+    writer.write(small_buffer())
+    assert writer.last_error == ignored_message(2)
+    assert (
+        writer.last_error == "2 decision/attempt rows ignored (duplicate keys) - bot.db restored?"
+    )
+    assert (writer.written, writer.failed, writer.off) == (2, 0, False)
+    assert counts(path)["rounds"] == 2 and counts(path)["llm_attempts"] == 1
+    writer.write(small_buffer(call_id=8))  # the attempt is new, the decision again not
+    assert writer.last_error == ignored_message(1)
+    writer.write(small_buffer(call_id=9, bar_ts=NOW))
+    assert writer.last_error is None and counts(path)["decision_meta"] == 2
+
+
+# ------------------------------------------------------------------ last error
+
+
+def test_last_error_is_cleared_by_the_next_write(tmp_path: Path) -> None:
+    path = tmp_path / OBS_FILE
+    create(path)
+    blocker = sqlite3.connect(path, isolation_level=None)
+    blocker.execute("BEGIN IMMEDIATE")
+    writer = ObservationWriter(path)
+    try:
+        writer.write(small_buffer())
+        assert writer.last_error is not None and "locked" in writer.last_error
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+    writer.write(small_buffer())
+    assert (writer.written, writer.failed, last_error(writer)) == (1, 1, None)

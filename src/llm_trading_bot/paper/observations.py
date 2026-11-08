@@ -260,9 +260,9 @@ def insert(
     con: sqlite3.Connection,
     buffer: ObservationBuffer,
     windows: list[tuple[object, ...]] | None = None,
-) -> None:
+) -> int:
     """All rows of ``buffer`` (window rows: ``windows`` if given); the caller holds the
-    transaction."""
+    transaction. Returns the decision and attempt rows ignored because their key was there."""
     if buffer.round_at is not None:
         cursor = con.execute(
             "INSERT INTO rounds(ts,release) VALUES (?,?)", (iso(buffer.round_at), buffer.release)
@@ -282,18 +282,31 @@ def insert(
             "INSERT INTO snapshots(round_id,ts,symbol,status,message,decided) VALUES (?,?,?,?,?,?)",
             [(round_id, *row) for row in buffer.snapshots],
         )
-    # OR IGNORE: a decision or attempt is observed once; a repeat (e.g. a replayed slot after a
-    # clock jump) must not cost the whole round.
-    con.executemany(
-        "INSERT OR IGNORE INTO decision_meta(ts,agent,symbol,bar_ts,strategy,strategy_version,"
-        "release,indicators) VALUES (?,?,?,?,?,?,?,?)",
-        buffer.decisions,
-    )
-    con.executemany(
-        "INSERT OR IGNORE INTO llm_attempts(ts,llm_call_id,agent,trigger,trigger_detail,cadence,"
-        "raw_text,targets) VALUES (?,?,?,?,?,?,?,?)",
-        buffer.attempts,
-    )
+    # OR IGNORE: a decision or attempt is observed once; a repeat must not cost the whole round.
+    # bot.db stores each key once, so a repeat means its ids and bars came round again - after a
+    # restore of bot.db. The caller reports the count; the lab keys on ts as well.
+    ignored = 0
+    for sql, rows in (
+        (
+            "INSERT OR IGNORE INTO decision_meta(ts,agent,symbol,bar_ts,strategy,"
+            "strategy_version,release,indicators) VALUES (?,?,?,?,?,?,?,?)",
+            buffer.decisions,
+        ),
+        (
+            "INSERT OR IGNORE INTO llm_attempts(ts,llm_call_id,agent,trigger,trigger_detail,"
+            "cadence,raw_text,targets) VALUES (?,?,?,?,?,?,?,?)",
+            buffer.attempts,
+        ),
+    ):
+        if rows:
+            # executemany sums the rows it inserted; an ignored row adds nothing.
+            ignored += len(rows) - con.executemany(sql, rows).rowcount
+    return ignored
+
+
+def ignored_message(count: int) -> str:
+    """``last_error`` after a round whose decision or attempt keys were already recorded."""
+    return f"{count} decision/attempt rows ignored (duplicate keys) - bot.db restored?"
 
 
 def _damaged(exc: BaseException) -> bool:
@@ -340,10 +353,18 @@ class ObservationWriter:
         except Exception as exc:
             self._fail(exc)
             return
-        if self._write(lambda con: insert(con, buffer, fresh)):
+        ignored = [0]
+
+        def work(con: sqlite3.Connection) -> None:
+            ignored[0] = insert(con, buffer, fresh)
+
+        if self._write(work):
             # Only after the commit: a lost round must not hide its windows from the next one.
             for row in fresh:
                 self.windows_seen[(str(row[1]), int(str(row[2])))] = _window_state(row)
+            if ignored[0]:
+                # Written, so not a failure and recording stays on - but worth a look.
+                self.last_error = ignored_message(ignored[0])
 
     def _write(self, work: Callable[[sqlite3.Connection], object]) -> bool:
         if self.off:
@@ -366,6 +387,8 @@ class ObservationWriter:
             self._fail(exc)
             return False
         self.written += 1
+        # The error is over: the status shows none, and the service logs it again if it returns.
+        self.last_error = None
         return True
 
     def _fail(self, exc: BaseException) -> None:

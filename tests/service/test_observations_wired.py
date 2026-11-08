@@ -294,3 +294,18 @@ def test_status_file_of_the_service_has_the_observation_fields(
     data = json.loads(status_path(h.db).read_text(encoding="utf-8"))
     assert {"observations_written", "observations_failed", "observations_last_error"} <= set(data)
     assert obs_module.BUSY_TIMEOUT_MS <= 1000
+
+
+def test_service_logs_an_error_again_after_a_success(tmp_path: Path) -> None:
+    h = harness(tmp_path)
+    service = h.service
+    for error in (
+        "OperationalError: database is locked",
+        None,
+        None,
+        "OperationalError: database is locked",
+        "OperationalError: database is locked",
+    ):
+        service.observer.last_error = error
+        service._log_observations()
+    assert h.log().count("observations not recorded: OperationalError") == 2

@@ -28,6 +28,7 @@ from llm_trading_bot.paper.observations import (
     ObservationBuffer,
     ObservationWriter,
     changed_windows,
+    ignored_message,
     insert,
     note,
     observations_path,
@@ -368,7 +369,13 @@ def test_writer_creates_a_missing_file_and_appends(tmp_path: Path) -> None:
     writer.write(full_buffer())
     writer.write(full_buffer(NOW + 60))
     writer.write(ObservationBuffer())  # nothing to write: no transaction, no count
-    assert (writer.written, writer.failed, writer.last_error, writer.off) == (3, 0, None, False)
+    # The second buffer repeats the decision and the attempt: written, but said.
+    assert (writer.written, writer.failed, writer.last_error, writer.off) == (
+        3,
+        0,
+        ignored_message(2),
+        False,
+    )
     assert counts(path) == {
         "service_starts": 1,
         "rounds": 2,
