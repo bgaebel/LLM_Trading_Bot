@@ -291,36 +291,69 @@ class QuarterResult:
 
 
 FIDELITY_MIN = 300
-"""Comparisons per market below which fidelity counts as not established (AK5)."""
+"""Per market: comparisons, and exactly equal snapshots with proven equal input, below which
+fidelity counts as not established (AK5)."""
 
 
 @dataclass
 class FidelitySummary:
-    """What the fidelity check against live found (AK5); the report shows it as it is."""
+    """What the fidelity check against live found (AK5); the report shows it as it is.
+
+    Per market a comparison is one rebuilt live decision. Those with a recorded round fall
+    into ``exact`` (same input, nothing strict deviates), ``different`` (the recording proves
+    another input) or neither (same input, but a deviation: never explained). Those without a
+    recorded round are ``unrecorded``, or ``different`` if a candle field already differs.
+    """
 
     compared: dict[str, int] = field(default_factory=dict)
     """Market -> live decisions rebuilt and compared."""
     equal_action: dict[str, int] = field(default_factory=dict)
     """Market -> comparisons with equal action and target."""
     indicators_ok: dict[str, int] = field(default_factory=dict)
-    """Market -> comparisons whose indicators match within one rounding step."""
+    """Market -> comparisons whose indicators match within one rounding step (information
+    only since the AK5 change of 2026-11-08: where the input differs they may differ)."""
     deviations: list[dict[str, Any]] = field(default_factory=list)
     """Each with market, utc, agent, field, live, rebuilt and cause."""
     with_observations: bool = False
     note: str = ""
+    exact: dict[str, int] = field(default_factory=dict)
+    """Market -> comparisons with a recorded round whose input the recording proves equal
+    (directly or over the rows live got) and without any strict deviation. Missing in a JSON
+    written before (AK5 change 2026-11-08): {} - never established."""
+    truncated: dict[str, int] = field(default_factory=dict)
+    """Market -> of ``exact``, comparisons rebuilt from the shorter window live got."""
+    different: dict[str, dict[str, int]] = field(default_factory=dict)
+    """Market -> cause -> comparisons whose input is proven different."""
+    unrecorded: dict[str, int] = field(default_factory=dict)
+    """Market -> comparisons without a recorded round and without a differing candle field:
+    their indicators cannot be checked (``ohne Aufzeichnung nicht prüfbar``)."""
+
+    def unexplained(self, market: str) -> int:
+        return sum(1 for d in self.deviations if d.get("market") == market and not d.get("cause"))
+
+    def verdict(self, market: str) -> tuple[bool, str]:
+        """(established, reason). AK5: every comparison with equal action and target, no
+        deviation without a cause, and at least ``FIDELITY_MIN`` comparisons and exactly equal
+        snapshots with proven equal input - never "100 %" below that. The one rule for the
+        console, the JSON and the report."""
+        n = self.compared.get(market, 0)
+        equal = self.equal_action.get(market, 0)
+        exact = self.exact.get(market, 0)
+        unexplained = self.unexplained(market)
+        reasons = []
+        if n < FIDELITY_MIN:
+            reasons.append(f"zu wenige Vergleiche: {n} < {FIDELITY_MIN}")
+        if equal != n:
+            reasons.append(f"Aktion oder Ziel abweichend in {n - equal} von {n} Vergleichen")
+        if unexplained:
+            reasons.append(f"{unexplained} Abweichungen ohne Ursache")
+        if exact < FIDELITY_MIN:
+            reasons.append(f"zu wenige exakt gleiche Snapshots: {exact} < {FIDELITY_MIN}")
+        return not reasons, "; ".join(reasons)
 
     @property
     def established(self) -> dict[str, bool]:
-        """Never "100 %" below FIDELITY_MIN. Every comparison needs equal action and target and
-        indicators within one rounding step (AK5); an unexplained deviation also fails."""
-        unexplained = {d["market"] for d in self.deviations if not d.get("cause")}
-        return {
-            m: n >= FIDELITY_MIN
-            and self.equal_action.get(m, 0) == n
-            and self.indicators_ok.get(m, 0) == n
-            and m not in unexplained
-            for m, n in self.compared.items()
-        }
+        return {m: self.verdict(m)[0] for m in self.compared}
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))

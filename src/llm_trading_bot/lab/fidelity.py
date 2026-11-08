@@ -14,6 +14,23 @@ Every snapshot the live bot recorded is rebuilt from the candle archive at its o
   flag, checksum of the closed rows) and the unrounded indicators (1e-12). The recorded
   forming flag makes the rebuilt window exact.
 
+What counts (AK5, changed with the user's approval 2026-11-08): action and target must be
+equal in every comparison; indicators must be exactly equal only where the recording proves
+the same input, and every other deviation needs a proven cause. Per recorded window:
+
+- equal: the input is the same;
+- truncated: live got fewer rows than asked for (Bitvavo, ``LEARNINGS.md``) and the archive
+  holds exactly those rows in live's ``[first_open, last_open]`` (count and checksum): the
+  snapshot is rebuilt from that cut window (``HistoricalClient.row_limit``) - the same input;
+- LATE: the last closed bar had less volume live than in the archive (late trades);
+- OTHER_WINDOW: any other difference.
+
+A snapshot with a LATE or OTHER_WINDOW window has a proven different input: its window
+deviations carry that cause, its data, indicator, signal and action deviations
+``Eingang verschieden (...)``. A deviation of a snapshot with the same input keeps an empty
+cause and fails - a code bug is never explained away. Fidelity is established for a market
+only with ``FIDELITY_MIN`` such exactly equal snapshots (``FidelitySummary.exact``).
+
 Costs come from the stored quote (``quote_bid``/``quote_ask``) and the stored fee/slippage
 percentages, the weight from the stored ``current_weight`` (rounded to 4 places; for a classic
 HOLD the stored target is the unrounded weight). The quotes are never rebuilt: there is no
@@ -23,7 +40,9 @@ Without observations the archive cannot tell whether live already had the formin
 answer (``history.py``). A deviation that disappears when the forming bar of some intervals is
 dropped is marked "laufende Kerze (Naeherung)" and counted as equal - but only for intervals
 whose forming bar live could have lacked: no closed 1m bar with a trade in it before the
-snapshot. Any other deviation keeps an empty cause (unexplained) and fails the check. A
+snapshot. Of the rest, a candle field gets UNRECORDED_DATA (and the indicators then inherit
+``Eingang verschieden (ohne Aufzeichnung)``), an indicator otherwise NOT_CHECKABLE; such
+snapshots never count as exactly equal. Actions, signals and cost fields stay strict. A
 STALE_QUOTE decision is compared with the fail-closed HOLD/0; a classic decision whose inputs
 cannot be read is listed as unreadable (only buy & hold has no snapshot to compare). Below
 ``FIDELITY_MIN`` comparisons per market fidelity is "nicht belegt"
@@ -99,6 +118,23 @@ UNREADABLE = "Eingaben nicht lesbar"
 ROUTE_MISSING = "USDC-Quoten der Runde nicht aufgezeichnet"
 """Cause of a skipped BTC decision of a USDC depot: its costs need the round's BTC-USDC and
 USDC-EUR quotes, which only observations.db holds (module doc)."""
+LATE = "Kerze live vorläufig (späte Trades)"
+"""Cause of a recorded window whose last closed bar had less volume live than in the archive:
+fetched 5 s after its close, before late trades were added (``LEARNINGS.md``)."""
+OTHER_WINDOW = "Live-Fenster anders als Archiv"
+"""Cause of any other recorded window that differs from the archive's (rows, open times,
+checksum)."""
+UNRECORDED_DATA = "Eingangskerze anders als Archiv (ohne Aufzeichnung)"
+"""Cause of a candle field (closed bars, last close, gap count) that differs in a snapshot
+without a recorded round: its input differs from the archive, how cannot be told."""
+NOT_CHECKABLE = "ohne Aufzeichnung nicht prüfbar"
+"""Cause of an indicator deviation in a snapshot without a recorded round that neither the
+forming bar nor a different input candle explains: without the windows it cannot be decided."""
+UNRECORDED = "ohne Aufzeichnung"
+DIFFERENT_INPUT = "Eingang verschieden ({})"
+"""Cause inherited by the data, indicator, signal and action deviations of a snapshot whose
+input is proven different (the window's cause in the brackets). Actions still count as
+unequal (``equal_action`` stays strict)."""
 ROUTE_PURPOSES = ("start", "recheck")
 """``books.purpose`` of the fetches whose quotes the round's classic and USDC depots read."""
 BENCHMARKS = frozenset({BUYHOLD, usdc.BUYHOLD_USDC})
@@ -184,6 +220,8 @@ class ObservedWindow:
     last_open: int | None
     forming: bool
     sha256: str
+    last_closed_volume: float | None = None
+    """Volume of the last closed bar live got; None if not recorded (NULL)."""
 
 
 # ---------------------------------------------------------------- reading the live copies
@@ -405,6 +443,11 @@ class Observations:
 
     def __init__(self, con: sqlite3.Connection) -> None:
         self._con = con
+        # Every observations schema so far has the column; a copy without it (hand-made, or a
+        # shape check() reads without the schema check) reads as not recorded.
+        columns = {str(r[1]) for r in con.execute("PRAGMA table_info(windows)")}
+        volume = "last_closed_volume" if "last_closed_volume" in columns else "NULL"
+        self._volume = f"{volume} AS last_closed_volume"
         # ISO strings compared as SQLite compares TEXT (bytewise): the same rounds as
         # ``WHERE ts<=? AND ts>=?`` would find.
         rounds = sorted((str(ts), int(rid)) for rid, ts in con.execute("SELECT id, ts FROM rounds"))
@@ -460,8 +503,8 @@ class Observations:
                 None
                 if wid is None
                 else con.execute(
-                    "SELECT rows, first_open, last_open, forming, rows_sha256 FROM windows"
-                    " WHERE id=?",
+                    "SELECT rows, first_open, last_open, forming, rows_sha256, "
+                    f"{self._volume} FROM windows WHERE id=?",
                     (wid,),
                 ).fetchone()
             )
@@ -473,6 +516,7 @@ class Observations:
                 row["last_open"],
                 bool(row["forming"]),
                 str(row["rows_sha256"]),
+                _volume(row["last_closed_volume"]),
             )
         return out
 
@@ -517,6 +561,16 @@ class Observations:
             return {}
         data = json.loads(row["indicators"])
         return data if isinstance(data, dict) else {}
+
+
+def _volume(value: object) -> float | None:
+    """The recorded volume as a number (REAL, or a number in TEXT); None if absent."""
+    if not isinstance(value, int | float | str) or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
 def _iso(epoch: int) -> str:
@@ -567,6 +621,8 @@ class _OneMarket:
 
 
 Hint = Mapping[int, bool | None]
+Caps = Mapping[int, int]
+"""Interval -> rows live got, where the recording proves a cut window (truncated)."""
 
 
 class Rebuilder:
@@ -581,6 +637,7 @@ class Rebuilder:
         first, last = min(epochs), max(epochs)
         starts = {i: first - int(CANDLE_LIMIT * LEAD_FACTOR) * i * 60 - 86_400 for i in INTERVALS}
         self._hint: Hint = {}
+        self._caps: dict[int, int] = {}
         self.client = HistoricalClient(
             _LeadSource(source, starts),
             spreads or ConstantSpreads(),
@@ -589,6 +646,7 @@ class Rebuilder:
             start=min(starts.values()),
             end=last + 1,
             forming_hint=lambda _symbol, interval, _now: self._hint.get(interval),
+            row_limit=lambda _symbol, interval, _now: self._caps.get(interval),
         )
         # The depots of one round share its snapshot; a few recent rebuilds suffice, and a
         # bounded cache keeps months of snapshots (500 bars x 4 intervals each) out of memory.
@@ -608,20 +666,27 @@ class Rebuilder:
         return any(c.volume > 0 for c in minutes)
 
     def rebuild(
-        self, rec: Recorded, hint: Hint, route: Mapping[Symbol, Quote] | None = None
+        self,
+        rec: Recorded,
+        hint: Hint,
+        route: Mapping[Symbol, Quote] | None = None,
+        caps: Caps | None = None,
     ) -> Rebuilt:
         """``route``: the recorded route quotes for the BTC of a USDC depot (``rec.route``);
-        its costs are then the route's (``paper.usdc.roundtrip_cost``), as live."""
+        its costs are then the route's (``paper.usdc.roundtrip_cost``), as live. ``caps``: the
+        windows to cut to the rows live got (truncated)."""
         p = rec.payload
         quote = Quote(float(p["quote_bid"]), float(p["quote_ask"]))
         fee = float(p["taker_fee_per_side_pct"]) / 100
         slip = float(p["slippage_per_side_pct"]) / 100
         routes = tuple(sorted((s.name, q) for s, q in (route or {}).items()))
-        key = (rec.symbol, rec.epoch, quote, fee, slip, tuple(sorted(hint.items())), routes)
+        cut = tuple(sorted((caps or {}).items()))
+        key = (rec.symbol, rec.epoch, quote, fee, slip, tuple(sorted(hint.items())), routes, cut)
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key]
         self._hint = hint
+        self._caps = dict(cut)
         windows: dict[int, ClosedCandles] = {}
         errors: dict[Symbol, Exception] = {}
 
@@ -886,6 +951,134 @@ def _explain(
     return again
 
 
+def _same_window(want: ObservedWindow, have: ClosedCandles) -> bool:
+    return (
+        want.rows == have.received
+        and want.first_open == have.first_open
+        and want.last_open == have.last_open
+        and want.forming == have.forming
+        and want.sha256 == rows_sha256(have)
+    )
+
+
+def _truncated(
+    rec: Recorded,
+    rebuilder: Rebuilder,
+    hint: Hint,
+    route: Mapping[Symbol, Quote] | None,
+    windows: Mapping[int, ObservedWindow],
+    got: Rebuilt,
+) -> dict[int, int]:
+    """The windows live got shorter than the rebuild and whose rows the archive holds exactly:
+    cut to live's row count (same newest row), the rebuilt window must equal the recorded one
+    in rows, open times, forming flag and checksum. Only then is the input the same; a cut that
+    does not reproduce live's window is never applied."""
+    wanted = {
+        tf: w.rows
+        for tf, w in windows.items()
+        if (have := got.windows.get(tf)) is not None and w.rows < have.received
+    }
+    if not wanted:
+        return {}
+    trial = rebuilder.rebuild(rec, hint, route, wanted)
+    return {
+        tf: n
+        for tf, n in wanted.items()
+        if (have := trial.windows.get(tf)) is not None and _same_window(windows[tf], have)
+    }
+
+
+def _when(epoch: int | None) -> str:
+    return "-" if epoch is None else _iso(epoch)
+
+
+def _window_cause(tf: int, want: ObservedWindow, have: ClosedCandles | None) -> tuple[str, str]:
+    """Why a recorded window differs from the rebuilt one: LATE if its last closed bar (the
+    same bar: same newest row and forming flag) had less volume live than in the archive -
+    late trades are only ever added, so more volume live is no late bar; else OTHER_WINDOW."""
+    if have is None:
+        return OTHER_WINDOW, f"{tf}m: live {want.rows} Zeilen, im Archiv kein Fenster"
+    rows = "" if want.rows == have.received else f"; live {want.rows} statt {have.received} Zeilen"
+    live = want.last_closed_volume
+    if (
+        live is not None
+        and len(have) > 0
+        and want.last_open == have.last_open
+        and want.forming == have.forming
+        and live < have[-1].volume
+    ):
+        return LATE, (
+            f"{tf}m: Volumen der letzten geschlossenen Kerze ({_iso(have[-1].ts)}) live {live} "
+            f"statt {have[-1].volume} im Archiv{rows}"
+        )
+    return OTHER_WINDOW, (
+        f"{tf}m: live {want.rows} Zeilen {_when(want.first_open)} bis {_when(want.last_open)}, "
+        f"Prüfsumme {want.sha256[:12]}; Archiv {have.received} Zeilen {_when(have.first_open)} "
+        f"bis {_when(have.last_open)}, Prüfsumme {rows_sha256(have)[:12]}"
+    )
+
+
+_CANDLE_DATA = ("bar_ts", "latest_completed_1m_close", _FILLED)
+_INHERITS = frozenset({DATA, INDICATOR, RAW, ACTION, SIGNAL})
+
+
+def _from_candles(d: Mapping[str, Any]) -> bool:
+    """True for a deviation a different input candle can cause. Not the cost inputs: the route
+    fees and ``roundtrip_cost_pct`` come from the stored quotes and rates, never from candles,
+    so a different candle never explains them."""
+    name = str(d["field"])
+    if d["kind"] == DATA:
+        return name.startswith("closed_bars_utc.") or name in _CANDLE_DATA
+    return not name.endswith(".roundtrip_cost_pct")
+
+
+def _interval(name: str) -> int:
+    """``window.60m.rows`` -> 60."""
+    return int(name.split(".")[1].removesuffix("m"))
+
+
+def _observed_cause(
+    found: list[dict[str, Any]], windows: Mapping[int, ObservedWindow], got: Rebuilt
+) -> str | None:
+    """With a recorded round: None if every window is the same input; else the proven cause
+    (OTHER_WINDOW over LATE), written into the deviations in place (module doc)."""
+    causes: dict[int, tuple[str, str]] = {}
+    for tf, want in windows.items():
+        have = got.windows.get(tf)
+        if have is None or not _same_window(want, have):
+            causes[tf] = _window_cause(tf, want, have)
+    if not causes:
+        return None
+    cause = OTHER_WINDOW if any(c == OTHER_WINDOW for c, _ in causes.values()) else LATE
+    inherited = DIFFERENT_INPUT.format(cause)
+    for d in found:
+        if d["kind"] == WINDOW:
+            d["cause"], d["detail"] = causes[_interval(str(d["field"]))]
+        elif d["kind"] in _INHERITS and not d["cause"] and _from_candles(d):
+            d["cause"] = inherited
+    return cause
+
+
+def _unrecorded_cause(found: list[dict[str, Any]]) -> str | None:
+    """Without a recorded round, after the forming-bar approximation: a candle field that
+    still differs proves another input (UNRECORDED_DATA, inherited by the rest); otherwise an
+    indicator deviation cannot be decided (NOT_CHECKABLE). Actions, signals and cost fields
+    keep an empty cause there."""
+    data = [d for d in found if d["kind"] == DATA and not d["cause"] and _from_candles(d)]
+    for d in data:
+        d["cause"] = UNRECORDED_DATA
+    if data:
+        inherited = DIFFERENT_INPUT.format(UNRECORDED)
+        for d in found:
+            if d["kind"] in _INHERITS and not d["cause"] and _from_candles(d):
+                d["cause"] = inherited
+        return UNRECORDED_DATA
+    for d in found:
+        if d["kind"] in (INDICATOR, RAW) and not d["cause"] and _from_candles(d):
+            d["cause"] = NOT_CHECKABLE
+    return None
+
+
 @dataclass
 class _Tally:
     summary: FidelitySummary
@@ -905,6 +1098,21 @@ class _Tally:
         s.compared[market] = s.compared.get(market, 0) + 1
         s.equal_action[market] = s.equal_action.get(market, 0) + int(equal)
         s.indicators_ok[market] = s.indicators_ok.get(market, 0) + int(ind_ok)
+
+    def classify(
+        self, market: str, *, observed: bool, cause: str | None, cut: bool, clean: bool
+    ) -> None:
+        """One comparison into exact / different / unrecorded (``FidelitySummary``); one with
+        a recorded, equal input that still deviates goes nowhere: it fails as unexplained."""
+        s = self.summary
+        if cause is not None:
+            causes = s.different.setdefault(market, {})
+            causes[cause] = causes.get(cause, 0) + 1
+        elif not observed:
+            s.unrecorded[market] = s.unrecorded.get(market, 0) + 1
+        elif clean:
+            s.exact[market] = s.exact.get(market, 0) + 1
+            s.truncated[market] = s.truncated.get(market, 0) + int(cut)
 
 
 def check(
@@ -926,7 +1134,8 @@ def check(
     tally = _Tally(summary)
     for market in MARKETS:
         summary.compared[market] = summary.equal_action[market] = 0
-        summary.indicators_ok[market] = 0
+        summary.indicators_ok[market] = summary.exact[market] = 0
+        summary.truncated[market] = summary.unrecorded[market] = 0
     summary.deviations.extend(unreadable)
     tally.skipped += len(unreadable)
     tally.unreadable = len(unreadable)
@@ -967,11 +1176,16 @@ def check(
             hint = {tf: w.forming for tf, w in windows.items()}
         route = routes[0] if routes else None
         got = rebuilder.rebuild(rec, hint, route)
+        caps: dict[int, int] = {}
+        if windows is not None:
+            caps = _truncated(rec, rebuilder, hint, route, windows, got)
+            if caps:
+                got = rebuilder.rebuild(rec, hint, route, caps)
         found = compare(rec, got, windows, raw)
         # A round that fetched again (recheck) offers more than one quote set; the decision
         # read one of them. The first that leaves nothing failing is the one it read.
         for other in routes[1:] if _failing(found) else []:
-            again = rebuilder.rebuild(rec, hint, other)
+            again = rebuilder.rebuild(rec, hint, other, caps)
             alt = compare(rec, again, windows, raw)
             if not _failing(alt):
                 route, got, found = other, again, alt
@@ -985,8 +1199,19 @@ def check(
         for d in found:
             if d["kind"] == ROUGH_KIND:
                 d["cause"] = ROUGH
+        if windows is not None:
+            cause = _observed_cause(found, windows, got)
+        else:
+            cause = _unrecorded_cause(found)
         summary.deviations.extend(found)
         tally.count(rec.market, equal, ind_ok)
+        tally.classify(
+            rec.market,
+            observed=windows is not None,
+            cause=cause,
+            cut=bool(caps),
+            clean=not _failing(found),
+        )
     summary.note = _note(tally, obs is not None)
     return summary
 
@@ -1001,7 +1226,9 @@ def _note(tally: _Tally, with_obs: bool) -> str:
     if with_obs:
         parts.append(
             "Mit Beobachtungen: Fenster und ungerundete Indikatoren geprüft, laufende Kerze "
-            "laut Aufzeichnung."
+            "laut Aufzeichnung. Exakt gleich muss nur sein, wo die Aufzeichnung gleichen "
+            "Eingang belegt; ein kürzeres Live-Fenster, dessen Zeilen das Archiv genau so hat, "
+            "gilt als gleicher Eingang."
         )
         if tally.unobserved:
             parts.append(
@@ -1012,8 +1239,13 @@ def _note(tally: _Tally, with_obs: bool) -> str:
     else:
         parts.append(
             "Ohne Beobachtungen: ob live die laufende Kerze mitkam, ist unbekannt (Näherung); "
-            f"{tally.explained} Vergleiche nur damit erklärt."
+            f"{tally.explained} Vergleiche nur damit erklärt. Ohne Aufzeichnung ist kein "
+            "Eingang belegt gleich, die Treue also nie belegt."
         )
+    parts.append(
+        f"Belegt ist die Treue erst ab {FIDELITY_MIN} exakt gleichen Snapshots mit belegt "
+        "gleichem Eingang je Markt."
+    )
     if tally.routed:
         parts.append(
             f"{tally.routed} BTC-Entscheidungen der USDC-Depots mit den Kosten des USDC-Wegs aus "
@@ -1154,30 +1386,40 @@ def write_report(summary: FidelitySummary, folder: Path, *, now: float | None = 
     raise FileExistsError(f"too many reports named {base} in {folder}")
 
 
+def causes_text(causes: Mapping[str, int]) -> str:
+    """``{cause: n}`` as ``n (cause a, cause b)`` in German, largest first."""
+    total = sum(causes.values())
+    if not total:
+        return "0"
+    parts = sorted(causes.items(), key=lambda kv: (-kv[1], kv[0]))
+    return f"{total} (" + ", ".join(f"{cause}: {n}" for cause, n in parts) + ")"
+
+
 def summary_text(summary: FidelitySummary, *, limit: int = 20) -> str:
     """German summary for the console and the report; never "100 %"."""
     lines = ["Treue-Test gegen live (Spec 016 AK5)"]
     lines.append("mit Beobachtungen" if summary.with_observations else "ohne Beobachtungen")
-    established = summary.established
     for market in sorted(summary.compared):
         n = summary.compared[market]
-        verdict = "Treue belegt" if established.get(market) else "Treue nicht belegt"
-        why = ""
-        if not established.get(market):
-            if n < FIDELITY_MIN:
-                why = f" (unter {FIDELITY_MIN} Vergleichen)"
-            elif summary.equal_action.get(market, 0) != n:
-                why = " (Aktion oder Ziel abweichend)"
-            else:
-                why = " (ungeklärte Abweichungen)"
+        ok, why = summary.verdict(market)
+        exact = summary.exact.get(market, 0)
+        cut = summary.truncated.get(market, 0)
+        lines.append(f"{market}: {n} Vergleiche")
+        lines.append(f"  Aktion und Ziel gleich: {summary.equal_action.get(market, 0)}")
         lines.append(
-            f"{market}: {n} Vergleiche, Aktion und Ziel gleich in "
-            f"{summary.equal_action.get(market, 0)}, Indikatoren gleich in "
-            f"{summary.indicators_ok.get(market, 0)} - {verdict}{why}"
+            f"  exakt gleich bei belegt gleichem Eingang: {exact}"
+            + (f" (davon {cut} mit gekürztem Live-Fenster)" if cut else "")
         )
+        lines.append("  Eingang verschieden: " + causes_text(summary.different.get(market, {})))
+        lines.append(f"  ohne Aufzeichnung nicht prüfbar: {summary.unrecorded.get(market, 0)}")
+        lines.append(f"  Indikatoren gleich (Information): {summary.indicators_ok.get(market, 0)}")
+        verdict = "Treue belegt" if ok else f"Treue nicht belegt ({why})"
+        lines.append(f"  {market}: {verdict}")
     groups = (
         ("Ungeklärte Abweichungen", [d for d in summary.deviations if _unexplained(d)]),
         ("Erklärt durch die laufende Kerze", _by_cause(summary, FORMING)),
+        ("Eingang verschieden (Ursache belegt)", _different(summary)),
+        ("Ohne Aufzeichnung nicht prüfbar", _by_cause(summary, NOT_CHECKABLE)),
         ("Nur grob prüfbar (Prozentfelder)", _by_cause(summary, ROUGH)),
         ("Übersprungen", [d for d in summary.deviations if d.get("kind") == SKIPPED]),
     )
@@ -1193,6 +1435,16 @@ def summary_text(summary: FidelitySummary, *, limit: int = 20) -> str:
             lines.append(f"  ... und {len(items) - limit} weitere (siehe JSON)")
     lines.append(summary.note)
     return "\n".join(lines) + "\n"
+
+
+_DIFFERENT_CAUSES = frozenset(
+    {LATE, OTHER_WINDOW, UNRECORDED_DATA}
+    | {DIFFERENT_INPUT.format(c) for c in (LATE, OTHER_WINDOW, UNRECORDED)}
+)
+
+
+def _different(summary: FidelitySummary) -> list[dict[str, Any]]:
+    return [d for d in summary.deviations if d.get("cause") in _DIFFERENT_CAUSES]
 
 
 def _unexplained(d: Mapping[str, Any]) -> bool:

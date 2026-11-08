@@ -308,10 +308,13 @@ def test_fidelity_shown_as_it_is() -> None:
     few = FidelitySummary(
         compared={BTC: 120, "ETH-EUR": 400},
         equal_action={BTC: 120, "ETH-EUR": 400},
-        indicators_ok={BTC: 119, "ETH-EUR": 400},
+        indicators_ok={BTC: 119, "ETH-EUR": 380},
         deviations=[
             {"market": BTC, "utc": "x", "agent": "trend", "field": "adx", "live": 1, "rebuilt": 2}
         ],
+        exact={BTC: 119, "ETH-EUR": 320},
+        truncated={"ETH-EUR": 20},
+        different={"ETH-EUR": {"Kerze live vorläufig (späte Trades)": 80}},
     )
     markdown, _ = build(base, fidelity=few)
     treue = section(markdown, "Treue zum Live-Bot")
@@ -319,10 +322,22 @@ def test_fidelity_shown_as_it_is() -> None:
     assert rows[BTC][1:] == [
         "120",
         "120 von 120",
+        "119",
+        "0",
+        "0",
         "119 von 120",
-        "Treue nicht belegt (unter 300 Vergleiche)",
+        "Treue nicht belegt (zu wenige Vergleiche: 120 < 300; 1 Abweichungen ohne Ursache; "
+        "zu wenige exakt gleiche Snapshots: 119 < 300)",
     ]
-    assert rows["ETH-EUR"][-1] == "belegt"
+    assert rows["ETH-EUR"][1:] == [
+        "400",
+        "400 von 400",
+        "320 (davon 20 gekürzt)",
+        "80 (Kerze live vorläufig (späte Trades): 80)",
+        "0",
+        "380 von 400",
+        "belegt",
+    ]
     assert "100 %" not in treue and "ungeklärt" in treue
 
 
@@ -411,7 +426,7 @@ def test_cli_writes_report_from_register(tmp_path: Path) -> None:
     assert "Gewertet sind 2 von 2 Quartalen (2022Q1 bis 2022Q2)" in markdown
     assert "2 Versuche" in markdown and "geprüft, in Ordnung" in markdown
     assert "unbekannt (Kerzenarchiv nicht gelesen)" in markdown
-    assert "Treue nicht belegt (unter 300 Vergleiche)" in markdown
+    assert "Treue nicht belegt (zu wenige Vergleiche: 5 < 300" in markdown
     assert (directory / "fidelity.json").read_text(encoding="utf-8") == fidelity.read_text()
 
 
@@ -677,14 +692,37 @@ def test_cell_labels_unknown_to_the_report_shown_raw() -> None:
     assert report._label(report._VOL, "extreme") == "extreme"
 
 
-def test_fidelity_needs_matching_indicators() -> None:
-    fid = FidelitySummary(
-        compared={BTC: 400}, equal_action={BTC: 400}, indicators_ok={BTC: 350}, deviations=[]
+def test_fidelity_needs_exactly_equal_snapshots() -> None:
+    """AK5 (changed with the user's approval 2026-11-08): indicators must be equal only where
+    the recording proves the same input, so ``indicators_ok`` is information; the verdict
+    needs FIDELITY_MIN exactly equal snapshots. A JSON written before has no ``exact``."""
+    dev = {"market": BTC, "utc": "x", "agent": "trend", "field": "indicators.adx_1h"}
+    caused = {**dev, "cause": "Eingang verschieden (Kerze live vorläufig (späte Trades))"}
+    old = FidelitySummary(
+        compared={BTC: 400}, equal_action={BTC: 400}, indicators_ok={BTC: 400}, deviations=[]
     )
-    markdown, _ = build({"base": [result("2022Q1", SMALL)]}, fidelity=fid)
+    markdown, _ = build({"base": [result("2022Q1", SMALL)]}, fidelity=old)
     (row,) = table_after(markdown, "## Treue zum Live-Bot")
-    assert row[3:] == ["350 von 400", "Treue nicht belegt (Indikatoren weichen ab)"]
+    assert row[-1] == "Treue nicht belegt (zu wenige exakt gleiche Snapshots: 0 < 300)"
     assert "Treue nicht belegt (400 Vergleiche)" in section(markdown, "Kurzfazit")
+    assert report.load_fidelity(old.to_json().replace(',"exact":{}', "")).exact == {}
+
+    for exact, verdict in (
+        (299, "Treue nicht belegt (zu wenige exakt gleiche Snapshots: 299 < 300)"),
+        (300, "belegt"),
+    ):
+        fid = dataclasses.replace(
+            old, indicators_ok={BTC: 350}, deviations=[caused], exact={BTC: exact}
+        )
+        markdown, _ = build({"base": [result("2022Q1", SMALL)]}, fidelity=fid)
+        (row,) = table_after(markdown, "## Treue zum Live-Bot")
+        assert row[-1] == verdict
+    # A deviation without a cause fails, whatever the counts.
+    fid = dataclasses.replace(old, deviations=[dev], exact={BTC: 400})
+    assert fid.verdict(BTC) == (False, "1 Abweichungen ohne Ursache")
+    # And so does one action that differs.
+    fid = dataclasses.replace(old, equal_action={BTC: 399}, exact={BTC: 399})
+    assert fid.verdict(BTC) == (False, "Aktion oder Ziel abweichend in 1 von 400 Vergleichen")
 
 
 # --- wave-3 review: data issues reach the reader, spread rows go through the spread model ---

@@ -11,7 +11,10 @@ when the request arrived (about 5 s into the bar); the archive cannot tell, so a
 with a row always counts. The window then starts one row later than live would have. Its effect
 on the indicators is tiny and tested (``test_window_499_and_500_within_tolerance``).
 Where the live answer is known (the forming flag recorded per window, Spec 015), the fidelity
-check passes it as ``forming_hint`` and the window is rebuilt exactly.
+check passes it as ``forming_hint`` and the window is rebuilt exactly. Bitvavo also sends fewer
+rows than asked for at times (``LEARNINGS.md``, ETH-1m since 2026-11-08): where the recording
+proves the archive holds exactly the rows live got, the check passes their number as
+``row_limit`` and the window is cut to them.
 
 Never a value from the future: candles come only from rows that had closed at the clock, and the
 quote mid is the close of the last minute that had ended at the clock.
@@ -50,6 +53,9 @@ from llm_trading_bot.market.snapshot import INTERVALS
 FormingHint = Callable[[Symbol, int, int], bool | None]
 """``(symbol, interval, now_epoch)`` -> whether the live answer held the forming bar: True as
 the default approximation, False drops the archive's row for it, None means unknown."""
+RowLimit = Callable[[Symbol, int, int], int | None]
+"""``(symbol, interval, now_epoch)`` -> how many rows the live answer held, if fewer than
+``CANDLE_LIMIT``; None means the full window."""
 
 CandleRow = Sequence[object]
 """One candle row as Bitvavo sends it: ``[ts_ms, open, high, low, close, volume]``, the prices
@@ -162,6 +168,7 @@ class HistoricalClient:
     checks that (``rows_before``). ``quotes`` may be overridden, e.g. with a frozen live book.
     ``forming_hint`` (optional, the fidelity check) says per request whether the live answer
     held the forming bar; without it, or where it returns None, the approximation above holds.
+    ``row_limit`` (optional, the fidelity check) cuts a window to the newest rows live got.
     """
 
     def __init__(
@@ -177,6 +184,7 @@ class HistoricalClient:
         quotes: Callable[[], QuoteBook] | None = None,
         forming_hint: FormingHint | None = None,
         route: UsdcRoute | None = None,
+        row_limit: RowLimit | None = None,
     ) -> None:
         if start >= end:
             raise ValueError(f"empty preload range {start}..{end}")
@@ -186,6 +194,7 @@ class HistoricalClient:
         self._end = end
         self._override = quotes
         self._forming_hint = forming_hint
+        self._row_limit = row_limit
         self._route = route
         self._markets = tuple(markets)
         self._series: dict[tuple[Symbol, int], _Series] = {}
@@ -232,6 +241,10 @@ class HistoricalClient:
             # the recorded forming flag, Spec 015).
             hi = bisect_right(series.ts, now_epoch - step, 0, hi)
         lo = max(0, hi - CANDLE_LIMIT)
+        cap = None if self._row_limit is None else self._row_limit(symbol, interval, now_epoch)
+        if cap is not None:
+            # Live got only the newest ``cap`` rows (never more than it asked for).
+            lo = max(lo, hi - cap)
         # The live filter (bitvavo.py): a bar is closed when open + step <= now.
         closed = bisect_right(series.ts, now_epoch - step, lo, hi)
         return ClosedCandles(

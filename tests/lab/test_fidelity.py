@@ -27,7 +27,10 @@ from llm_trading_bot.lab import fidelity, model
 from llm_trading_bot.lab.archive import Archive, StoredRow, window_start
 from llm_trading_bot.lab.fidelity import (
     FORMING,
+    LATE,
+    NOT_CHECKABLE,
     NOT_COVERED,
+    OTHER_WINDOW,
     ROUGH,
     ROUTE_MISSING,
     UNREADABLE,
@@ -50,12 +53,12 @@ from llm_trading_bot.lab.model import FIDELITY_MIN, MARKETS, USDC_AGENTS, Fideli
 from llm_trading_bot.lab.paths import CANDLES_FILE, REPORTS_DIR
 from llm_trading_bot.llm.agents import BotConfig, load_config
 from llm_trading_bot.market.bitvavo import CANDLE_LIMIT, BitvavoClient
-from llm_trading_bot.market.models import Quote, Symbol
+from llm_trading_bot.market.models import ClosedCandles, Quote, Symbol
 from llm_trading_bot.market.snapshot import INTERVALS, MarketClient
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import Costs
-from llm_trading_bot.paper.observations import ObservationBuffer, ObservationWriter
+from llm_trading_bot.paper.observations import ObservationBuffer, ObservationWriter, rows_sha256
 from llm_trading_bot.paper.observations_schema import create
 from llm_trading_bot.paper.risk import Controls
 from llm_trading_bot.paper.usdc import BUYHOLD_USDC
@@ -312,10 +315,17 @@ def test_too_few_is_not_established(live: Live, monkeypatch: pytest.MonkeyPatch)
     for market in MARKETS:
         assert 0 < s.compared[market] < FIDELITY_MIN
         assert s.equal_action[market] == s.indicators_ok[market] == s.compared[market]
+    # Every recorded snapshot has the same input as the archive and is exactly equal.
+    assert s.exact == s.compared and s.different == {}
+    assert s.unrecorded == {m: 0 for m in MARKETS}
     # Every comparison equal, and still not established below the minimum - never "100 %".
     assert s.established == {m: False for m in MARKETS}
     text = summary_text(s)
-    assert text.count(f"Treue nicht belegt (unter {FIDELITY_MIN} Vergleichen)") == 2
+    assert text.count("Treue nicht belegt (zu wenige Vergleiche: ") == 2
+    for market in MARKETS:
+        n = s.compared[market]
+        assert f"zu wenige exakt gleiche Snapshots: {n} < {FIDELITY_MIN}" in text
+        assert f"exakt gleich bei belegt gleichem Eingang: {n}\n" in text
     assert "100 %" not in text and "%" not in text.split("Ungeklärte")[0]
     assert "Versiegelung" in s.note and "keine Renditen" in s.note
     # The same run reaches it once the minimum is met.
@@ -342,7 +352,11 @@ def test_forming_bar_explained_without_observations(live: Live, few: None) -> No
     assert all(d["utc"].endswith(":00:05+00:00") for d in found)
     assert all("60m" in d["detail"] for d in found)
     assert s.equal_action == s.compared == s.indicators_ok
-    assert s.established == {m: True for m in MARKETS}
+    # AK5 (changed 2026-11-08): without a recording no input is proven equal, so nothing is
+    # exactly equal and fidelity is never established, however equal everything looks.
+    assert s.exact == {m: 0 for m in MARKETS} and s.unrecorded == s.compared
+    assert s.established == {m: False for m in MARKETS}
+    assert all(s.verdict(m)[1] == "zu wenige exakt gleiche Snapshots: 0 < 5" for m in MARKETS)
     assert "laufende Kerze" in s.note
     # With the recorded forming flags the same snapshots are rebuilt exactly.
     assert failing(checked(live, obs=True)) == []
@@ -369,13 +383,21 @@ def test_mid_bar_deviation_not_explained_as_forming(copy: Live, few: None) -> No
     inputs["indicators"]["ema72_1h"] = wrong
     edit(copy.bot, "UPDATE decisions SET inputs=? WHERE id=?", json.dumps(inputs), row_id)
     s = checked(copy, obs=False)
-    (d,) = [d for d in failing(s) if not d["cause"]]
+    # Without a recording the indicator cannot be decided (AK5, 2026-11-08) - but it is never
+    # taken for the forming bar either.
+    (d,) = [d for d in failing(s) if d["cause"] == NOT_CHECKABLE]
     assert (d["utc"], d["agent"], d["field"]) == (inputs["utc"], "breakout", "indicators.ema72_1h")
     assert s.indicators_ok["BTC-EUR"] == s.compared["BTC-EUR"] - 1
     assert s.established["BTC-EUR"] is False
     # The hour-mark rounds still get the approximation: no 1m bar of the new hour had closed.
     explained = {d["utc"] for d in failing(s) if d["cause"] == FORMING}
     assert explained and all(u.endswith(":00:05+00:00") for u in explained)
+    # With the recording the input is proven equal: the same deviation is unexplained.
+    s = checked(copy, obs=True)
+    (d,) = failing(s)
+    assert (d["agent"], d["field"], d["cause"]) == ("breakout", "indicators.ema72_1h", "")
+    assert s.exact["BTC-EUR"] == s.compared["BTC-EUR"] - 1
+    assert s.established["BTC-EUR"] is False
 
 
 def test_traded_counts_only_closed_minutes_with_volume() -> None:
@@ -593,13 +615,24 @@ def test_windows_and_unrounded_indicators_with_observations(copy: Live, few: Non
     edit(copy.obs, "UPDATE decision_meta SET indicators=? WHERE id=?", json.dumps(raw), meta_id)
     s = checked(copy, obs=True)
     fields = {(d["market"], d["field"], d["cause"]) for d in failing(s)}
+    # The window's checksum proves another input (AK5, 2026-11-08); the raw indicator of a
+    # snapshot with the same input stays unexplained.
     assert fields == {
-        ("ETH-EUR", "window.240m.rows_sha256", ""),
+        ("ETH-EUR", "window.240m.rows_sha256", OTHER_WINDOW),
         ("BTC-EUR", "indicators_raw.ema24_1h", ""),
     }
+    assert all(
+        "240m: live 500 Zeilen" in d["detail"] for d in failing(s) if d["market"] == "ETH-EUR"
+    )
     # The rounded payload still matches: only the observations tell these apart.
     assert s.indicators_ok == s.equal_action == s.compared
-    assert s.established == {m: False for m in MARKETS}
+    # The changed window is the newest 4h window: every ETH snapshot after it has another input.
+    eth = s.different["ETH-EUR"][OTHER_WINDOW]
+    assert eth > 0 and s.exact["ETH-EUR"] == s.compared["ETH-EUR"] - eth
+    # BTC fails on its unexplained raw indicator; ETH's deviation has a proven cause and the
+    # snapshots before the changed window still reach the (lowered) minimum.
+    assert s.exact["ETH-EUR"] >= 5
+    assert s.established == {"BTC-EUR": False, "ETH-EUR": True}
     # Without observations nothing of this is checked.
     assert {d["cause"] for d in failing(checked(copy, obs=False))} == {FORMING}
 
@@ -650,6 +683,309 @@ def test_round_without_observations_is_checked_as_without(copy: Live, few: None)
     assert {fidelity._epoch(d["utc"]) for d in found} == {ROUNDS[4]}
     assert "ohne aufgezeichnete Runde" in s.note
     assert s.established == {m: True for m in MARKETS}
+
+
+# ------------------------------------------------------------------ proven input (AK5, 2026-11-08)
+
+
+ETH = Symbol.ETHEUR
+
+
+def window_row(path: Path, symbol: Symbol, interval: int, round_at: int) -> sqlite3.Row:
+    """The recorded window a round used (the newest of its interval up to that round)."""
+    con = sqlite3.connect(path)
+    con.row_factory = sqlite3.Row
+    try:
+        (round_id,) = con.execute(
+            "SELECT id FROM rounds WHERE ts<=? ORDER BY id DESC LIMIT 1", (fidelity._iso(round_at),)
+        ).fetchone()
+        row: sqlite3.Row = con.execute(
+            "SELECT * FROM windows WHERE symbol=? AND interval=? AND round_id<=?"
+            " ORDER BY id DESC LIMIT 1",
+            (symbol.name, interval, round_id),
+        ).fetchone()
+        return row
+    finally:
+        con.close()
+
+
+def archive_window(
+    symbol: Symbol, interval: int, at: int, rows: int | None = None
+) -> ClosedCandles:
+    """What the archive gives for the live request at ``at`` (live's forming rule), cut to the
+    newest ``rows`` rows if given."""
+    client = HistoricalClient(
+        source(),
+        ConstantSpreads(),
+        FakeClock(at),
+        start=P - LEAD * 240 * 60,
+        end=END,
+        forming_hint=live_hint,
+        row_limit=None if rows is None else (lambda _s, _i, _n: rows),
+    )
+    return client.closed_candles(symbol, interval, now_epoch=at)
+
+
+def snapshots_at(live: Live, symbol: Symbol, at: int) -> int:
+    with opened(live, False) as (bot, _):
+        recs, _ = recorded_snapshots(bot)
+    return sum(1 for r in recs if r.symbol is symbol and r.epoch == at)
+
+
+def decision_row(path: Path, *, agent: str, symbol: Symbol, round_at: int) -> tuple[int, Any]:
+    con = sqlite3.connect(path)
+    try:
+        rows = con.execute(
+            "SELECT id, inputs FROM decisions WHERE agent=? AND symbol=?", (agent, symbol.name)
+        ).fetchall()
+    finally:
+        con.close()
+    for row_id, text in rows:
+        inputs = json.loads(text)
+        if fidelity._epoch(inputs["utc"]) == round_at:
+            return int(row_id), inputs
+    raise AssertionError(f"no {agent} {symbol.name} decision at {round_at}")
+
+
+def test_observed_window_reads_the_last_closed_volume(live: Live) -> None:
+    con = open_readonly(live.obs)
+    try:
+        windows = fidelity.Observations(con).windows(ETH, ROUNDS[2])
+    finally:
+        con.close()
+    assert windows is not None
+    have = archive_window(ETH, 1, ROUNDS[2])
+    assert windows[1].last_closed_volume == have[-1].volume
+    assert windows[1].rows == have.received == CANDLE_LIMIT
+
+
+def test_truncated_live_window_is_the_same_input(copy: Live, few: None) -> None:
+    """Bitvavo sent ETH-1m with fewer rows (LEARNINGS); the archive holds exactly those rows in
+    live's [first_open, last_open]: rebuilt from the cut window, the snapshot is exactly equal."""
+    at = ROUNDS[2]
+    row = window_row(copy.obs, ETH, 1, at)
+    cut = archive_window(ETH, 1, at, rows=450)
+    assert cut.received == 450 and cut.last_open == row["last_open"]
+    assert cut.first_open > row["first_open"]
+    edit(
+        copy.obs,
+        "UPDATE windows SET rows=?, first_open=?, rows_sha256=? WHERE id=?",
+        450,
+        cut.first_open,
+        rows_sha256(cut),
+        row["id"],
+    )
+    s = checked(copy, obs=True)
+    assert failing(s) == []
+    n = snapshots_at(copy, ETH, at)
+    assert n > 0 and s.truncated == {"BTC-EUR": 0, "ETH-EUR": n}
+    assert s.exact == s.compared and s.different == {}
+    assert s.established == {m: True for m in MARKETS}
+    assert f"(davon {n} mit gekürztem Live-Fenster)" in summary_text(s)
+
+
+def test_truncated_window_with_other_rows_is_another_input(copy: Live, few: None) -> None:
+    """Fewer rows live, but not the archive's rows (checksum): never cut, never exact."""
+    at = ROUNDS[2]
+    row = window_row(copy.obs, ETH, 1, at)
+    cut = archive_window(ETH, 1, at, rows=450)
+    edit(
+        copy.obs,
+        "UPDATE windows SET rows=?, first_open=?, rows_sha256=? WHERE id=?",
+        450,
+        cut.first_open,
+        "0" * 64,
+        row["id"],
+    )
+    s = checked(copy, obs=True)
+    found = failing(s)
+    n = snapshots_at(copy, ETH, at)
+    assert found and {d["cause"] for d in found} == {OTHER_WINDOW}
+    # Rebuilt from 500 rows (the cut did not reproduce live's window): rows and start differ.
+    assert {d["field"] for d in found} == {
+        "window.1m.rows",
+        "window.1m.first_open",
+        "window.1m.rows_sha256",
+    }
+    assert all("live 450 Zeilen" in d["detail"] for d in found)
+    assert s.different == {"ETH-EUR": {OTHER_WINDOW: n}}
+    assert s.exact["ETH-EUR"] == s.compared["ETH-EUR"] - n and s.truncated["ETH-EUR"] == 0
+
+
+def late_bar(copy: Live, at: int, factor: float) -> float:
+    """The ETH-1m bar live closed last at ``at`` recorded with ``factor`` times the archive's
+    volume (and so another checksum); returns the archive's volume."""
+    row = window_row(copy.obs, ETH, 1, at)
+    archive = archive_window(ETH, 1, at)[-1].volume
+    edit(
+        copy.obs,
+        "UPDATE windows SET last_closed_volume=?, rows_sha256=? WHERE id=?",
+        archive * factor,
+        "e" * 64,
+        row["id"],
+    )
+    return archive
+
+
+def test_late_trades_in_the_last_bar_are_another_input(
+    copy: Live, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Less volume live in the last closed bar (late trades): the window gets LATE with both
+    volumes, the snapshot's other deviations inherit "Eingang verschieden"; an action that
+    differs still counts as unequal."""
+    at = ROUNDS[3]
+    archive = late_bar(copy, at, 0.5)
+    rid, inputs = decision_row(copy.bot, agent="breakout", symbol=ETH, round_at=at)
+    inputs["indicators"]["rsi14_15m"] += 0.01
+    edit(copy.bot, "UPDATE decisions SET inputs=? WHERE id=?", json.dumps(inputs), rid)
+    s = checked(copy, obs=True)
+    n = snapshots_at(copy, ETH, at)
+    found = failing(s)
+    windows = [d for d in found if d["kind"] == "window"]
+    assert len(windows) == n and {d["field"] for d in windows} == {"window.1m.rows_sha256"}
+    assert {d["cause"] for d in windows} == {LATE}
+    assert all(f"live {archive * 0.5} statt {archive}" in d["detail"] for d in windows)
+    (ind,) = [d for d in found if d["kind"] == "indicator"]
+    assert (ind["agent"], ind["field"]) == ("breakout", "indicators.rsi14_15m")
+    assert ind["cause"] == f"Eingang verschieden ({LATE})"
+    assert s.different == {"ETH-EUR": {LATE: n}}
+    assert s.exact["ETH-EUR"] == s.compared["ETH-EUR"] - n
+    assert s.unexplained("ETH-EUR") == 0
+    # The minimum on exactly equal snapshots decides: just reached, just missed.
+    exact = s.exact["ETH-EUR"]
+    assert exact < s.compared["ETH-EUR"]
+    monkeypatch.setattr(model, "FIDELITY_MIN", exact)
+    assert s.established["ETH-EUR"] is True
+    monkeypatch.setattr(model, "FIDELITY_MIN", exact + 1)
+    assert s.compared["ETH-EUR"] >= exact + 1 and s.equal_action == s.compared
+    assert s.verdict("ETH-EUR") == (
+        False,
+        f"zu wenige exakt gleiche Snapshots: {exact} < {exact + 1}",
+    )
+    # A different action in that snapshot gets the cause written but still fails.
+    monkeypatch.setattr(model, "FIDELITY_MIN", exact)
+    rid, _ = decision_row(copy.bot, agent="meanrev", symbol=ETH, round_at=at)
+    edit(copy.bot, "UPDATE decisions SET action='SELL', target=0.0 WHERE id=?", rid)
+    s = checked(copy, obs=True)
+    action = [d for d in failing(s) if d["kind"] == "action" and d["agent"] == "meanrev"]
+    assert action and {d["cause"] for d in action} == {f"Eingang verschieden ({LATE})"}
+    assert s.equal_action["ETH-EUR"] == s.compared["ETH-EUR"] - 1
+    assert s.established["ETH-EUR"] is False
+    assert "Aktion oder Ziel abweichend in 1 von" in s.verdict("ETH-EUR")[1]
+
+
+def test_another_input_never_explains_the_costs(copy: Live, few: None) -> None:
+    """``roundtrip_cost_pct`` comes from the stored quote and rates, never from a candle: a late
+    bar in the same snapshot does not explain it."""
+    at = ROUNDS[3]
+    late_bar(copy, at, 0.5)
+    rid, inputs = decision_row(copy.bot, agent="breakout", symbol=ETH, round_at=at)
+    inputs["indicators"]["roundtrip_cost_pct"] += 0.01
+    edit(copy.bot, "UPDATE decisions SET inputs=? WHERE id=?", json.dumps(inputs), rid)
+    s = checked(copy, obs=True)
+    (d,) = [d for d in failing(s) if not d["cause"]]
+    assert (d["agent"], d["field"]) == ("breakout", "indicators.roundtrip_cost_pct")
+    assert s.established["ETH-EUR"] is False
+
+
+def test_more_volume_live_is_no_late_bar(copy: Live, few: None) -> None:
+    """Late trades only ever add volume: more live than in the archive is another window."""
+    at = ROUNDS[3]
+    late_bar(copy, at, 2.0)
+    s = checked(copy, obs=True)
+    found = failing(s)
+    assert found and {d["cause"] for d in found} == {OTHER_WINDOW}
+    assert s.different == {"ETH-EUR": {OTHER_WINDOW: snapshots_at(copy, ETH, at)}}
+
+
+def test_deviation_with_the_same_input_is_never_explained(copy: Live, few: None) -> None:
+    """A late bar in one round must not lend its cause to another round with the same input:
+    a deviation there is a code bug and fails."""
+    late_bar(copy, ROUNDS[3], 0.5)
+    rid, inputs = decision_row(copy.bot, agent="breakout", symbol=ETH, round_at=ROUNDS[2])
+    inputs["indicators"]["rsi14_15m"] += 0.01
+    edit(copy.bot, "UPDATE decisions SET inputs=? WHERE id=?", json.dumps(inputs), rid)
+    s = checked(copy, obs=True)
+    (d,) = [d for d in failing(s) if not d["cause"]]
+    assert (d["utc"], d["agent"], d["field"]) == (
+        inputs["utc"],
+        "breakout",
+        "indicators.rsi14_15m",
+    )
+    assert s.unexplained("ETH-EUR") == 1 and s.established["ETH-EUR"] is False
+    assert "1 Abweichungen ohne Ursache" in s.verdict("ETH-EUR")[1]
+    # Neither exact nor different: that comparison only fails.
+    n3 = snapshots_at(copy, ETH, ROUNDS[3])
+    assert s.different == {"ETH-EUR": {LATE: n3}}
+    assert s.exact["ETH-EUR"] == s.compared["ETH-EUR"] - n3 - 1
+
+
+def test_unrecorded_round_with_another_input_candle(copy: Live, few: None) -> None:
+    """Without a recorded round a candle field that differs proves another input; its
+    indicators inherit the cause. Such snapshots are never exactly equal."""
+    at = ROUNDS[2]
+    con = sqlite3.connect(copy.obs)
+    (round_id,) = con.execute(
+        "SELECT id FROM rounds WHERE ts<=? ORDER BY id DESC LIMIT 1", (fidelity._iso(at),)
+    ).fetchone()
+    con.close()
+    edit(copy.obs, "DELETE FROM snapshots WHERE round_id=?", round_id)
+    rid, inputs = decision_row(copy.bot, agent="breakout", symbol=ETH, round_at=at)
+    inputs["latest_completed_1m_close"] += 1.0
+    inputs["indicators"]["rsi14_15m"] += 0.01
+    edit(copy.bot, "UPDATE decisions SET inputs=? WHERE id=?", json.dumps(inputs), rid)
+    s = checked(copy, obs=True)
+    got = {(d["agent"], d["field"], d["cause"]) for d in failing(s)}
+    assert got == {
+        ("breakout", "latest_completed_1m_close", fidelity.UNRECORDED_DATA),
+        ("breakout", "indicators.rsi14_15m", "Eingang verschieden (ohne Aufzeichnung)"),
+    }
+    n = snapshots_at(copy, ETH, at)
+    assert s.different == {"ETH-EUR": {fidelity.UNRECORDED_DATA: 1}}
+    assert s.unrecorded["ETH-EUR"] == n - 1
+    assert s.exact["ETH-EUR"] == s.compared["ETH-EUR"] - n
+    assert s.exact["ETH-EUR"] >= 5 and s.established["ETH-EUR"] is True
+
+
+def test_old_summary_json_is_never_established() -> None:
+    """A fidelity JSON written before the AK5 change has no ``exact``: never established."""
+    old = json.dumps(
+        {
+            "compared": {"BTC-EUR": 400},
+            "equal_action": {"BTC-EUR": 400},
+            "indicators_ok": {"BTC-EUR": 400},
+            "deviations": [],
+            "with_observations": True,
+            "note": "",
+        }
+    )
+    s = FidelitySummary.from_json(old)
+    assert s.exact == {} and s.different == {} and s.unrecorded == {}
+    assert s.established == {"BTC-EUR": False}
+    assert "zu wenige exakt gleiche Snapshots: 0 < 300" in summary_text(s)
+
+
+def test_observations_without_the_volume_column(copy: Live, few: None) -> None:
+    """A copy whose windows table lacks last_closed_volume (read without the schema check):
+    the volume is unknown, everything else is checked as before."""
+    con = sqlite3.connect(copy.obs)
+    try:
+        con.execute("ALTER TABLE windows DROP COLUMN last_closed_volume")
+        con.commit()
+    finally:
+        con.close()
+    ro = open_readonly(copy.obs)
+    try:
+        windows = fidelity.Observations(ro).windows(ETH, ROUNDS[2])
+    finally:
+        ro.close()
+    assert windows is not None and windows[1].last_closed_volume is None
+    s = checked(copy, obs=True)
+    assert failing(s) == [] and s.exact == s.compared
+    # Without the volume a differing window is never taken for a late bar.
+    row = window_row(copy.obs, ETH, 1, ROUNDS[3])
+    edit(copy.obs, "UPDATE windows SET rows_sha256=? WHERE id=?", "e" * 64, row["id"])
+    assert {d["cause"] for d in failing(checked(copy, obs=True))} == {OTHER_WINDOW}
 
 
 # ------------------------------------------------------------------ archive, files, CLI
@@ -976,7 +1312,7 @@ def test_real_captures_rebuilt_exactly_with_observations(tmp_path: Path) -> None
     exact = checked(live, obs=True, src=src)
     assert sum(exact.compared.values()) >= 8
     assert failing(exact) == []
-    assert exact.equal_action == exact.indicators_ok == exact.compared
+    assert exact.equal_action == exact.indicators_ok == exact.compared == exact.exact
     approx = checked(live, obs=False, src=src)
     found = failing(approx)
     assert found and {d["cause"] for d in found} == {FORMING}
@@ -1022,7 +1358,7 @@ def test_usdc_decisions_rebuilt_on_the_route_costs(live_usdc: Live) -> None:
     assert failing(s) == []
     assert not [d for d in s.deviations if d["kind"] == "skipped"]
     assert sum(s.compared.values()) == len(recs)
-    assert s.equal_action == s.indicators_ok == s.compared
+    assert s.equal_action == s.indicators_ok == s.compared == s.exact
     assert f"{btc} BTC-Entscheidungen der USDC-Depots" in s.note
 
 
@@ -1143,7 +1479,7 @@ def test_real_captures_with_usdc_depots_rebuilt_exactly(tmp_path: Path) -> None:
     exact = checked(live, obs=True, src=merged(captures()))
     assert failing(exact) == []
     assert not [d for d in exact.deviations if d["kind"] == "skipped"]
-    assert exact.equal_action == exact.indicators_ok == exact.compared
+    assert exact.equal_action == exact.indicators_ok == exact.compared == exact.exact
     btc = _count(live.bot, USDC_BTC, BUYHOLD_USDC, "BTCEUR")
     assert btc >= 2 * len(FIFTEEN)  # two 15m bars (and the 1h bar) across the captures
     assert f"{btc} BTC-Entscheidungen der USDC-Depots" in exact.note

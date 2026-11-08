@@ -824,16 +824,10 @@ def _span(graded: Sequence[QuarterResult]) -> str:
     return first if first == last else f"{first} bis {last}"
 
 
-def _established(f: FidelitySummary) -> dict[str, bool]:
-    """``FidelitySummary.established`` plus AK5's indicator condition, which it does not check:
-    "belegt" next to "350 von 400" indicators would contradict itself."""
-    return {m: ok and f.indicators_ok.get(m, 0) == f.compared[m] for m, ok in f.established.items()}
-
-
 def _fidelity_short(f: FidelitySummary | None) -> str:
     if f is None or not f.compared:
         return "Treue zum Live-Bot: Treue nicht belegt (kein Treue-Test beigefügt)."
-    est = _established(f)
+    est = f.established
     parts = [
         f"{m}: {'belegt' if est[m] else 'Treue nicht belegt'} ({count(n)} Vergleiche)"
         for m, n in sorted(f.compared.items())
@@ -1605,36 +1599,30 @@ def _quality_totals(rows: Sequence[QuarterResult]) -> dict[str, QualityRow]:
 def _fidelity(doc: Doc, f: FidelitySummary | None) -> None:
     doc.section("Treue zum Live-Bot", "treue")
     doc.p(
-        "Der Treue-Test baut aufgezeichnete Live-Entscheidungen mit dem Labor nach. Erst ab "
-        f"{FIDELITY_MIN} Vergleichen je Markt mit gleicher Aktion, gleichen Indikatoren "
-        "(± 1 Stelle) und ohne ungeklärte Abweichung gilt die Treue als belegt."
+        "Der Treue-Test baut aufgezeichnete Live-Entscheidungen mit dem Labor nach. Aktion und "
+        "Ziel müssen in allen Vergleichen gleich sein. Indikatoren müssen nur dort exakt gleich "
+        "sein, wo die Aufzeichnung (Spec 015) gleichen Eingang belegt; jede andere Abweichung "
+        "braucht eine belegte Ursache. Belegt ist die Treue je Markt erst ab "
+        f"{FIDELITY_MIN} exakt gleichen Snapshots mit belegt gleichem Eingang."
     )
     if f is None:
         doc.p("Kein Treue-Test beigefügt: Treue nicht belegt.", "warn")
         return
-    est = _established(f)
     rows = []
     for m, n in sorted(f.compared.items()):
-        if est[m]:
-            verdict = "belegt"
-        elif n < FIDELITY_MIN:
-            verdict = f"Treue nicht belegt (unter {FIDELITY_MIN} Vergleiche)"
-        elif (
-            f.equal_action.get(m, 0) == n
-            and f.indicators_ok.get(m, 0) < n
-            and not any(d.get("market") == m and not d.get("cause") for d in f.deviations)
-        ):
-            # Only the indicator condition of AK5 fails: say so instead of a vague "Abweichungen".
-            verdict = "Treue nicht belegt (Indikatoren weichen ab)"
-        else:
-            verdict = "Treue nicht belegt (Abweichungen)"
+        ok, why = f.verdict(m)
+        exact = f.exact.get(m, 0)
+        cut = f.truncated.get(m, 0)
         rows.append(
             [
                 m,
                 count(n),
                 f"{count(f.equal_action.get(m, 0))} von {count(n)}",
+                count(exact) + (f" (davon {count(cut)} gekürzt)" if cut else ""),
+                _causes(f.different.get(m, {})),
+                count(f.unrecorded.get(m, 0)),
                 f"{count(f.indicators_ok.get(m, 0))} von {count(n)}",
-                verdict,
+                "belegt" if ok else f"Treue nicht belegt ({why})",
             ]
         )
     if not rows:
@@ -1644,7 +1632,10 @@ def _fidelity(doc: Doc, f: FidelitySummary | None) -> None:
             "Markt",
             "Vergleiche",
             "Aktion und Ziel gleich",
-            "Indikatoren gleich (± 1 Stelle)",
+            "Exakt gleich bei belegt gleichem Eingang",
+            "Eingang verschieden (Ursache)",
+            "Ohne Aufzeichnung nicht prüfbar",
+            "Indikatoren gleich (± 1 Stelle, Information)",
             "Ergebnis",
         ],
         rows,
@@ -1656,7 +1647,8 @@ def _fidelity(doc: Doc, f: FidelitySummary | None) -> None:
         doc.p(f"Hinweis des Treue-Tests: {f.note}", "note")
     if f.deviations:
         doc.sub(f"Abweichungen ({count(len(f.deviations))})")
-        shown = f.deviations[:MAX_DEVIATIONS]
+        # Unexplained ones first: they decide the verdict and must not drown in the explained.
+        shown = sorted(f.deviations, key=lambda d: bool(d.get("cause")))[:MAX_DEVIATIONS]
         doc.table(
             ["Markt", "Zeit (UTC)", "Depot", "Feld", "live", "nachgebaut", "Ursache"],
             [
@@ -1679,6 +1671,14 @@ def _fidelity(doc: Doc, f: FidelitySummary | None) -> None:
                 f"{FIDELITY_FILE}.",
                 "note",
             )
+
+
+def _causes(causes: Mapping[str, int]) -> str:
+    total = sum(causes.values())
+    if not total:
+        return "0"
+    parts = sorted(causes.items(), key=lambda kv: (-kv[1], kv[0]))
+    return f"{count(total)} (" + "; ".join(f"{c}: {count(n)}" for c, n in parts) + ")"
 
 
 def _assumptions(doc: Doc) -> None:
@@ -1962,7 +1962,13 @@ class FidelityUnreadable(ReportError):
     """The fidelity JSON is not a fidelity summary; the message is German, for the CLI."""
 
 
-_INT_MAPS = ("compared", "equal_action", "indicators_ok")
+_INT_MAPS = ("compared", "equal_action", "indicators_ok", "exact", "truncated", "unrecorded")
+
+
+def _count_map(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(m, str) and type(n) is int and n >= 0 for m, n in value.items()
+    )
 
 
 def load_fidelity(text: str) -> FidelitySummary:
@@ -1981,11 +1987,13 @@ def load_fidelity(text: str) -> FidelitySummary:
     if unknown := sorted(set(data) - known):
         raise FidelityUnreadable("unbekannte Felder: " + ", ".join(map(str, unknown)))
     for name in _INT_MAPS:
-        value = data.get(name, {})
-        if not isinstance(value, dict) or not all(
-            isinstance(m, str) and type(n) is int and n >= 0 for m, n in value.items()
-        ):
+        if not _count_map(data.get(name, {})):
             raise FidelityUnreadable(f"„{name}“ muss je Markt eine ganze Zahl ab 0 sein")
+    different = data.get("different", {})
+    if not isinstance(different, dict) or not all(
+        isinstance(m, str) and _count_map(c) for m, c in different.items()
+    ):
+        raise FidelityUnreadable("„different“ muss je Markt und Ursache eine ganze Zahl ab 0 sein")
     deviations = data.get("deviations", [])
     if not isinstance(deviations, list) or not all(
         isinstance(d, dict) and isinstance(d.get("market"), str) for d in deviations

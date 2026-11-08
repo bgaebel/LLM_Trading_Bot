@@ -79,24 +79,27 @@ def _fidelity(n: int, equal: int, indicators: int, **kw: Any) -> FidelitySummary
     )
 
 
-def test_fidelity_needs_indicators_within_one_step() -> None:
-    # Review finding: indicators_ok was ignored, so 350 of 400 still read "belegt" (AK5).
-    assert _fidelity(400, 400, 400).established == {BTC: True}
-    assert _fidelity(400, 400, 350).established == {BTC: False}
-    assert _fidelity(400, 400, 399).established == {BTC: False}
-    # A summary without the indicator count proves nothing about the indicators.
-    no_count = FidelitySummary(compared={BTC: 400}, equal_action={BTC: 400})
-    assert no_count.established == {BTC: False}
+def test_fidelity_needs_exact_snapshots_with_equal_input() -> None:
+    # AK5, changed with the user's approval 2026-11-08: indicators must be exactly equal only
+    # where the recording proves the same input; the verdict needs FIDELITY_MIN such exactly
+    # equal snapshots. indicators_ok stays as information and no longer decides by itself.
+    assert _fidelity(400, 400, 400, exact={BTC: 400}).established == {BTC: True}
+    assert _fidelity(400, 400, 350, exact={BTC: FIDELITY_MIN}).established == {BTC: True}
+    assert _fidelity(400, 400, 400, exact={BTC: FIDELITY_MIN - 1}).established == {BTC: False}
+    # A summary without the exact count (written before the change) proves nothing.
+    assert _fidelity(400, 400, 400).established == {BTC: False}
     # The other rules stay: the minimum count, equal actions, explained deviations only.
-    assert _fidelity(FIDELITY_MIN - 1, FIDELITY_MIN - 1, FIDELITY_MIN - 1).established == {
-        BTC: False
-    }
-    assert _fidelity(FIDELITY_MIN, FIDELITY_MIN, FIDELITY_MIN).established == {BTC: True}
-    assert _fidelity(400, 399, 400).established == {BTC: False}
+    n = FIDELITY_MIN - 1
+    assert _fidelity(n, n, n, exact={BTC: n}).established == {BTC: False}
+    m = FIDELITY_MIN
+    assert _fidelity(m, m, m, exact={BTC: m}).established == {BTC: True}
+    assert _fidelity(400, 399, 400, exact={BTC: 399}).established == {BTC: False}
     unexplained = [{"market": BTC, "field": "adx", "cause": ""}]
-    assert _fidelity(400, 400, 400, deviations=unexplained).established == {BTC: False}
+    summary = _fidelity(400, 400, 400, deviations=unexplained, exact={BTC: 399})
+    assert summary.established == {BTC: False}
+    assert summary.verdict(BTC) == (False, "1 Abweichungen ohne Ursache")
     explained = [{"market": BTC, "field": "adx", "cause": "laufende Kerze"}]
-    summary = _fidelity(400, 400, 400, deviations=explained)
+    summary = _fidelity(400, 400, 400, deviations=explained, exact={BTC: 399})
     assert summary.established == {BTC: True}
     assert FidelitySummary.from_json(summary.to_json()) == summary
 

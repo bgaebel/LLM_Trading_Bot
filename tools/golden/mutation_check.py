@@ -16,7 +16,9 @@ mutant would be "killed" by a missing file instead of by a test.
 Spec 016 adds the lab's historical client (lab/history.py, tests/lab): its window, closed-bar
 filter, forming bar and quote time are checked against frozen live responses (AK3). AK14 adds
 the lab's USDC route (labels "lab usdc ..." and "lab fidelity ..."): synthetic route quotes,
-the route's spread and sale in the backtest, the route costs and benchmarks in the fidelity check.
+the route's spread and sale in the backtest, the route costs and benchmarks in the fidelity check,
+and that the route is chosen per depot, not per market. The AK5 change of 2026-11-08 adds the
+fidelity rules on proven input: cut windows, late bars, causes, the minimum of exact snapshots.
 
 Spec 020 adds the USDC route as group "usdc" (labels starting with "usdc "): fees, legs, sides
 of the books, the cost input of the signals and the fail-closed checks, run against the USDC
@@ -848,6 +850,62 @@ M += [
         "if agent in BENCHMARKS:",
         "if agent == BUYHOLD:",
         "lab fidelity skips buyhold-usdc",
+    ),
+    # Spec 016 AK5 (changed 2026-11-08): exact only on a proven equal input, every other
+    # deviation with a proven cause, never a cause for a snapshot with the same input.
+    (
+        "lab/fidelity.py",
+        "    if not causes:\n        return None",
+        "    if not causes and False:\n        return None",
+        "lab fidelity cause into the same input",
+    ),
+    (
+        "lab/model.py",
+        "if exact < FIDELITY_MIN:",
+        "if False:",
+        "lab fidelity exact threshold dropped",
+    ),
+    (
+        "lab/fidelity.py",
+        "and live < have[-1].volume",
+        "and live != have[-1].volume",
+        "lab fidelity more volume live is late",
+    ),
+    (
+        "lab/fidelity.py",
+        "if (have := trial.windows.get(tf)) is not None and _same_window(windows[tf], have)",
+        "if (have := trial.windows.get(tf)) is not None",
+        "lab fidelity cut without the checksum",
+    ),
+    (
+        "lab/fidelity.py",
+        "got = rebuilder.rebuild(rec, hint, route, caps)",
+        "got = rebuilder.rebuild(rec, hint, route)",
+        "lab fidelity cut window not rebuilt",
+    ),
+    (
+        "lab/history.py",
+        "lo = max(lo, hi - cap)",
+        "lo = lo",
+        "lab row limit ignored",
+    ),
+    (
+        "lab/fidelity.py",
+        'd["cause"] = NOT_CHECKABLE',
+        'd["cause"] = FORMING',
+        "lab fidelity unchecked taken for the forming bar",
+    ),
+    (
+        "lab/fidelity.py",
+        'return not name.endswith(".roundtrip_cost_pct")',
+        "return True",
+        "lab fidelity costs explained by another input",
+    ),
+    (
+        "lab/fidelity.py",
+        "            s.exact[market] = s.exact.get(market, 0) + 1",
+        "            s.exact[market] = s.exact.get(market, 0) + 2",
+        "lab fidelity exact counted once",
     ),
     (
         "core.py",
