@@ -58,6 +58,8 @@ class CycleReport:
     agents: tuple[str, ...]
     quotes_error: str = ""
     buyhold_bought: int = 0
+    buyhold_usdc_bought: int = 0
+    """Markets the USDC benchmark bought in this cycle (Spec 020)."""
     markets: list[MarketResult] = field(default_factory=list)
     llm: list[LlmOutcome] = field(default_factory=list)
     equity: list[Equity] = field(default_factory=list)

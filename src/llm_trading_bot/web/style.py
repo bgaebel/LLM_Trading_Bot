@@ -68,6 +68,9 @@ body::after {
 
 /* ---------------------------------------------------------------- header + ticker */
 header, .ticker, main, footer { position: relative; z-index: 1; }
+/* Sticky as one block, so the ticker never slides under the header (user 2026-11-08); below
+   the scanline overlay (z 40), above the panels. */
+.masthead { position: sticky; top: 0; z-index: 30; }
 header {
   display: flex; flex-wrap: wrap; gap: 12px 20px; justify-content: space-between;
   align-items: center; padding: 12px 22px;
@@ -249,6 +252,7 @@ form.inline { display: inline-block; margin: 10px 0 0; }
   letter-spacing: 0.16em; padding: 4px 6px; border-radius: 1px; color: var(--muted);
   border: 1px solid var(--line-hot); }
 .badge.llm { color: var(--magenta); border-color: rgba(255, 61, 139, 0.45); }
+.badge.usdc { color: var(--lime); border-color: rgba(107, 255, 154, 0.45); }
 .tile:has(input:checked) { border-color: rgba(45, 226, 230, 0.55);
   background: linear-gradient(90deg, rgba(45, 226, 230, 0.1), rgba(0, 0, 0, 0.72) 70%); }
 .tile:has(input:checked) .tile-name { color: var(--cyan); }

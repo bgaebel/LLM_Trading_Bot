@@ -8,7 +8,13 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from html import escape
 
-from llm_trading_bot.llm.agents import LLM_DEFAULTS, MAX_OUTPUT_TOKENS, MODEL_PRICES
+from llm_trading_bot.llm.agents import (
+    LLM_DEFAULTS,
+    MAX_OUTPUT_TOKENS,
+    MODEL_PRICES,
+    USDC_AGENTS,
+    USDC_FIELD,
+)
 from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.web import chart
 from llm_trading_bot.web.credentials import AGENT_CHOICES, PUBLIC_OVERVIEW_FIELD, mask
@@ -184,6 +190,8 @@ def _page(
         '<link rel="stylesheet" href="/app.css"></head>'
         + ('<body class="live">' if refresh else "<body>")
         + (BACKDROP if backdrop else "")
+        # Header and ticker stay on screen while the page scrolls (user 2026-11-08).
+        + '<div class="masthead">'
         + f'<header><a class="brand" href="/">{LOGO}<div><p class="brand-name">LLM '
         '<span>Trading</span> Bot</p><div class="brand-sub">Paper-Terminal · BTC/EUR · ETH/EUR'
         f"</div></div></a>{tabs}"
@@ -192,7 +200,7 @@ def _page(
         f'<span class="chip net">127.0.0.1</span>{logout}</div></header>'
         # The track holds the items twice so the loop has no visible seam.
         f'<div class="ticker" aria-hidden="true"><div class="ticker-track{phase}">'
-        f"{items}{items}</div></div><main{view}>{body}</main>"
+        f"{items}{items}</div></div></div><main{view}>{body}</main>"
         "<footer><span>Paper-Modus · kein Echtgeld (ADR-0004)</span>"
         "<span>App nur auf 127.0.0.1 · von außen per HTTPS oder SSH-Tunnel (ADR-0028)</span>"
         + files
@@ -524,6 +532,10 @@ def _trading_panel(t: Trading, hidden: str) -> str:
     )
 
 
+_BADGE_CLASS = {"LLM": " llm", "USDC": " usdc"}
+"""Depot kinds with their own badge colour; the classic ones keep the plain badge."""
+
+
 def settings_page(
     values: Mapping[str, str],
     *,
@@ -535,6 +547,8 @@ def settings_page(
     key = values.get("OPENAI_API_KEY")
     key_state = f"gespeichert ({escape(mask(key))})" if key else "nicht gesetzt"
     selected = values.get("BOT_AGENTS", ",".join(LLM_DEFAULTS)).split(",")
+    # The bot's default (Spec 020 AK4): a missing USDC choice runs all of them.
+    selected += values.get(USDC_FIELD, ",".join(USDC_AGENTS)).split(",")
     labels = {
         "gpt-luna": ("gpt-6-luna · Haupt-Trader", "LLM"),
         "gpt-sol": ("gpt-6.1-sol · Gegenprobe", "LLM"),
@@ -542,13 +556,18 @@ def settings_page(
         "breakout": ("Ausbruch", "KLASSISCH"),
         "meanrev": ("Mean Reversion", "KLASSISCH"),
         "ensemble": ("Mehrheitsentscheid", "KLASSISCH"),
+        # Spec 020: the same rules, BTC bought and sold over BTC-USDC, cash in euro.
+        "trend-usdc": ("Trendfolge · BTC über USDC", "USDC"),
+        "breakout-usdc": ("Ausbruch · BTC über USDC", "USDC"),
+        "meanrev-usdc": ("Mean Reversion · BTC über USDC", "USDC"),
+        "ensemble-usdc": ("Mehrheitsentscheid · BTC über USDC", "USDC"),
     }
     depots = "".join(
         f'<label class="tile"><input type="checkbox" name="agents" value="{escape(a)}"'
         f"{' checked' if a in selected else ''}>"
         f'<span class="tile-name">{escape(a)}</span>'
         f'<span class="tile-sub">{escape(labels[a][0])}</span>'
-        f'<span class="badge{" llm" if labels[a][1] == "LLM" else ""}">'
+        f'<span class="badge{_BADGE_CLASS.get(labels[a][1], "")}">'
         f"{escape(labels[a][1])}</span></label>"
         for a in AGENT_CHOICES
     )
@@ -610,7 +629,10 @@ def settings_page(
         '<section class="panel span-12">'
         + _head("03", "Depots", "warm")
         + f'<div class="tiles">{depots}</div>'
-        '<p class="hint">Buy &amp; Hold läuft immer als Referenz mit.</p></section>'
+        '<p class="hint">Buy &amp; Hold läuft immer als Referenz mit, Buy &amp; Hold USDC '
+        "dazu, sobald ein USDC-Depot läuft. USDC-Depots handeln BTC über BTC-USDC "
+        "(0,05 % statt 0,25 % Gebühr) und tauschen je Trade Euro in USDC und zurück.</p>"
+        "</section>"
         '<section class="panel span-12">'
         + _head("04", "Budget € / Tag")
         + _gauge(total, luna, sol)

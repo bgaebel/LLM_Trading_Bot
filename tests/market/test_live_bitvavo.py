@@ -5,7 +5,7 @@ import time
 import pytest
 
 from llm_trading_bot.market.bitvavo import BitvavoClient
-from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.market.models import QUOTED, SYMBOLS, Symbol
 from llm_trading_bot.market.snapshot import DEFAULT_MIN_BARS, INTERVALS, build_snapshots
 
 pytestmark = pytest.mark.net
@@ -18,10 +18,10 @@ def client() -> BitvavoClient:
 
 def test_live_quotes_for_both_markets(client: BitvavoClient) -> None:
     quotes = client.quotes()
-    assert set(quotes) == {Symbol.BTCEUR, Symbol.ETHEUR}
+    assert set(quotes) == set(QUOTED)  # Spec 020: BTC-USDC and USDC-EUR from the same book
 
 
-@pytest.mark.parametrize("symbol", list(Symbol))
+@pytest.mark.parametrize("symbol", SYMBOLS)
 def test_live_candles_are_closed_and_sufficient(client: BitvavoClient, symbol: Symbol) -> None:
     now = int(time.time())
     for tf in INTERVALS:

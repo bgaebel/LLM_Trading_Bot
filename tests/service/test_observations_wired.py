@@ -93,7 +93,7 @@ def play(
     tmp: Path, scenario: tuple[str, str], buffer: Callable[[], ObservationBuffer] | None
 ) -> tuple[dict[str, list[tuple[Any, ...]]], list[CycleReport], list[ObservationBuffer]]:
     tmp.mkdir()
-    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": AGENTS})
+    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": AGENTS, "BOT_USDC_AGENTS": ""})
     con = open_db(tmp / "bot.db", agents=(*config.agents, BUYHOLD))
     client = MovingClient(*scenario)
     model = scripted_model()
@@ -281,7 +281,11 @@ def test_paper_cycle_command_writes_no_observations(tmp_path: Path) -> None:
     """ADR-0027: only the service (the WriterLock holder for its whole run) records."""
     db = tmp_path / "bot.db"
     code = run_paper_cycle(
-        db, ScenarioClient(), env={"BOT_AGENTS": "trend"}, out=io.StringIO(), clock=lambda: NOW
+        db,
+        ScenarioClient(),
+        env={"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": ""},
+        out=io.StringIO(),
+        clock=lambda: NOW,
     )
     assert code == EXIT_OK and db.exists()
     assert not (tmp_path / OBS_FILE).exists()

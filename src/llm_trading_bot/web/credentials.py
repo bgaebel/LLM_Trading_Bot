@@ -8,7 +8,13 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
-from llm_trading_bot.llm.agents import CLASSIC_AGENTS, LLM_DEFAULTS, load_config
+from llm_trading_bot.llm.agents import (
+    CLASSIC_AGENTS,
+    LLM_DEFAULTS,
+    USDC_AGENTS,
+    USDC_FIELD,
+    load_config,
+)
 from llm_trading_bot.llm.budget import amount
 from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.web.files import write_private
@@ -16,6 +22,7 @@ from llm_trading_bot.web.files import write_private
 SECRET_FIELDS = ("OPENAI_API_KEY",)
 SETTING_FIELDS = (
     "BOT_AGENTS",
+    USDC_FIELD,
     "LLM_EFFORT",
     "LLM_DAILY_BUDGET_EUR",
     "LLM_DAILY_BUDGET_EUR_GPT_LUNA",
@@ -28,7 +35,7 @@ PUBLIC_OVERVIEW_FIELD = "WEB_PUBLIC_OVERVIEW"
 WEB_FIELDS = (PUBLIC_OVERVIEW_FIELD,)
 """Read by the web UI only; the bot ignores them."""
 FIELDS = SECRET_FIELDS + SETTING_FIELDS + CONTROL_FIELDS + WEB_FIELDS
-AGENT_CHOICES = (*LLM_DEFAULTS, *CLASSIC_AGENTS)
+AGENT_CHOICES = (*LLM_DEFAULTS, *CLASSIC_AGENTS, *USDC_AGENTS)
 _KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]{16,200}")
 _HEADER = "# llm-trading-bot credentials - written by `trading-bot web`; never commit this file\n"
 
@@ -101,9 +108,14 @@ class SecretsFile:
             unknown = [a for a in agents if a not in AGENT_CHOICES]
             if unknown:
                 raise ValueError(f"unknown depots: {unknown}")
-            values["BOT_AGENTS"] = ",".join(a for a in AGENT_CHOICES if a in agents)
+            # Spec 020: USDC depots in their own field, so BOT_AGENTS stays readable for a
+            # release from before 020 (rollback). Stored even when empty: "none" is a choice,
+            # a missing field means all of them.
+            chosen = [a for a in AGENT_CHOICES if a in agents]
+            values["BOT_AGENTS"] = ",".join(a for a in chosen if a not in USDC_AGENTS)
+            values[USDC_FIELD] = ",".join(a for a in chosen if a in USDC_AGENTS)
         for name in SETTING_FIELDS:
-            if name == "BOT_AGENTS" or name not in form:
+            if name in ("BOT_AGENTS", USDC_FIELD) or name not in form:
                 continue
             value = _clean(name, form[name])
             if value:

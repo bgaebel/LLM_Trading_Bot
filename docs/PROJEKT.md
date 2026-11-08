@@ -4,7 +4,7 @@
      Wird nicht in jede Session geladen – CLAUDE.md verlinkt hierher. -->
 
 ## Ziel
-Ein dauerhaft laufender Trading-Bot für BTC/EUR und ETH/EUR, der auf der
+Ein dauerhaft laufender Trading-Bot für BTC/EUR und ETH/EUR (BTC zusätzlich über BTC/USDC ausgeführt, ADR-0030), der auf der
 [LLM Trading Arena](https://github.com/bgaebel/LLM-Trading-Arena) aufbaut. Die Arena vergleicht Strategien
 (klassisch, GPT, Claude, Buy & Hold) als Forschungsaufbau. Der Bot setzt eine dort untersuchte Strategie
 als schlanken, betriebsfesten Dienst auf einem Hetzner-Cloud-Server um. Er läuft zuerst im Paper-Modus
@@ -22,7 +22,8 @@ Keine ungewollte echte Order und keine verfälschte Handelshistorie – im Zweif
 
 ## Nicht-Ziele
 - Keine Echtgeld-Orders vor dem Echtgeld-Meilenstein (siehe ADR-0004).
-- Keine weiteren Börsen, Märkte, Hebel, Margin oder Derivate in v1.
+- Keine weiteren Börsen, Hebel, Margin oder Derivate in v1; als weitere Märkte nur BTC/USDC und USDC/EUR für die
+  Ausführung der USDC-Depots (ADR-0030, Nutzer 2026-11-08).
 - Keine Bedienung ohne Login: von außen nur per HTTPS oder SSH-Tunnel; ohne Passwort nur die Übersicht lesend,
   solange alles Paper ist (ADR-0028, Nutzer 2026-11-08).
 - Kein Hochfrequenzhandel; höhere Signalfrequenz ist kein Ziel an sich.

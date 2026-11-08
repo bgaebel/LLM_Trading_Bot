@@ -6,8 +6,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from html import escape
 
+from llm_trading_bot.market.models import QUOTE_MARKETS
 from llm_trading_bot.paper.db import START_CASH
 from llm_trading_bot.paper.execution import BUYHOLD, DRAWDOWN_KILL
+from llm_trading_bot.paper.usdc import BUYHOLD_USDC
 from llm_trading_bot.web import pages
 from llm_trading_bot.web.overview import (
     CYCLE_LABEL,
@@ -96,6 +98,8 @@ def _pulses(pulses: Sequence[Pulse]) -> str:
 def _depots(rows: Sequence[DepotRow]) -> str:
     def name(d: DepotRow) -> str:
         badges = ' <span class="badge">Referenz</span>' if d.reference else ""
+        if d.usdc:
+            badges += ' <span class="badge usdc">USDC</span>'
         if d.halted:
             since = f" seit {when(d.stopped_at)}" if d.stopped_at else ""
             badges += f' <span class="badge stop">Risikostopp{escape(since)}</span>'
@@ -294,10 +298,24 @@ def _number(value: float) -> str:
     return f"{value:,.2f}".replace(",", NBSP)
 
 
+_QUOTE_ONLY = {s.market for s in QUOTE_MARKETS}
+"""Spec 020: markets the bot only reads the book of - no candles, priced in their own quote
+currency (BTC-USDC in USDC)."""
+
+
 def ticker(view: Overview) -> list[tuple[str, str]]:
     """Strip under the header: the stored quotes and every depot, instead of fixed hints."""
     items: list[tuple[str, str]] = []
     for q in view.quotes:
+        if q.market in _QUOTE_ONLY:
+            unit = q.market.split("-")[1]
+            # USDC-EUR sits near 0.9: two places would hide every move of it.
+            price = _number(q.mid) if q.mid >= 10 else f"{q.mid:.5f}"
+            items += [
+                (q.market, f"{price} {unit}"),
+                (f"{q.market} Spread", f"{q.spread_pct:.3f} %"),
+            ]
+            continue
         base = q.market.split("-")[0]
         items += [
             (q.market, money(q.mid)),
@@ -309,7 +327,7 @@ def ticker(view: Overview) -> list[tuple[str, str]]:
         newest = max(view.quotes, key=lambda q: q.ts)
         items.append(("Kurse", f"{when(newest.ts, seconds=True)} · {newest.source}"))
     for d in view.depots:
-        label = "Buy & Hold" if d.reference else d.agent
+        label = {BUYHOLD: "Buy & Hold", BUYHOLD_USDC: "Buy & Hold USDC"}.get(d.agent, d.agent)
         items.append((label, f"{money(d.value)} · {signed(d.pnl_pct, ' %')}"))
     return [*items, ("Modus", "Paper – kein Echtgeld")] if items else list(pages.TICKER)
 

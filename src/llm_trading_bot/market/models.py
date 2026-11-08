@@ -43,6 +43,9 @@ class MarketDataError(ValueError):
 class Symbol(Enum):
     BTCEUR = "BTC-EUR"
     ETHEUR = "ETH-EUR"
+    # Spec 020 (ADR-0030): quote-only markets of the USDC route - no candles, no depot column.
+    BTCUSDC = "BTC-USDC"
+    USDCEUR = "USDC-EUR"
 
     @property
     def market(self) -> str:
@@ -50,7 +53,13 @@ class Symbol(Enum):
         return self.value
 
 
-SYMBOLS: tuple[Symbol, ...] = tuple(Symbol)
+SYMBOLS: tuple[Symbol, ...] = (Symbol.BTCEUR, Symbol.ETHEUR)
+"""The markets of v0.3.1: candles, snapshots, decisions and one depot column each. Written out
+instead of ``tuple(Symbol)``, so the quote-only markets below never enter that behaviour."""
+QUOTE_MARKETS: tuple[Symbol, ...] = (Symbol.BTCUSDC, Symbol.USDCEUR)
+"""Spec 020: only their best bid/ask is read (same request, same checks); they price the BTC of
+the USDC depots and are never decided on."""
+QUOTED: tuple[Symbol, ...] = SYMBOLS + QUOTE_MARKETS
 
 Depth = tuple[float | None, float | None]
 """Best bid size and best ask size as the exchange sent them; None where unreadable."""
@@ -84,10 +93,14 @@ class QuoteBook(dict[Symbol, "Quote"]):
         self.codes: dict[Symbol, str] = dict(codes or {})
         self.rejected: dict[Symbol, tuple[RawRow, ...]] = dict(rejected or {})
 
-    def problem(self) -> str:
-        """The missing markets and why, for reports; "" when every market is there."""
+    def problem(self, markets: Iterable[Symbol] = SYMBOLS) -> str:
+        """The missing ``markets`` and why, for reports; "" when every one of them is there.
+
+        Spec 020: the quote-only markets count only for a caller that needs them (a configured
+        USDC depot), so a bot without USDC depots reports exactly what it did before.
+        """
         return "; ".join(
-            f"{s.market}: {self.errors.get(s, 'missing')}" for s in SYMBOLS if s not in self
+            f"{s.market}: {self.errors.get(s, 'missing')}" for s in markets if s not in self
         )
 
 

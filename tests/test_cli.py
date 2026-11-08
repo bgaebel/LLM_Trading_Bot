@@ -101,7 +101,7 @@ def test_signals_report_exit_2_when_no_market_is_usable() -> None:
 
 def run_cycle(db: Path, client: ScenarioClient, **env: str) -> tuple[int, str]:
     out = io.StringIO()
-    env = {"BOT_AGENTS": "trend", **env}
+    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": "", **env}
     code = run_paper_cycle(db, client, env=env, out=out, clock=lambda: GOLDEN_NOW)
     return code, out.getvalue()
 
@@ -193,7 +193,10 @@ def test_paper_cycle_needs_a_db_path() -> None:
 
 
 def test_paper_cycle_reads_values_saved_by_the_web_ui(tmp_path: Path) -> None:
-    (tmp_path / "secrets.env").write_text("BOT_AGENTS=meanrev\n", encoding="utf-8")
+    # The web UI always stores the USDC choice (Spec 020), here: none.
+    (tmp_path / "secrets.env").write_text(
+        "BOT_AGENTS=meanrev\nBOT_USDC_AGENTS=\n", encoding="utf-8"
+    )
     out = io.StringIO()
     code = run_paper_cycle(
         tmp_path / "bot.db", ScenarioClient(), env={}, out=out, clock=lambda: GOLDEN_NOW
@@ -203,7 +206,7 @@ def test_paper_cycle_reads_values_saved_by_the_web_ui(tmp_path: Path) -> None:
 
 def test_environment_wins_over_saved_values(tmp_path: Path) -> None:
     secrets = tmp_path / "elsewhere.env"
-    secrets.write_text("BOT_AGENTS=meanrev\n", encoding="utf-8")
+    secrets.write_text("BOT_AGENTS=meanrev\nBOT_USDC_AGENTS=\n", encoding="utf-8")
     out = io.StringIO()
     code = run_paper_cycle(
         tmp_path / "bot.db",
@@ -222,7 +225,9 @@ def test_stored_key_from_an_explicit_secrets_file_reaches_the_model(tmp_path: Pa
     key = "sk-test-stored-in-the-web-ui-0000"
     secrets = tmp_path / "elsewhere" / "secrets.env"
     secrets.parent.mkdir()
-    secrets.write_text(f"OPENAI_API_KEY={key}\nBOT_AGENTS=gpt-luna\n", encoding="utf-8")
+    secrets.write_text(
+        f"OPENAI_API_KEY={key}\nBOT_AGENTS=gpt-luna\nBOT_USDC_AGENTS=\n", encoding="utf-8"
+    )
     seen: list[str] = []
 
     def factory(api_key: str) -> FakeModel:

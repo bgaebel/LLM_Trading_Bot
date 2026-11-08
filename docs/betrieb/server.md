@@ -117,6 +117,8 @@ bash scripts/deploy.sh <alias> <dienst> rollback
 Ein Rollback auf ein Release vor Spec 015 lässt `observations.db` und ihre Sicherungen unverändert liegen
 (`release <sha> is from before Spec 015 …`); das alte Release liest und sichert sie nicht, die Aufzeichnung ruht
 bis zum nächsten Deploy ab 015.
+Ein Rollback auf ein Release vor Spec 020 braucht keine Vorbereitung: Die Auswahl der USDC-Depots steht in
+`BOT_USDC_AGENTS`, das alte Release ignoriert sie und liest `BOT_AGENTS` wie bisher (Abschnitt „USDC-Depots“).
 ```bash
 bash scripts/deploy.sh <alias> <dienst> status
 ```
@@ -144,6 +146,34 @@ Alles über die Weboberfläche, Seite **Einstellungen**, Bereich „Handel & Ris
 ```bash
 ssh <alias> 'sudo runuser -u <dienst> -- python3 -c "import sqlite3; c=sqlite3.connect(\"file:/var/lib/llm-trading-bot/bot.db?mode=ro\", uri=True); [print(a, round((v/p-1)*100, 2)) for a, p, v in c.execute(\"SELECT p.agent, p.peak, (SELECT value FROM equity e WHERE e.agent=p.agent ORDER BY ts DESC LIMIT 1) FROM portfolios p\") if v]"'
 ```
+
+### USDC-Depots (Spec 020, ADR-0030)
+Standardmäßig an: Der Deploy allein startet sie. Gewählt werden sie in einem eigenen Feld `BOT_USDC_AGENTS` in
+`secrets.env`, nie in `BOT_AGENTS` (dort steht weiter nur die bisherige Auswahl). Fehlt das Feld, laufen alle vier
+(`trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc`); ab dem ersten Speichern der Seite **Einstellungen**
+steht dort die Auswahl der Kacheln mit Kennzeichen **USDC**, auch „keins“ (leeres Feld). Kein Befehl auf dem Server,
+kein Neustart (der Dienst liest die Einstellungen jede Runde).
+
+- In der ersten Runde des neuen Release legt der Bot die vier Depots und `buyhold-usdc` mit je 10.000 € an. Journal
+  (beim Start): `service started: db bot.db, depots …, trend-usdc, breakout-usdc, meanrev-usdc, ensemble-usdc, …`
+  und einmal
+  `trade buyhold-usdc bought 2 market(s) (benchmark)`. Die Einstellungen zeigen die USDC-Kacheln angekreuzt.
+- Mindestens ein Depot außer den USDC-Depots muss gewählt bleiben (sonst „BOT_AGENTS must name at least one depot
+  besides the USDC depots“): Ein Release vor Spec 020 braucht nach einem Rollback ein nicht leeres `BOT_AGENTS`.
+- Die Übersicht zeigt die Depots mit Kennzeichen „USDC“, ihre BTC-Trades mit Markt BTC-USDC und im Laufband
+  BTC-USDC und USDC-EUR. Die übrigen Depots und ihre Historie ändern sich nicht.
+- Fehlt BTC-USDC oder USDC-EUR in der Antwort von `/ticker/book`, steht im Journal z. B.
+  `quotes: MarketDataError: BTC-USDC: missing`. Ohne frischen Kurs (≤ 20 s) beider Bücher entscheidet das BTC
+  eines USDC-Depots nicht, und ein USDC-Depot mit BTC-Bestand bekommt keinen Equity-Punkt (fail closed); alle
+  anderen Depots laufen weiter.
+- Abschalten: Kacheln abwählen und speichern (gespeichert wird `BOT_USDC_AGENTS=` – „keins“, damit der Standard sie
+  nicht wieder einschaltet). Die Depots handeln ab der nächsten Runde nicht mehr; ihre Historie bleibt in der DB.
+  BTC-USDC und USDC-EUR verschwinden aus Lebenszeichen und Laufband, sobald ihr letzter Kurs älter als 1 h ist
+  (der Bot fragt sie dann nicht mehr ab; kein Marktdatenfehler).
+- Rollback auf ein Release vor Spec 020: startet mit derselben `secrets.env` (es liest `BOT_AGENTS` und ignoriert
+  `BOT_USDC_AGENTS`); die USDC-Depots ruhen, ihre Historie bleibt. Speichert man in der alten Weboberfläche die
+  Einstellungen, entfernt sie `BOT_USDC_AGENTS`; nach dem nächsten Deploy ab 020 laufen dann wieder alle vier
+  (Standard) – bei Bedarf erneut abwählen.
 
 ### Variablen außerhalb von `secrets.env`
 In `secrets.env` stehen nur Key, Depots, Effort, Budgets sowie Handelspause und Freigaben (Weboberfläche). Gebühren, Takt-Parameter oder

@@ -16,8 +16,12 @@ mutant would be "killed" by a missing file instead of by a test.
 Spec 016 adds the lab's historical client (lab/history.py, tests/lab): its window, closed-bar
 filter, forming bar and quote time are checked against frozen live responses (AK3).
 
-Usage: uv run python tools/golden/mutation_check.py [[--only] GROUP]
-GROUP: strategy, paper, llm, service, broker, cli or lab.
+Spec 020 adds the USDC route as group "usdc" (labels starting with "usdc "): fees, legs, sides
+of the books, the cost input of the signals and the fail-closed checks, run against the USDC
+tests only. The v0.3.1 mutants above keep guarding the v0.3.1 path.
+
+Usage: uv run python tools/golden/mutation_check.py [--only] [strategy|paper|llm|service|broker|
+cli|lab|usdc]
 """
 
 import os
@@ -50,6 +54,13 @@ EQUIVALENT = {
     # - risk peak > 0: peak = max(eq, peak) >= eq >= 0 (cash never goes negative), so with
     #   peak == 0 the stop test is 0 < 0 either way (Spec 011).
     "risk peak > 0",
+    # - usdc fee legs swapped: both leg fees are charged on the same euro amount (the USDC leg's
+    #   fee converted at the price the USDC were bought for), so only their sum is observable -
+    #   in every trade, valuation and signal. A wrong fee on ONE leg is killed below (Spec 020).
+    "usdc fee legs swapped",
+    # - usdc benchmark buys once after a restart: its decisions (bar -1) are unique, so a second
+    #   attempt is ignored before it can trade; the trade check only mirrors initialize_buyhold.
+    "usdc benchmark buys once after a restart",
 }
 
 M = [
@@ -271,8 +282,8 @@ M += [
     ),
     (
         E,
-        "if agent == BUYHOLD and p[_COLUMN[symbol]] > 0:",
-        "if agent == BUYHOLD and p[_COLUMN[symbol]] > 1:",
+        "if agent in BENCHMARKS and p[_COLUMN[symbol]] > 0:",
+        "if agent in BENCHMARKS and p[_COLUMN[symbol]] > 1:",
         "exec buyhold holds once",
     ),
     (
@@ -310,7 +321,12 @@ M += [
     (E, "DRAWDOWN_KILL = 0.10", "DRAWDOWN_KILL = 0.11", "risk kill .10->.11"),
     (E, "eq < peak * (1 - DRAWDOWN_KILL)", "eq <= peak * (1 - DRAWDOWN_KILL)", "risk < -> <="),
     (E, 'and not p["halted"] and peak > 0', "and peak > 0", "risk halted once"),
-    (E, 'if agent != BUYHOLD and not p["halted"]', 'if not p["halted"]', "risk buyhold exempt"),
+    (
+        E,
+        'if agent not in BENCHMARKS and not p["halted"]',
+        'if not p["halted"]',
+        "risk buyhold exempt",
+    ),
     (E, "and peak > 0 and eq <", "and eq <", "risk peak > 0"),
     (E, "SET halted=1 WHERE", "SET halted=0 WHERE", "risk sets halted"),
     (
@@ -793,9 +809,409 @@ M += [
     ),
 ]
 
+# Spec 020 (ADR-0030): the USDC route. Expected values in its tests are written out by hand, so
+# each of these must be killed by them alone.
+U, UB, UO, UW = (
+    "paper/usdc.py",
+    "market/bitvavo.py",
+    "paper/observations.py",
+    "web/overview_page.py",
+)
+UA, UC, UP, UV = "llm/agents.py", "web/credentials.py", "web/pages.py", "web/overview.py"
+USDC = [
+    (
+        U,
+        "fee = spend * USDC_EUR_FEE + usdc * BTC_USDC_FEE * eur_per_usdc",
+        "fee = spend * BTC_USDC_FEE + usdc * USDC_EUR_FEE * eur_per_usdc",
+        "usdc fee legs swapped",
+    ),
+    (
+        U,
+        "fee = spend * USDC_EUR_FEE + usdc * BTC_USDC_FEE * eur_per_usdc",
+        "fee = spend * USDC_EUR_FEE + usdc * USDC_EUR_FEE * eur_per_usdc",
+        "usdc buy btc leg charged the conversion fee",
+    ),
+    (
+        U,
+        "+ notional * USDC_EUR_FEE",
+        "+ notional * BTC_USDC_FEE",
+        "usdc sell conversion leg charged the btc fee",
+    ),
+    (U, "BTC_USDC_FEE = 0.0005", "BTC_USDC_FEE = 0.0010", "usdc btc fee .05->.10"),
+    (U, "USDC_EUR_FEE = 0.0010", "USDC_EUR_FEE = 0.0005", "usdc conversion fee .10->.05"),
+    (U, "BTC_USDC_SLIPPAGE = 0.0005", "BTC_USDC_SLIPPAGE = 0.0006", "usdc btc slippage"),
+    (U, "USDC_EUR_SLIPPAGE = 0.0001", "USDC_EUR_SLIPPAGE = 0.0002", "usdc conversion slippage"),
+    (
+        U,
+        ".ask * (1 + USDC_EUR_SLIPPAGE)",
+        ".ask * (1 + USDC_EUR_FEE)",
+        "usdc conversion fee<->slippage",
+    ),
+    (
+        U,
+        "    usdc = spend / eur_per_usdc\n",
+        "    usdc = spend\n",
+        "usdc buy conversion leg forgotten",
+    ),
+    (
+        U,
+        "    notional = usdc * eur_per_usdc\n",
+        "    notional = usdc\n",
+        "usdc sell conversion leg forgotten",
+    ),
+    (
+        U,
+        "return qs[Symbol.BTCUSDC].mid * qs[Symbol.USDCEUR].mid",
+        "return qs[Symbol.BTCUSDC].mid",
+        "usdc valuation conversion forgotten",
+    ),
+    (
+        U,
+        "qs[Symbol.USDCEUR].ask * (1 + USDC_EUR_SLIPPAGE)",
+        "qs[Symbol.USDCEUR].bid * (1 + USDC_EUR_SLIPPAGE)",
+        "usdc buy conversion at the bid",
+    ),
+    (
+        U,
+        "qs[Symbol.BTCUSDC].ask * (1 + BTC_USDC_SLIPPAGE)",
+        "qs[Symbol.BTCUSDC].bid * (1 + BTC_USDC_SLIPPAGE)",
+        "usdc buy btc at the bid",
+    ),
+    (
+        U,
+        "qs[Symbol.BTCUSDC].bid * (1 - BTC_USDC_SLIPPAGE)",
+        "qs[Symbol.BTCUSDC].ask * (1 - BTC_USDC_SLIPPAGE)",
+        "usdc sell btc at the ask",
+    ),
+    (
+        U,
+        "qs[Symbol.USDCEUR].bid * (1 - USDC_EUR_SLIPPAGE)",
+        "qs[Symbol.USDCEUR].ask * (1 - USDC_EUR_SLIPPAGE)",
+        "usdc sell conversion at the ask",
+    ),
+    (
+        U,
+        "].ask * (1 + USDC_EUR_SLIPPAGE)",
+        "].ask * (1 - USDC_EUR_SLIPPAGE)",
+        "usdc buy conversion slippage sign",
+    ),
+    (
+        U,
+        "].ask * (1 + BTC_USDC_SLIPPAGE)",
+        "].ask * (1 - BTC_USDC_SLIPPAGE)",
+        "usdc buy btc slippage sign",
+    ),
+    (
+        U,
+        "].bid * (1 - BTC_USDC_SLIPPAGE)",
+        "].bid * (1 + BTC_USDC_SLIPPAGE)",
+        "usdc sell btc slippage sign",
+    ),
+    (
+        U,
+        "].bid * (1 - USDC_EUR_SLIPPAGE)",
+        "].bid * (1 + USDC_EUR_SLIPPAGE)",
+        "usdc sell conversion slippage sign",
+    ),
+    # "Gebuehr vertauscht" as the spec means it: the BTC leg charged the fee of BTC-EUR.
+    (U, "BTC_USDC_FEE = 0.0005", "BTC_USDC_FEE = 0.0025", "usdc btc leg with the btc-eur fee"),
+    (
+        U,
+        "ROUTE_FEE = BTC_USDC_FEE + USDC_EUR_FEE",
+        "ROUTE_FEE = BTC_USDC_FEE",
+        "usdc route fee without the conversion leg",
+    ),
+    (
+        U,
+        "ROUTE_SLIPPAGE = BTC_USDC_SLIPPAGE + USDC_EUR_SLIPPAGE",
+        "ROUTE_SLIPPAGE = BTC_USDC_SLIPPAGE",
+        "usdc route slippage without the conversion leg",
+    ),
+    (
+        U,
+        "return symbol is Symbol.BTCEUR and is_usdc(agent)",
+        "return is_usdc(agent)",
+        "usdc only btc is routed",
+    ),
+    (
+        U,
+        "return agent.removesuffix(USDC_SUFFIX)",
+        'return agent.removesuffix(USDC_SUFFIX).replace("breakout", "trend")',
+        "usdc rules of the own base strategy",
+    ),
+    (
+        U,
+        "fees = BTC_USDC_FEE + BTC_USDC_SLIPPAGE + USDC_EUR_FEE + USDC_EUR_SLIPPAGE",
+        "fees = BTC_USDC_FEE + BTC_USDC_SLIPPAGE",
+        "usdc signal cost without the conversion leg",
+    ),
+    (
+        U,
+        " + qs[Symbol.USDCEUR].spread_bps / 10000",
+        "",
+        "usdc signal cost without the usdc-eur spread",
+    ),
+    (
+        PC,
+        "roundtrip = usdc.roundtrip_cost(qs)",
+        "roundtrip = cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage)",
+        "usdc signals priced with eur costs",
+    ),
+    (
+        PC,
+        "fee_rate, slippage = usdc.ROUTE_FEE, usdc.ROUTE_SLIPPAGE",
+        "fee_rate, slippage = costs.fee_rate, costs.slippage",
+        "usdc context with eur costs",
+    ),
+    (PC, "sig = replace(sig, version=usdc.USDC_VERSION)", "pass", "usdc version recorded"),
+    (
+        PC,
+        "for agent in (*config.classic, *config.usdc):",
+        "for agent in config.classic:",
+        "usdc depots decide",
+    ),
+    (
+        PC,
+        "classic_qs = feed.current() if config.classic or config.usdc else {}",
+        "classic_qs = feed.current() if config.classic else {}",
+        "usdc depots alone get quotes",
+    ),
+    (
+        PC,
+        'usdc.route_markets(p.get("agent", ""), symbol)',
+        "(symbol,)",
+        "usdc decision needs the route quotes",
+    ),
+    (
+        PC,
+        "markets=QUOTED if config.usdc else SYMBOLS",
+        "markets=QUOTED",
+        "usdc quotes stored only with usdc depots",
+    ),
+    (
+        PC,
+        "if all(m in start_qs for m in BUYHOLD_USDC_MARKETS):",
+        "if True:",
+        "usdc benchmark waits for its quotes",
+    ),
+    (
+        E,
+        "if usdc.is_usdc(agent) and qs is not None and not covers(p, qs, symbol):",
+        "if False:",
+        "usdc stale without route quotes",
+    ),
+    (E, "for m in usdc.route_markets(agent, s)", "for m in (s,)", "usdc held btc needs the route"),
+    (
+        E,
+        'if usdc.routed(p.get("agent", ""), symbol):\n        return _routed_worth(p, qs)\n',
+        "",
+        "usdc valued over the route",
+    ),
+    (
+        E,
+        "    if usdc.routed(agent, symbol):\n        _trade_routed(",
+        "    if False:\n        _trade_routed(",
+        "usdc traded over the route",
+    ),
+    (E, "            Symbol.BTCUSDC.name,", "            Symbol.BTCEUR.name,", "usdc trade market"),
+    (
+        E,
+        "            usdc.ROUTE_SLIPPAGE,\n            decision_id,",
+        "            ARENA_SLIPPAGE,\n            decision_id,",
+        "usdc trade slip rate",
+    ),
+    (
+        E,
+        "market, slip = Symbol.BTCUSDC, usdc.ROUTE_SLIPPAGE",
+        "market, slip = Symbol.BTCEUR, usdc.ROUTE_SLIPPAGE",
+        "usdc risk sale market",
+    ),
+    (
+        E,
+        "market, slip = Symbol.BTCUSDC, usdc.ROUTE_SLIPPAGE",
+        "market, slip = Symbol.BTCUSDC, costs.slippage",
+        "usdc risk sale slip rate",
+    ),
+    (
+        E,
+        "return all(m in qs for m in usdc.ROUTE_MARKETS) and covers(p, qs)",
+        "return all(m in qs for m in usdc.ROUTE_MARKETS)",
+        "usdc route covers the other holdings too",
+    ),
+    (
+        E,
+        '    if p["btc"] == 0:\n        return 0.0\n    missing',
+        "    if False:\n        return 0.0\n    missing",
+        "usdc no btc needs no route quote",
+    ),
+    (
+        E,
+        '(agent, usdc.trade_market(agent, symbol).name, "BUY")',
+        '(agent, symbol.name, "BUY")',
+        "usdc benchmark buys once after a restart",
+    ),
+    (
+        E,
+        "    diff = desired - present\n    if abs(diff) < max(MIN_TRADE_EUR, REBALANCE_BAND * eq):"
+        "\n        return\n    if diff > 0:\n        other = sum(_worth(p, s, qs) for s in SYMBOLS"
+        " if s is not",
+        "    diff = desired - present\n    if abs(diff) <= max(MIN_TRADE_EUR, REBALANCE_BAND * eq):"
+        "\n        return\n    if diff > 0:\n        other = sum(_worth(p, s, qs) for s in SYMBOLS"
+        " if s is not",
+        "usdc routed band < -> <=",
+    ),
+    (
+        E,
+        "if spend < MIN_TRADE_EUR:\n            return\n        done = usdc.buy",
+        "if spend <= MIN_TRADE_EUR:\n            return\n        done = usdc.buy",
+        "usdc routed min spend < -> <=",
+    ),
+    (
+        E,
+        "if done.notional < MIN_TRADE_EUR:",
+        "if done.notional <= MIN_TRADE_EUR:",
+        "usdc routed min sell < -> <=",
+    ),
+    (
+        E,
+        'qty = min(p["btc"], abs(diff) / usdc.btc_mid(qs))',
+        "qty = abs(diff) / usdc.btc_mid(qs)",
+        "usdc routed sell qty cap",
+    ),
+    (
+        E,
+        "other = sum(_worth(p, s, qs) for s in SYMBOLS if s is not Symbol.BTCEUR)",
+        "other = 0.0",
+        "usdc routed total cap",
+    ),
+    (E, "(spend + done.fee, done.qty, agent)", "(spend, done.qty, agent)", "usdc routed buy fee"),
+    (
+        E,
+        "(done.notional - done.fee, qty, agent)",
+        "(done.notional, qty, agent)",
+        "usdc routed sell fee",
+    ),
+    (
+        E,
+        "            if usdc.routed(agent, symbol):\n                sale = usdc.sell(qty, qs)",
+        "            if False:\n                sale = usdc.sell(qty, qs)",
+        "usdc risk sale over the route",
+    ),
+    (
+        E,
+        "BENCHMARKS = (BUYHOLD, usdc.BUYHOLD_USDC)",
+        "BENCHMARKS = (BUYHOLD,)",
+        "usdc benchmark exempt and holds",
+    ),
+    (
+        E,
+        "    if not all(m in qs for m in BUYHOLD_USDC_MARKETS):\n        raise",
+        "    if False:\n        raise",
+        "usdc benchmark needs its quotes",
+    ),
+    (
+        E,
+        "    for m in BUYHOLD_USDC_MARKETS:\n        qs[m].validate()\n",
+        "",
+        "usdc benchmark validates",
+    ),
+    (
+        E,
+        '            if r["symbol"] not in wanted:\n                continue\n',
+        "",
+        "usdc fresh quotes default to v0.3.1 markets",
+    ),
+    (
+        UB,
+        "by_market = {symbol.market: symbol for symbol in QUOTED}",
+        "by_market = {symbol.market: symbol for symbol in SYMBOLS}",
+        "usdc quote markets parsed",
+    ),
+    (
+        UB,
+        "        for s in SYMBOLS:\n            if s not in result and s not in errors:",
+        "        for s in QUOTED:\n            if s not in result and s not in errors:",
+        "usdc missing named only for candle markets",
+    ),
+    (
+        UO,
+        "        for symbol in QUOTED:\n            quote = book.get(symbol)",
+        "        for symbol in SYMBOLS:\n            quote = book.get(symbol)",
+        "usdc books observed",
+    ),
+    (UW, "        if d.usdc:\n", "        if False:\n", "usdc badge shown"),
+    (
+        UA,
+        "return (BUYHOLD, BUYHOLD_USDC) if self.usdc else (BUYHOLD,)",
+        "return (BUYHOLD,)",
+        "usdc benchmark runs with the usdc depots",
+    ),
+    (
+        UA,
+        '",".join(USDC_AGENTS), USDC_AGENTS))',
+        '",".join(USDC_AGENTS), USDC_AGENTS[:1]))',
+        "usdc every depot selectable",
+    ),
+    (UA, '",".join(USDC_AGENTS), USDC_AGENTS))', '"", USDC_AGENTS))', "usdc on by default"),
+    (
+        UA,
+        '"BOT_AGENTS", DEFAULT_AGENTS, (*CLASSIC_AGENTS, *LLM_DEFAULTS))',
+        '"BOT_AGENTS", DEFAULT_AGENTS, (*CLASSIC_AGENTS, *USDC_AGENTS, *LLM_DEFAULTS))',
+        "usdc depots refused in BOT_AGENTS",
+    ),
+    (
+        UC,
+        "AGENT_CHOICES = (*LLM_DEFAULTS, *CLASSIC_AGENTS, *USDC_AGENTS)",
+        "AGENT_CHOICES = (*LLM_DEFAULTS, *CLASSIC_AGENTS)",
+        "usdc depots offered in the settings",
+    ),
+    (
+        UC,
+        'values["BOT_AGENTS"] = ",".join(a for a in chosen if a not in USDC_AGENTS)',
+        'values["BOT_AGENTS"] = ",".join(chosen)',
+        "usdc choice kept out of BOT_AGENTS (rollback)",
+    ),
+    (
+        UC,
+        'values[USDC_FIELD] = ",".join(a for a in chosen if a in USDC_AGENTS)',
+        "pass",
+        "usdc choice none stored",
+    ),
+    (
+        UP,
+        'selected += values.get(USDC_FIELD, ",".join(USDC_AGENTS)).split(",")',
+        'selected += values.get(USDC_FIELD, "").split(",")',
+        "usdc tiles ticked by default",
+    ),
+    (
+        UV,
+        "and (in_use or now - epoch(ts) <= DELAYED_SECONDS)",
+        "",
+        "usdc unused quotes hidden",
+    ),
+    (
+        UV,
+        "(in_use or now - epoch(ts) <= DELAYED_SECONDS)",
+        "(now - epoch(ts) <= DELAYED_SECONDS)",
+        "usdc quotes in use stay visible",
+    ),
+    (UV, "if s.name in shown and ", "if ", "usdc unused quotes left out of the ticker"),
+]
+M += USDC
+USDC_LABELS = {label for *_, label in USDC}
+
 # Top-level modules and the tests that cover them (Spec 012).
 TOP_LEVEL = {"core.py": "cli", "cli.py": "cli"}
-GROUP_TESTS = {"cli": ["tests/test_core.py", "tests/test_cli.py"]}
+GROUP_TESTS = {
+    "cli": ["tests/test_core.py", "tests/test_cli.py"],
+    "usdc": [
+        "tests/market/test_usdc_quotes.py",
+        "tests/paper/test_usdc_execution.py",
+        "tests/paper/test_usdc_depots.py",
+        "tests/strategy/test_usdc_costs.py",
+        "tests/web/test_usdc_overview.py",
+    ],
+}
 
 
 def main() -> int:
@@ -810,23 +1226,30 @@ def main() -> int:
         package = root / "src" / "llm_trading_bot"
         env = {**os.environ, "PYTHONPATH": str(root / "src")}
         failures = []
-        only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
-        if only is None and len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
-            only = sys.argv[1]  # Spec 016 AK3 names the group as a plain argument
+        # Spec 016 AK3 names the group as a plain argument; "--only GROUP" works as well.
+        args = [a for a in sys.argv[1:] if a != "--only"]
+        only = args[0] if args else None
 
-        def group_of(fname: str) -> str:
+        def group_of(fname: str, label: str) -> str:
+            if label in USDC_LABELS:
+                return "usdc"
             if fname in TOP_LEVEL:
                 return TOP_LEVEL[fname]
             return fname.split("/")[0] if "/" in fname else "strategy"
 
-        selected = [m for m in M if only is None or group_of(m[0]) == only]
+        selected = [m for m in M if only is None or group_of(m[0], m[3]) == only]
         for fname, old, new, label in selected:
-            group = group_of(fname)
-            path = package / (fname if group != "strategy" else f"strategy/{fname}")
+            group = group_of(fname, label)
+            path = package / (fname if "/" in fname or fname in TOP_LEVEL else f"strategy/{fname}")
             tests = GROUP_TESTS.get(group, [f"tests/{group}"])
             original = path.read_text(encoding="utf-8")
             if old not in original:
                 print(f"{'PATTERN MISSING':16} {label}")
+                failures.append(label)
+                continue
+            if group == "usdc" and original.count(old) != 1:
+                # A docstring repeating the code would take the mutation instead (Spec 020).
+                print(f"{'PATTERN AMBIGUOUS':16} {label}")
                 failures.append(label)
                 continue
             path.write_text(original.replace(old, new, 1), encoding="utf-8")

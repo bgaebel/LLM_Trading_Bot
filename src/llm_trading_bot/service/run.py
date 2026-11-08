@@ -35,6 +35,7 @@ from llm_trading_bot.paper.observations import (
 )
 from llm_trading_bot.paper.report import CycleReport
 from llm_trading_bot.paper.risk import Controls, read_controls
+from llm_trading_bot.paper.usdc import BUYHOLD_USDC
 from llm_trading_bot.service.logs import redact
 from llm_trading_bot.service.notify import Notifier
 from llm_trading_bot.service.schedule import OFFSET, PERIOD, next_slot, skipped
@@ -193,9 +194,7 @@ class Service:
         self.status = ServiceStatus("starting", os.getpid(), iso(now), iso(now), PERIOD, OFFSET)
         try:
             # The round runs in a worker thread; only one thread uses the connection at a time.
-            self.con = open_db(
-                self.db, agents=(*self.config.agents, BUYHOLD), check_same_thread=False
-            )
+            self.con = open_db(self.db, agents=self.config.depots, check_same_thread=False)
         except (SchemaError, sqlite3.DatabaseError) as exc:
             # Never repair or migrate: the history in that file must stay as it is (ADR-0012).
             self.log.error("database refused: %s: %s", type(exc).__name__, exc)
@@ -362,7 +361,7 @@ class Service:
             self.log.info("configuration valid again")
             self.warning = ""
         if config.agents != self.config.agents:
-            new = ensure_portfolios(self.con, (*config.agents, BUYHOLD))
+            new = ensure_portfolios(self.con, config.depots)
             self.log.info(
                 "depots now %s%s",
                 ", ".join(config.agents),
@@ -472,6 +471,12 @@ class Service:
             # The benchmark buys once per market; its trades are not part of report.markets.
             self.log.info(
                 "trade %s bought %d market(s) (benchmark)", BUYHOLD, report.buyhold_bought
+            )
+        if report.buyhold_usdc_bought:
+            self.log.info(
+                "trade %s bought %d market(s) (benchmark)",
+                BUYHOLD_USDC,
+                report.buyhold_usdc_bought,
             )
         if report.quotes_error:
             self.log.warning("quotes: %s", report.quotes_error)

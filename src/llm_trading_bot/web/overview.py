@@ -13,9 +13,10 @@ from decimal import Decimal
 
 from llm_trading_bot.llm.budget import FREE_STATUSES, charged_today, day_bounds
 from llm_trading_bot.llm.due import iso
-from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.market.models import QUOTE_MARKETS, SYMBOLS, Symbol
 from llm_trading_bot.paper.db import START_CASH
-from llm_trading_bot.paper.execution import BUYHOLD
+from llm_trading_bot.paper.execution import BENCHMARKS, BUYHOLD
+from llm_trading_bot.paper.usdc import is_usdc
 from llm_trading_bot.service.status import ServiceStatus
 
 MAX_POINTS = 240
@@ -64,7 +65,13 @@ class DepotRow:
 
     @property
     def reference(self) -> bool:
-        return self.agent == BUYHOLD
+        """Buy & hold and its USDC twin (Spec 020): never stopped, not ranked as traders."""
+        return self.agent in BENCHMARKS
+
+    @property
+    def usdc(self) -> bool:
+        """Trades its BTC over BTC-USDC (Spec 020); shown with a "USDC" badge."""
+        return is_usdc(self.agent)
 
 
 def depots(con: sqlite3.Connection) -> list[DepotRow]:
@@ -275,12 +282,35 @@ def data_gap(status: ServiceStatus) -> str:
     return f"{market} ohne Entscheidung: Marktdaten von Bitvavo unbrauchbar"
 
 
+def _quote_only_shown(con: sqlite3.Connection, now: float) -> set[str]:
+    """Spec 020: the quote-only markets (BTC-USDC, USDC-EUR) the overview shows.
+
+    The bot stores them only while a USDC depot runs. Switched off, their last row stays
+    forever and would read as a market-data failure the bot does not have (on the public view
+    too). So: shown while a USDC depot got an equity point in the newest round (in use: a stale
+    quote is a real problem then), or while the quote is younger than DELAYED_SECONDS (an
+    outage that also cost the USDC depots their equity point stays visible for that long).
+    """
+    stored = {r["symbol"]: r["ts"] for r in con.execute("SELECT symbol, ts FROM market")}
+    newest = con.execute(
+        "SELECT agent FROM equity WHERE ts = (SELECT MAX(ts) FROM equity)"
+    ).fetchall()
+    in_use = any(is_usdc(r["agent"]) for r in newest)
+    return {
+        s.name
+        for s in QUOTE_MARKETS
+        if (ts := stored.get(s.name)) is not None and (in_use or now - epoch(ts) <= DELAYED_SECONDS)
+    }
+
+
 def liveness(con: sqlite3.Connection, now: float) -> list[Pulse]:
     """Last cycle (newest equity point) and the last stored quote of each market."""
     last = con.execute("SELECT MAX(ts) FROM equity").fetchone()[0]
     pulses = [Pulse(CYCLE_LABEL, last, None if last is None else max(0.0, now - epoch(last)))]
     stored = {r["symbol"]: r["ts"] for r in con.execute("SELECT symbol, ts FROM market")}
-    for symbol in Symbol:
+    quote_only = _quote_only_shown(con, now)
+    shown = (*SYMBOLS, *(s for s in QUOTE_MARKETS if s.name in quote_only))
+    for symbol in shown:
         ts = stored.get(symbol.name)
         age = None if ts is None else max(0.0, now - epoch(ts))
         pulses.append(Pulse(f"Kurs {symbol.market}", ts, age))
@@ -308,16 +338,18 @@ class Quote:
         return (self.ask - self.bid) / self.mid * 100 if self.mid > 0 else 0.0
 
 
-def quotes(con: sqlite3.Connection) -> list[Quote]:
-    """In the order of ``Symbol``; markets the bot never priced are left out."""
+def quotes(con: sqlite3.Connection, now: float) -> list[Quote]:
+    """In the order of ``Symbol``; markets the bot never priced are left out, and quote-only
+    markets by the same rule as in ``liveness`` (no frozen BTC-USDC price in the ticker)."""
     rows = {
         r["symbol"]: r
         for r in con.execute("SELECT symbol, ts, bid, ask, last_close, source FROM market")
     }
+    shown = {s.name for s in SYMBOLS} | _quote_only_shown(con, now)
     return [
         Quote(s.market, r["ts"], r["bid"], r["ask"], r["last_close"], r["source"])
         for s in Symbol
-        if (r := rows.get(s.name)) is not None
+        if s.name in shown and (r := rows.get(s.name)) is not None
     ]
 
 
@@ -505,5 +537,5 @@ def load(
         latest_decisions(con) if signals is None else signals.get(con),
         llm_today(con, now, shares),
         recent_trades(con),
-        quotes(con),
+        quotes(con, now),
     )

@@ -25,6 +25,7 @@ def test_key_and_settings_are_stored(secrets_file: SecretsFile) -> None:
     assert values == {
         "OPENAI_API_KEY": KEY,
         "BOT_AGENTS": "gpt-luna,gpt-sol",
+        "BOT_USDC_AGENTS": "",  # Spec 020: "none" is stored, a missing field means all
         "LLM_EFFORT": "medium",
         "LLM_DAILY_BUDGET_EUR": "2",
     }

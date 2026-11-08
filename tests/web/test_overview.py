@@ -36,7 +36,7 @@ def write(path: Path, *cycles_at: float) -> None:
             paper_cycle(
                 con,
                 ScenarioClient(),
-                load_config({"OPENAI_API_KEY": KEY}),
+                load_config({"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": ""}),
                 costs=Costs(),
                 model=FakeModel(),
                 clock=fixed(at),
@@ -273,7 +273,7 @@ def test_quotes_are_the_stored_book_of_each_market_in_symbol_order(con: sqlite3.
     stored = {
         r["symbol"]: r for r in con.execute("SELECT symbol, bid, ask, last_close FROM market")
     }
-    quotes = overview.quotes(con)
+    quotes = overview.quotes(con, NOW)
     assert [q.market for q in quotes] == ["BTC-EUR", "ETH-EUR"]
     for q, name in zip(quotes, ("BTCEUR", "ETHEUR"), strict=True):
         assert (q.bid, q.ask, q.last_close) == tuple(stored[name][1:])
