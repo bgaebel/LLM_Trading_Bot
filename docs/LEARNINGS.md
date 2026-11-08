@@ -58,6 +58,12 @@
 
 ## Laufzeit & Code
 
+### Bitvavo-Kerzen sind kurz nach Schluss vorläufig, limit=500 liefert nicht immer 500 #bitvavo #marktdaten #labor
+*2026-11-08 · Quelle: Spec 016 AK5, Treue-Test gegen die Live-Kopie (observations.db)*
+- **Symptom:** Treue-Test: Aktionen 987/987 gleich, aber Indikatoren und Fenster-Prüfsummen weichen oft ab; ETH-1m-Fenster live mit 401–472 statt 500 Zeilen.
+- **Ursache:** (1) Die letzte geschlossene Kerze, 5 s nach Schluss abgefragt, hatte live in 257/1127 1m- und 25/164 15m-Fenstern weniger Volumen als später im Archiv (nie mehr): späte Trades werden nachgetragen. (2) Seit etwa 2026-11-08 13:00 UTC reicht `/candles?limit=500` bei ETH-1m nur ≈ limit + 50 Minuten zurück (Minuten ohne Handel fehlen), bei limit 100/1000 nicht; Antworten kommen über den Cloudflare-Cache (`cf-cache-status`).
+- **Lösung / Regel:** Live entscheidet auf vorläufigen Kerzen, der Backtest auf endgültigen – im Bericht als Annahme nennen. Code-Treue nur dort verlangen, wo die Aufzeichnung gleichen Eingang belegt (Prüfsumme, ggf. über das live gelieferte Teilfenster); sonst Ursache „Eingang verschieden“ mit Beleg. Die Strategien nutzen nur die letzten 60 1m-Kerzen.
+
 ### Ein Risikostopp ohne Zwangsverkauf hinterlässt keine Spur #risiko #paper
 *2026-11-07 · Quelle: Spec 011 (Review)*
 - **Symptom:** Eine alte Freigabe-Anforderung hob einen späteren Stopp sofort wieder auf.
