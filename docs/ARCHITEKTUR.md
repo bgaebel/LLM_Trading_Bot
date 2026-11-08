@@ -289,8 +289,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `fidelity`: `check(bot, source, obs=)` / `run(...)` – baut jeden aufgezeichneten Snapshot zur Zeit `inputs.utc`
     nach (klassisch, GPT-Referenzsignale, USDC-Depots mit den Wegkosten aus den Büchern von `observations.db`)
     → `FidelitySummary`; exakte Gleichheit nur bei belegt gleichem Eingang (Fenster-Prüfsumme, ggf. über das
-    gekürzte Live-Fenster), sonst eine belegte Ursache; `FidelitySummary.verdict` ist die eine Regel für
-    Konsole und Bericht (AK5)
+    gekürzte Live-Fenster, mit aufgezeichneten ungerundeten Indikatoren), sonst eine belegte Ursache – belegt nur,
+    wenn der Nachbau dem getrennt gelesenen Archivfenster der Live-Anfrage gleicht (`archive_answer`);
+    `FidelitySummary.verdict` ist die eine Regel für Konsole und Bericht (AK5)
   - `spread`: Spread je Quartal aus Stichproben öffentlicher Trades (`QuarterSpreads`, `DEFAULT_SPREAD`)
   - `metrics`: `summarize(results)` → `LabMetrics` (Rendite, Drawdown, FIFO-Round-Trips, Benchmark gleicher Quote,
     Block-Bootstrap, Marktphasen, Datenqualität)

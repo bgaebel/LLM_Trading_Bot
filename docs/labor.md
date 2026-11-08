@@ -76,19 +76,26 @@ live? Die Regel (AK5, vom Nutzer am 2026-11-08 freigegeben):
   live dieselben Kerzen hatte wie das Archiv (gleiche Prüfsumme der Fenster).
 - **Jede andere Abweichung** braucht eine belegte Ursache. Eine Abweichung bei belegt gleichem Eingang bleibt
   „ungeklärt“ und lässt den Test scheitern – ein Fehler im Code wird nie wegerklärt.
+- **Belegt anders** ist ein Live-Fenster nur, wenn der Nachbau genau das Fenster liefert, das das Archiv für die
+  Live-Anfrage hält (die neuesten Zeilen zur Uhrzeit, so viele wie live, laufende Kerze wie live). Wählt der Nachbau
+  andere Zeilen, ist das ein Fehler im Labor: „ungeklärt“, auch wenn die letzte Kerze zugleich spät war.
+- **Exakt gleich** zählt nur mit aufgezeichneten ungerundeten Indikatoren (auf 1e-12 verglichen). Fehlen sie (z. B.
+  ein Ausfall der Aufzeichnung), steht der Snapshot unter „gleicher Eingang, ungerundete Indikatoren nicht
+  aufgezeichnet“ und zählt nicht für die 300.
 - **„Treue belegt“** erst ab 300 exakt gleichen Snapshots mit belegt gleichem Eingang je Markt. Darunter steht
   „Treue nicht belegt“ mit Grund, z. B. „zu wenige exakt gleiche Snapshots: 55 < 300“ – nie „100 %“.
 
 Je Markt zeigen Konsole und Bericht: Vergleiche, Aktion gleich, exakt gleich bei belegt gleichem Eingang (davon mit
-gekürztem Live-Fenster), Eingang verschieden (nach Ursache), ohne Aufzeichnung nicht prüfbar und das Ergebnis mit
-Grund. „Indikatoren gleich“ steht nur noch zur Information da.
+gekürztem Live-Fenster), gleicher Eingang ohne ungerundete Indikatoren, Eingang verschieden (nach Ursache), ohne
+Aufzeichnung nicht prüfbar und das Ergebnis mit Grund. „Indikatoren gleich“ steht nur noch zur Information da.
 
 Zwei Eigenheiten von Bitvavo machen den Eingang oft verschieden (`docs/LEARNINGS.md`, „Bitvavo-Kerzen sind kurz nach
 Schluss vorläufig“):
 
 1. **Kerze live vorläufig (späte Trades):** Die letzte geschlossene Kerze, 5 s nach Schluss abgefragt, hatte live
    weniger Volumen als später im Archiv – späte Trades werden nachgetragen, nie abgezogen. Mehr Volumen live zählt
-   deshalb nicht als späte Kerze, sondern als „Live-Fenster anders als Archiv“.
+   deshalb nicht als späte Kerze, sondern als „Live-Fenster anders als Archiv“. Das Detail sagt, ob nur das
+   Volumen anders war („übrige Werte gleich“) oder auch Preise der Kerze bzw. weitere Zeilen.
 2. **Gekürztes Live-Fenster:** Seit etwa 2026-11-08 13:00 UTC liefert `/candles?limit=500` bei ETH-1m weniger
    Zeilen. Hat das Archiv im Live-Fenster genau dieselben Zeilen (Anzahl und Prüfsumme), ist der Eingang gleich: Der
    Test baut den Snapshot dann aus dem gekürzten Fenster nach und verlangt exakte Gleichheit.

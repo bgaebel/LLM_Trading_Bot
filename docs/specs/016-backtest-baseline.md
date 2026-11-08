@@ -72,6 +72,11 @@ Kosten gebracht hätte – mit Unsicherheitsbändern und Vergleich mit Buy & Hol
   - jede andere Abweichung mit belegter Ursache („Kerze live vorläufig (späte Trades)“, „Live-Fenster anders als
     Archiv“, ohne Aufzeichnung „Eingangskerze anders als Archiv“ bzw. „ohne Aufzeichnung nicht prüfbar“); eine
     Abweichung bei belegt gleichem Eingang bleibt ungeklärt und lässt den Test scheitern;
+  - ein Live-Fenster gilt nur dann als belegt anders, wenn der Nachbau genau das Fenster liefert, das das Archiv für
+    die Live-Anfrage hält (die neuesten Zeilen zur Uhrzeit, so viele wie live, laufende Kerze wie live – getrennt
+    vom Fensterschnitt des Nachbaus gelesen); sonst ist es ein Fehler im Nachbau und bleibt ungeklärt;
+  - „exakt gleich“ nur mit aufgezeichneten ungerundeten Indikatoren (`decision_meta`, alle Indikatoren); fehlen
+    sie, zählt der Snapshot getrennt („gleicher Eingang, ungerundete Indikatoren nicht aufgezeichnet“);
   - „Treue belegt“ erst ab `FIDELITY_MIN` (300) exakt gleichen Snapshots mit belegt gleichem Eingang je Markt;
     darunter „Treue nicht belegt“ mit Grund, nie „100 %“.
 
@@ -82,6 +87,8 @@ Kosten gebracht hätte – mit Unsicherheitsbändern und Vergleich mit Buy & Hol
   `::test_deviation_with_the_same_input_is_never_explained`, `::test_another_input_never_explains_the_costs`,
   `::test_unrecorded_round_with_another_input_candle`, `::test_mid_bar_deviation_not_explained_as_forming`,
   `::test_old_summary_json_is_never_established`, `::test_observations_without_the_volume_column`,
+  `::test_rebuild_window_bug_is_never_another_input`, `::test_rebuild_window_bug_hides_not_behind_a_late_bar`,
+  `::test_live_without_the_newest_closed_bar_is_another_input`, `::test_without_unrounded_indicators_never_exact`,
   `tests/lab/test_model.py::test_fidelity_needs_exact_snapshots_with_equal_input`,
   `tests/lab/test_report.py::test_fidelity_needs_exactly_equal_snapshots`, Mutationsgruppe `lab`,
   [manuell] Lauf gegen eine Live-Kopie (Spec 017 `lab-copy`, sonst eine mit Zustimmung gezogene Sicherung)
@@ -222,6 +229,16 @@ Kosten gebracht hätte – mit Unsicherheitsbändern und Vergleich mit Buy & Hol
   ältere Läufe bestanden `verify` nicht mehr und jeder Bericht wurde verweigert – jetzt dieselbe Regel wie im
   Konfigurations-Hash; (A2) in der Variante `usdc` bekam Buy & Hold in den Kennzahlen die Kosten und den Spread des
   USDC-Wegs – jetzt je Depot wie live (`paper.usdc.routed`), der Spread des Wegs steht unter eigenem Schlüssel.
+- 2026-11-09: Zwei Prüfbefunde zum geänderten AK5 behoben. (D1) Jede Abweichung des Live-Fensters vom Nachbau galt
+  als „Live-Fenster anders als Archiv“ – auch ein Fehler im Fensterschnitt des Labors, der nur einen Teil der
+  Fenster trifft, wäre so wegerklärt worden (und ebenso hinter einer späten Kerze). Jetzt liest der Test getrennt,
+  was das Archiv für die Live-Anfrage hält (`archive_answer`, `HistoricalClient.newest_candles`); nur wenn der
+  Nachbau genau das liefert, ist die Abweichung belegt bei Bitvavo, sonst bleibt sie ungeklärt. (D2) Ein Snapshot
+  ohne aufgezeichnete ungerundete Indikatoren zählte als exakt gleich; jetzt eigene Zeile
+  „ungerundete Indikatoren nicht aufgezeichnet“. Erneuter Lauf gegen dieselbe Live-Kopie: unverändert BTC-EUR
+  619 Vergleiche, 55 exakt gleich; ETH-EUR 368 Vergleiche, 71 exakt gleich (davon 24 gekürzt); keine Abweichung
+  ohne Ursache, keine ohne ungerundete Indikatoren. Von 39 späten Kerzen (verschiedene Fenster) war bei 14 nur das
+  Volumen anders, bei 25 auch weitere Werte (die Angabe steht im Detail der Abweichung).
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->
