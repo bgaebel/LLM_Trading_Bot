@@ -21,7 +21,15 @@ FREE_STATUSES = ("BUDGET_BLOCKED", "NOT_SENT")
 
 
 class BudgetBlocked(RuntimeError):
-    """No request may be sent now; the reason is stored on the attempt."""
+    """No request may be sent now; the reason is stored on the attempt.
+
+    ``llm_call_id`` is the id of that stored BUDGET_BLOCKED row (Spec 015 AK4: the observations
+    join it); the message stays the bare reason.
+    """
+
+    def __init__(self, reason: str, llm_call_id: int | None = None) -> None:
+        super().__init__(reason)
+        self.llm_call_id = llm_call_id
 
 
 def amount(value: object, name: str) -> Decimal:
@@ -182,7 +190,7 @@ def reserve(
         attempt_id = cursor.lastrowid
     assert attempt_id is not None
     if reason:
-        raise BudgetBlocked(reason)
+        raise BudgetBlocked(reason, attempt_id)
     return attempt_id
 
 

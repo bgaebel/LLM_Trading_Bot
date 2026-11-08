@@ -65,6 +65,8 @@ MAX_FUTURE_SKEW = 10
 MAX_MID_DRIFT = 0.02
 # The classic strategies whose verdict is part of the payload (strategy/payload.py).
 REFERENCE_STRATEGIES = ("trend", "breakout", "meanrev")
+REFUSAL_MARK = "[refusal] "
+"""Prefix of ``llm_attempts.raw_text`` when the model refused without output text (Spec 015)."""
 
 
 def _usable(snaps: Mapping[Symbol, MarketSnapshot], now: float) -> dict[Symbol, MarketSnapshot]:
@@ -133,6 +135,7 @@ def _prepare(
     costs: Costs,
     now_epoch: float,
     paused: bool = False,
+    observations: ObservationBuffer | None = None,
 ) -> _Prepared | LlmOutcome:
     p = balance(con, agent.name)
     if p["halted"]:
@@ -193,6 +196,7 @@ def _prepare(
     try:
         attempt_id = reserve(con, attempt, limits, now=iso(now_epoch), now_epoch=now_epoch)
     except BudgetBlocked as exc:
+        _observe_blocked(observations, exc, agent, trigger, trigger_detail, settings, now_epoch)
         return _outcome(agent, "BUDGET_BLOCKED", str(exc))
     assert agent.pricing is not None  # reserve() refuses an attempt without prices
     return _Prepared(
@@ -262,8 +266,11 @@ def _finish(
             return _outcome(agent, "ERROR", type(exc).__name__, attempt_id=attempt_id), []
         raise exc
     reply = prepared.reply
-    # Spec 015 AK4: the text as it came, before parsing - also when it turns out invalid.
+    # Spec 015 AK4: the text as it came, before parsing - also when it turns out invalid. A
+    # refusal without text keeps the refusal, marked, so it is not mistaken for an answer.
     raw_text = reply.text
+    if not raw_text and reply.refusal:
+        raw_text = f"{REFUSAL_MARK}{reply.refusal}"
     markets = ordered(list(prepared.usable))
     problem = reply.problem()
     answers = None
@@ -387,6 +394,34 @@ def _observe_attempt(
     note(obs, record)
 
 
+def _observe_blocked(
+    obs: ObservationBuffer | None,
+    exc: BudgetBlocked,
+    agent: LlmAgent,
+    trigger: str,
+    trigger_detail: Mapping[str, object],
+    settings: LlmSettings,
+    now_epoch: float,
+) -> None:
+    """A BUDGET_BLOCKED attempt: due and stored in bot.db, but never sent - no text, no targets."""
+    call_id = getattr(exc, "llm_call_id", None)
+    if obs is None or call_id is None:  # llm_call_id is NOT NULL: no row without it
+        return
+    note(
+        obs,
+        lambda b: b.llm_attempt(
+            iso(now_epoch),
+            call_id,
+            agent.name,
+            trigger,
+            trigger_detail,
+            asdict(settings.cadence),
+            None,
+            {},
+        ),
+    )
+
+
 def _observe_decision(
     obs: ObservationBuffer | None,
     agent: str,
@@ -433,7 +468,7 @@ def run_llm_depots(
     prepared: list[_Prepared] = []
     for agent in agents:
         try:
-            ready = _prepare(con, agent, settings, snaps, costs, now_epoch, paused)
+            ready = _prepare(con, agent, settings, snaps, costs, now_epoch, paused, observations)
         except Exception as exc:
             done[agent.name] = (_outcome(agent, "ERROR", type(exc).__name__), [])
             continue
