@@ -9,7 +9,7 @@ from llm_trading_bot.web import chart
 _BASE = """
 :root {
   color-scheme: dark;
-  --void: #030303; --deep: #0b0b0c; --panel: rgba(12, 12, 14, 0.86); --well: rgba(0, 0, 0, 0.72);
+  --void: #030303; --deep: #0b0b0c; --panel: rgba(12, 12, 14, 0.78); --well: rgba(0, 0, 0, 0.64);
   --line: #222326; --line-hot: #3a3c42; --grid: rgba(255, 255, 255, 0.032);
   --text: #e8e9ec; --muted: #94979e; --dim: #5d6067;
   --cyan: #2de2e6; --blue: #12a5a9; --magenta: #ff3d8b; --amber: #ffb547; --lime: #6bff9a;
