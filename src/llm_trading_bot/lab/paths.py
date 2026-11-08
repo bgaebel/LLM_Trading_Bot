@@ -17,7 +17,7 @@ REPORTS_DIR = "reports"
 def lab_dir(env: Mapping[str, str] | None = None, *, platform: str | None = None) -> Path:
     """``%LOCALAPPDATA%\\llm-trading-bot-lab`` on Windows, ``$XDG_DATA_HOME`` or
     ``~/.local/share`` elsewhere; ``LTB_LAB_DIR`` wins. Never inside the repository."""
-    env = os.environ if env is None else env
+    env = dict(os.environ) if env is None else env  # a copy: the guard keeps os.environ read-only
     if override := env.get(LAB_DIR_ENV):
         return Path(override)
     if (platform or sys.platform).startswith("win"):

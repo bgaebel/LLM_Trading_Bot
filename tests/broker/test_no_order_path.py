@@ -3,6 +3,14 @@
 Every rule is a function over ``{relative path: source}``; the tests run each rule on the real
 repository (must be clean) and on a small injected example (must be caught), so a rule that
 silently stopped working would fail its negative test. Exceptions are named, never implied.
+
+What this guard is for: it keeps an order path from getting in by accident or by an unnoticed
+change (a private endpoint, a signed request, a program that sends one). It is a static check
+of the source and cannot be a complete sandbox: Python can reach any function in ways no AST
+rule lists (``exec`` of a joined string, a C extension, a file written and imported later), and
+the deny-lists of process starters and modules hold what the reviews found, not every one there
+is. Deliberate circumvention is kept out by review and by ADR-0004 (no keys with trading rights),
+not by this file.
 """
 
 import ast
@@ -311,19 +319,12 @@ def rule_subprocess_calls(files: Files) -> list[str]:
             # ``gitstate.subprocess.Popen`` reaches the module through gitstate's namespace.
             if isinstance(node, ast.Attribute) and node.attr == "subprocess":
                 out.append(f"{path}:{node.lineno}: subprocess reached as an attribute")
-            # ``gitstate.REV_PARSE_HEAD = ["curl", ...]`` from another module would change what
-            # the pinned run call starts.
-            if (
-                isinstance(node, ast.Attribute)
-                and node.attr in GIT_PINS
-                and not isinstance(node.ctx, ast.Load)
-            ):
-                out.append(f"{path}:{node.lineno}: {node.attr} rebound from outside")
+            # Stores to gitstate's names from outside: rule_rebinding.
         for line, value in _strings(tree):
             if PROCESS_MODULE_NAME.fullmatch(value):
                 out.append(f"{path}:{line}: string {value!r} names the subprocess module")
             if value in GIT_PINS:
-                out.append(f"{path}:{line}: string {value!r} names a pinned git command")
+                out.append(f"{path}:{line}: string {value!r} names a pinned git name")
         if path != GIT_MODULE:
             continue
         # Final review of Spec 016: the shape of a run call alone let ``run(["curl", "-X",
@@ -335,7 +336,7 @@ def rule_subprocess_calls(files: Files) -> list[str]:
             if _enclosing(tree, call) != ("git",):
                 out.append(f"{path}:{call.lineno}: run outside the module-level def git")
             if not call.args or not _fixed_git_argv(call.args[0]):
-                out.append(f"{path}:{call.lineno}: run argument is not list(<a GIT_PINS name>)")
+                out.append(f"{path}:{call.lineno}: run argument is not list(<a git command>)")
             keywords = {k.arg: k.value for k in call.keywords}
             shell = keywords.get("shell")
             unknown = sorted(str(k) for k in keywords if k not in RUN_KEYWORDS)
@@ -351,22 +352,47 @@ def rule_subprocess_calls(files: Files) -> list[str]:
             if unknown:
                 out.append(f"{path}:{call.lineno}: run with keyword(s) {unknown}")
             env = keywords.get("env")
-            if env is not None and ast.unparse(env) != GIT_ENV:
+            # No env at all would inherit every variable of the caller (GIT_CONFIG_COUNT with
+            # core.fsmonitor makes ``git status`` run a shell command).
+            if env is None or ast.unparse(env) != GIT_ENV:
                 out.append(f"{path}:{call.lineno}: run with an env other than {GIT_ENV}")
     return out
 
 
 # The two git commands GIT_MODULE may start, as their one module-level binding must read.
-GIT_PINS = {
+GIT_COMMANDS = {
     "REV_PARSE_HEAD": "REV_PARSE_HEAD = ('git', 'rev-parse', 'HEAD')",
     "STATUS_PORCELAIN": "STATUS_PORCELAIN = ('git', 'status', '--porcelain')",
 }
+# Second review of Spec 016: git's environment, built from scratch at import. Only PATH and
+# SYSTEMROOT come from the caller, no GIT_* variable, no system or global config.
+GIT_ENV_PINS = {
+    name: ast.unparse(ast.parse(source))
+    for name, source in {
+        "INHERITED": "INHERITED = ('PATH', 'SYSTEMROOT')",
+        "FIXED": (
+            "FIXED = (('GIT_CONFIG_NOSYSTEM', '1'), ('GIT_CONFIG_GLOBAL', os.devnull),"
+            " ('GIT_OPTIONAL_LOCKS', '0'))"
+        ),
+        "ENV": "ENV = tuple((k, os.environ[k]) for k in INHERITED if k in os.environ) + FIXED",
+    }.items()
+}
+GIT_PINS = GIT_COMMANDS | GIT_ENV_PINS
 GIT_IMPORTS = {"os": "os"}
 """Names GIT_MODULE binds only by a plain ``import``: ``os = fake`` would change the env."""
-GIT_UNBOUND = frozenset({"list"})
-"""Never bound in GIT_MODULE: a local ``list`` would turn ``list(REV_PARSE_HEAD)`` into anything."""
-GIT_ENV = "{**os.environ, 'GIT_OPTIONAL_LOCKS': '0'}"
-"""The env the run call passes: a different ``PATH`` would pick another program named git."""
+GIT_UNBOUND = frozenset({"list", "dict", "tuple"})
+"""Never bound in GIT_MODULE: a local ``list`` would turn ``list(REV_PARSE_HEAD)`` into anything,
+a local ``dict`` or ``tuple`` the env."""
+GIT_ENV = "dict(ENV)"
+"""The env the run call passes: nothing else of the caller's environment reaches git."""
+GIT_NAMES = frozenset(
+    set(GIT_PINS)
+    | GIT_UNBOUND
+    | set(GIT_IMPORTS)
+    | {"ALLOWED", "TIMEOUT", "git", "git_runner", "current_code_state", "_package_dir"}
+)
+"""GIT_MODULE's names (and the builtins it calls): stored from another module, ``g.list = ...``
+or ``g.os = fake`` would change what the pinned run call starts (rule_rebinding)."""
 # In a pinned file these could rebind a pinned name behind the AST's back.
 DYNAMIC_NAMES = frozenset(
     {"globals", "vars", "setattr", "delattr", "exec", "eval", "compile", "__builtins__"}
@@ -374,7 +400,7 @@ DYNAMIC_NAMES = frozenset(
 
 
 def _fixed_git_argv(arg: ast.expr) -> bool:
-    """``list(NAME)`` or ``list(NAME if <test> else NAME)``, each NAME one of GIT_PINS."""
+    """``list(NAME)`` or ``list(NAME if <test> else NAME)``, each NAME one of GIT_COMMANDS."""
     if not (
         isinstance(arg, ast.Call)
         and isinstance(arg.func, ast.Name)
@@ -385,7 +411,7 @@ def _fixed_git_argv(arg: ast.expr) -> bool:
         return False
     inner = arg.args[0]
     branches = [inner.body, inner.orelse] if isinstance(inner, ast.IfExp) else [inner]
-    return all(isinstance(b, ast.Name) and b.id in GIT_PINS for b in branches)
+    return all(isinstance(b, ast.Name) and b.id in GIT_COMMANDS for b in branches)
 
 
 def _enclosing(tree: ast.Module, target: ast.AST) -> tuple[str, ...]:
@@ -602,14 +628,20 @@ def rule_lab_fetch(files: Files) -> list[str]:
     return out
 
 
-# Names that start a process (os, pty, asyncio, _winapi, multiprocessing), matched in full:
-# ``execute`` (sqlite) or ``spawned`` are not among them.
+# Names that start a process (os, pty, asyncio and its loops, _winapi, multiprocessing,
+# http.server's CGI handler, pydoc's pagers, imaplib's stream), or load native code (sqlite
+# extensions), matched in full: ``execute`` (sqlite) or ``spawned`` are not among them.
 PROCESS_STARTS = re.compile(
     r"system|popen|startfile|fork|forkpty|spawn[lv]?p?e?|exec[lv]p?e?|posix_spawnp?"
-    r"|create_subprocess_(exec|shell)|CreateProcess\w*|ShellExecute\w*|WinExec"
-    r"|set_executable|Popen"
+    r"|(create_)?subprocess_(exec|shell)|CreateProcess\w*|ShellExecute\w*|WinExec"
+    r"|set_executable|Popen|CGIHTTPRequestHandler|run_cgi|pipepager|tempfilepager|IMAP4_stream"
+    r"|(enable_)?load_extension"
 )
-# Modules whose purpose is starting a program; ``os`` stays allowed, its starters are names.
+# Modules whose purpose is starting a program, or that run a command a caller passes (second
+# review of Spec 016: ``pydoc.pipepager(text, cmd)`` and ``imaplib.IMAP4_stream(cmd)`` ran a
+# shell command; ``pipes``, ``mailcap`` test commands, Tcl's ``exec`` via tkinter, idlelib,
+# turtledemo, venv/ensurepip likewise). ``os`` stays allowed, its starters are names. Not
+# complete: a stdlib function that starts a program and is missing here is not caught.
 PROCESS_MODULES = (
     "multiprocessing",
     "pty",
@@ -621,28 +653,79 @@ PROCESS_MODULES = (
     "posix",
     "nt",
     "concurrent.futures.process",
+    "asyncio.subprocess",
+    "pydoc",
+    "imaplib",
+    "pipes",
+    "mailcap",
+    "tkinter",
+    "_tkinter",
+    "idlelib",
+    "turtledemo",
+    "venv",
+    "ensurepip",
 )
 POOL = "ProcessPoolExecutor"
 POOL_KEYWORDS = frozenset({"max_workers"})
 """``mp_context`` (start method, executable) and ``initializer`` stay out."""
 MODULE_HANDLES = frozenset({"os", "sys", "pty", "asyncio", "posix", "nt"})
-"""``getattr(os, name)`` with a computed ``name`` could reach a starter unseen."""
+"""``getattr(os, name)`` with a computed ``name`` could reach a starter unseen; imported only
+under their own name (``import os as o`` would hide the handle)."""
+
+
+def _module_names(tree: ast.AST) -> set[str]:
+    """MODULE_HANDLES, every name an import binds, and every name assigned one of those
+    (``o = os``): the names a computed ``getattr`` could reach a starter through."""
+    names = set(MODULE_HANDLES) | _import_bound(tree)
+    assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign | ast.NamedExpr)]
+    while True:
+        more = {
+            t.id
+            for n in assigns
+            if _base(n.value) in names
+            for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+            if isinstance(t, ast.Name)
+        } - names
+        if not more:
+            return names
+        names |= more
+
+
+def _import_bound(tree: ast.AST) -> set[str]:
+    return {
+        a.asname or a.name.split(".")[0]
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Import | ast.ImportFrom)
+        for a in n.names
+    }
+
+
+def _base(node: ast.expr) -> str:
+    """``a`` for ``a``, ``a.b``, ``a[i].b`` or ``a(x).b``; "" when no name is at the bottom."""
+    while isinstance(node, ast.Attribute | ast.Subscript | ast.Call):
+        node = node.func if isinstance(node, ast.Call) else node.value
+    return node.id if isinstance(node, ast.Name) else ""
 
 
 def rule_process_starts(files: Files) -> list[str]:
     """No src module starts a program, except GIT_MODULE (rule_subprocess_calls) and the
     worker pool in PROCESS_POOL_MODULE: a starter called or taken as a value, imported by
-    name, named in a string, or reached through ``getattr`` on a module; no PROCESS_MODULES;
-    ``sys.executable`` never rebound (the pool starts whatever it names)."""
+    name, named in a string, or reached through ``getattr``/``vars`` on a module or a name an
+    import bound; no PROCESS_MODULES; MODULE_HANDLES never imported under another name;
+    ``help()`` (pydoc's pager) never called; ``sys.executable`` never rebound (the pool starts
+    whatever it names)."""
     out = []
     for path, text in files.items():
         tree = ast.parse(text)
+        modules_here = _module_names(tree)
         for node in ast.walk(tree):
             name = ""
             if isinstance(node, ast.Attribute):
                 name = node.attr
                 if name in ("executable", "_executable") and not isinstance(node.ctx, ast.Load):
                     out.append(f"{path}:{node.lineno}: {name} rebound")
+                if name == "__dict__" and _base(node.value) in modules_here:
+                    out.append(f"{path}:{node.lineno}: __dict__ of {_base(node.value)}")
             elif isinstance(node, ast.Name):
                 name = node.id
             elif isinstance(node, ast.alias):
@@ -655,19 +738,23 @@ def rule_process_starts(files: Files) -> list[str]:
                 extra = {str(k.arg) for k in node.keywords} - POOL_KEYWORDS
                 if node.args or extra:
                     out.append(f"{path}:{node.lineno}: {POOL} beyond max_workers")
-            if (
-                isinstance(node, ast.Call)
-                and _name(node.func) == "getattr"
-                and node.args
-                and isinstance(node.args[0], ast.Name)
-                and node.args[0].id in MODULE_HANDLES
-                and not (
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                target = _base(node.args[0]) if node.args else ""
+                literal = (
                     len(node.args) > 1
                     and isinstance(node.args[1], ast.Constant)
                     and isinstance(node.args[1].value, str)
                 )  # a literal name is checked as a string below (``getattr(os, "O_BINARY", 0)``)
-            ):
-                out.append(f"{path}:{node.lineno}: computed getattr on {node.args[0].id}")
+                if node.func.id == "getattr" and target in modules_here and not literal:
+                    out.append(f"{path}:{node.lineno}: computed getattr on {target}")
+                if node.func.id == "vars" and target in modules_here:
+                    out.append(f"{path}:{node.lineno}: vars of {target}")
+                if node.func.id == "help":
+                    out.append(f"{path}:{node.lineno}: help() starts pydoc's pager")
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    if a.name in MODULE_HANDLES and a.asname not in (None, a.name):
+                        out.append(f"{path}:{node.lineno}: import {a.name} as {a.asname}")
             modules: list[str] = []
             if isinstance(node, ast.Import):
                 modules = [a.name for a in node.names]
@@ -679,6 +766,126 @@ def rule_process_starts(files: Files) -> list[str]:
         for line, value in _strings(tree):
             if PROCESS_STARTS.fullmatch(value.strip()) or value.strip() in PROCESS_MODULES:
                 out.append(f"{path}:{line}: string {value!r} names a process start")
+    return out
+
+
+ATTR_SETTERS = frozenset({"setattr", "delattr", "__setattr__", "__delattr__"})
+REBIND_EXCEPTIONS = frozenset(
+    {
+        ("lab/backtest.py", "snapshot.GAP_WINDOW"),
+        ("lab/backtest.py", "MarketSnapshot._validate_bars"),
+    }
+)
+"""The one deliberate patch of another module: ``backtest.gap_tolerance`` (Spec 016 AK9) sets
+the gap window around each higher-interval check and restores it; neither name starts a
+program or sends a request."""
+
+
+def _attr_name_arg(call: ast.Call) -> ast.expr | None:
+    """The attribute-name argument of ``setattr``/``delattr`` (the second) or of
+    ``x.__setattr__(name, v)``/``object.__setattr__(o, name, v)`` (the first literal, else the
+    first argument)."""
+    if _name(call.func) in ("setattr", "delattr"):
+        return call.args[1] if len(call.args) > 1 else None
+    names = [a for a in call.args[:2] if isinstance(a, ast.Constant)]
+    return names[0] if names else (call.args[0] if call.args else None)
+
+
+def rule_rebinding(files: Files) -> list[str]:
+    """No src module changes another module's namespace (second review of Spec 016:
+    ``gitstate.list = lambda _: ["curl", ...]`` from outside made the pinned run call start
+    curl): no store or delete to an attribute reached from a name an import bound
+    (``g.list = ...``, ``os.devnull = ...``, ``builtins.list = ...``,
+    ``sys.modules[n].x = ...``); no store to one of GIT_NAMES on anything; ``setattr``/
+    ``delattr`` only with a literal name outside GIT_NAMES; no ``__builtins__``."""
+    out = []
+    for path, text in files.items():
+        tree = ast.parse(text)
+        imported = _import_bound(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id == "__builtins__":
+                out.append(f"{path}:{node.lineno}: __builtins__")
+            if isinstance(node, ast.Attribute) and not isinstance(node.ctx, ast.Load):
+                if node.attr in GIT_NAMES:
+                    out.append(f"{path}:{node.lineno}: {node.attr} rebound from outside")
+                elif (
+                    _base(node.value) in imported
+                    and (path, ast.unparse(node)) not in REBIND_EXCEPTIONS
+                ):
+                    out.append(f"{path}:{node.lineno}: {_base(node.value)}...{node.attr} rebound")
+            if isinstance(node, ast.Call) and _name(node.func) in ATTR_SETTERS:
+                arg = _attr_name_arg(node)
+                if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
+                    out.append(f"{path}:{node.lineno}: {_name(node.func)} with a computed name")
+                elif arg.value in GIT_NAMES:
+                    out.append(f"{path}:{node.lineno}: {_name(node.func)} of {arg.value!r}")
+    return out
+
+
+ENVIRON = frozenset({"environ", "environb"})
+ENV_WRITERS = frozenset({"putenv", "unsetenv"})
+ENV_MUTATORS = frozenset(
+    {"update", "setdefault", "pop", "popitem", "clear", "__setitem__", "__delitem__", "__ior__"}
+)
+ENV_READERS = frozenset({"get", "items", "keys", "values", "copy", "__contains__", "__getitem__"})
+"""``os.environ.<reader>(...)`` reads; any other attribute of it (a mutator) is a write."""
+
+
+def _parents(tree: ast.AST) -> dict[int, ast.AST]:
+    return {id(c): p for p in ast.walk(tree) for c in ast.iter_child_nodes(p)}
+
+
+def _environ_use_ok(node: ast.Attribute, parent: ast.AST | None) -> bool:
+    """A read: ``.get``/``.items`` ..., ``os.environ[k]``, ``k in os.environ``, a call
+    argument (callees take ``Mapping``, which mypy keeps read-only), ``{**os.environ}``, the
+    iterable of a comprehension."""
+    if isinstance(parent, ast.Attribute):
+        return parent.attr in ENV_READERS
+    if isinstance(parent, ast.Subscript):
+        return parent.value is node and isinstance(parent.ctx, ast.Load)
+    if isinstance(parent, ast.Call):
+        return node in parent.args
+    if isinstance(parent, ast.keyword | ast.Compare | ast.comprehension):
+        return True
+    if isinstance(parent, ast.Dict):
+        return any(k is None and v is node for k, v in zip(parent.keys, parent.values, strict=True))
+    return False
+
+
+def rule_environ(files: Files) -> list[str]:
+    """No src module changes the process environment (second review of Spec 016:
+    ``os.environ["GIT_CONFIG_COUNT"] = ...`` with ``core.fsmonitor`` made ``git status`` run a
+    shell command; ``PATH`` would pick another git): ``os.environ``/``environb`` only read, never
+    stored, deleted, mutated or bound to another name (``e = os.environ`` would hide the write);
+    no ``putenv``/``unsetenv``, by name or string. No src module writes the environment today;
+    gitstate also builds git's env from scratch at import (``GIT_ENV_PINS``)."""
+    out = []
+    for path, text in files.items():
+        tree = ast.parse(text)
+        parents = _parents(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr in ENVIRON:
+                parent = parents.get(id(node))
+                if not isinstance(node.ctx, ast.Load):
+                    out.append(f"{path}:{node.lineno}: {node.attr} rebound")
+                elif (isinstance(parent, ast.Attribute) and parent.attr in ENV_MUTATORS) or (
+                    isinstance(parent, ast.Subscript) and not isinstance(parent.ctx, ast.Load)
+                ):
+                    out.append(f"{path}:{node.lineno}: {node.attr} written")
+                elif not _environ_use_ok(node, parent):
+                    out.append(f"{path}:{node.lineno}: {node.attr} used beyond a read")
+            name = ""
+            if isinstance(node, ast.Attribute):
+                name = node.attr
+            elif isinstance(node, ast.Name):
+                name = node.id
+            elif isinstance(node, ast.alias):
+                name = node.name.rsplit(".", 1)[-1]
+            if name in ENV_WRITERS or (not isinstance(node, ast.Attribute) and name in ENVIRON):
+                out.append(f"{path}:{getattr(node, 'lineno', 0)}: {name}")
+        for line, value in _strings(tree):
+            if value.strip() in ENV_WRITERS | ENVIRON:
+                out.append(f"{path}:{line}: string {value!r} names the environment")
     return out
 
 
@@ -744,6 +951,8 @@ REAL: list[tuple[str, Rule, Callable[[], Files]]] = [
     ("subprocess_calls", rule_subprocess_calls, src_files),
     ("lab_fetch", rule_lab_fetch, src_files),
     ("process_starts", rule_process_starts, src_files),
+    ("rebinding", rule_rebinding, src_files),
+    ("environ", rule_environ, src_files),
     ("secrets", rule_secrets, src_files),
     ("exchange_shape", rule_exchange_shape, src_files),
     ("exchange_shape_tests_tools", rule_exchange_shape, files_in_tests_and_tools),
@@ -767,6 +976,7 @@ def test_the_scans_see_the_files_they_are_about() -> None:
     assert "def public_url(" in src[LAB_FETCH] and "def checked_url(" in src[LAB_FETCH]
     assert "import subprocess" in src[GIT_MODULE]
     assert f"{POOL}(max_workers=" in src[PROCESS_POOL_MODULE]
+    assert all(f"{target} = " in src[path] for path, target in REBIND_EXCEPTIONS)
     assert LAB_FETCH_IN_REPO in python_files()
     assert any(p.startswith("tests/") for p in python_files())
     assert any(p.startswith("tools/") for p in python_files())
@@ -874,7 +1084,7 @@ BAD: list[tuple[str, Rule, str, str]] = [
     ),
     # Final review of Spec 016: gitstate's pinned names reached from another module.
     ("via gitstate", rule_subprocess_calls, "lab/x.py", 'gitstate.subprocess.Popen(["sh"])'),
-    ("pin patched", rule_subprocess_calls, "lab/x.py", 'gitstate.REV_PARSE_HEAD = ("curl",)'),
+    ("pin patched", rule_rebinding, "lab/x.py", 'gitstate.REV_PARSE_HEAD = ("curl",)'),
     ("pin by name", rule_subprocess_calls, "lab/x.py", 'setattr(g, "STATUS_PORCELAIN", x)'),
     ("lab check patched", rule_lab_fetch, "lab/x.py", "archive.checked_url = str"),
     ("lab regex patched", rule_lab_fetch, "lab/x.py", "archive._PUBLIC_URL = re.compile('.*')"),
@@ -959,10 +1169,17 @@ def test_each_rule_catches_its_pattern(case: str, rule: Rule, path: str, source:
 GIT_HEAD = (
     "import os\nimport subprocess\n\n"
     "REV_PARSE_HEAD = ('git', 'rev-parse', 'HEAD')\n"
-    "STATUS_PORCELAIN = ('git', 'status', '--porcelain')\n\n\n"
+    "STATUS_PORCELAIN = ('git', 'status', '--porcelain')\n"
+    "INHERITED = ('PATH', 'SYSTEMROOT')\n"
+    "FIXED = (('GIT_CONFIG_NOSYSTEM', '1'), ('GIT_CONFIG_GLOBAL', os.devnull),"
+    " ('GIT_OPTIONAL_LOCKS', '0'))\n"
+    "ENV = tuple((k, os.environ[k]) for k in INHERITED if k in os.environ) + FIXED\n\n\n"
     "def git(wanted, t):\n"
 )
-GIT_RUN = "subprocess.run(list(REV_PARSE_HEAD), stdin=subprocess.DEVNULL, shell=False, timeout=t)"
+GIT_RUN = (
+    "subprocess.run(list(REV_PARSE_HEAD), stdin=subprocess.DEVNULL, shell=False, timeout=t,"
+    " env=dict(ENV))"
+)
 
 
 def git_module(*body: str, tail: str = "", head: str = GIT_HEAD) -> str:
@@ -1105,6 +1322,47 @@ GIT_BAD: list[tuple[str, str, str]] = [
         ),
         "env other",
     ),
+    # Second review of Spec 016: git's environment is built from scratch, never inherited.
+    (
+        "env missing in git",
+        git_module(run_with("list(REV_PARSE_HEAD), shell=False, timeout=t")),
+        "env other",
+    ),
+    (
+        "env inherited in git",
+        git_module(
+            run_with(
+                "list(REV_PARSE_HEAD), shell=False, timeout=t,"
+                " env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'}"
+            )
+        ),
+        "env other",
+    ),
+    (
+        "env pin widened in git",
+        git_module("return " + GIT_RUN).replace("('PATH', 'SYSTEMROOT')", "('PATH', 'GIT_DIR')"),
+        "INHERITED must be bound once",
+    ),
+    (
+        "env pin from environ in git",
+        git_module("return " + GIT_RUN).replace(
+            "ENV = tuple((k, os.environ[k]) for k in INHERITED if k in os.environ) + FIXED",
+            "ENV = tuple(os.environ.items())",
+        ),
+        "ENV must be bound once",
+    ),
+    (
+        "global config kept in git",
+        git_module("return " + GIT_RUN).replace("('GIT_CONFIG_NOSYSTEM', '1'), ", ""),
+        "FIXED must be bound once",
+    ),
+    (
+        "env rebound locally in git",
+        git_module("ENV = (('PATH', 'C:/x'),)", "return " + GIT_RUN),
+        "ENV must be bound once",
+    ),
+    ("dict shadowed in git", git_module("return " + GIT_RUN, tail="dict = f\n"), "dict rebound"),
+    ("tuple shadowed in git", git_module("tuple = f", "return " + GIT_RUN), "tuple rebound"),
     ("star import in git", git_module("return " + GIT_RUN, tail="from x import *\n"), "star"),
     (
         "globals in git",
@@ -1178,6 +1436,164 @@ def test_process_probe_is_caught_line_by_line() -> None:
     ]
 
 
+# The probes of the second review of Spec 016, each a new src module next to the real ones;
+# every one returned [] from every rule before. (rule, message the rule must give)
+SECOND_REVIEW_PROBES: list[tuple[str, str, Rule, str]] = [
+    (
+        "gitstate.list from outside",
+        "from llm_trading_bot.lab import gitstate as g\n"
+        "from llm_trading_bot.market.bitvavo import API\n"
+        'g.list = lambda _: ["curl", "-s", "-X", "POST", API + "/ord" + "er", "-d", "x"]\n'
+        'g.git(["git", "status", "--porcelain"])\n',
+        rule_rebinding,
+        "list rebound from outside",
+    ),
+    (
+        "gitstate.os from outside",
+        "import types\nfrom llm_trading_bot.lab import gitstate as g\n"
+        'g.os = types.SimpleNamespace(environ={"PATH": "/tmp/evil"})\n'
+        'g.git(["git", "status", "--porcelain"])\n',
+        rule_rebinding,
+        "os rebound from outside",
+    ),
+    (
+        "gitstate env pin from outside",
+        "from llm_trading_bot.lab import gitstate\ngitstate.ENV = (('PATH', '/tmp/evil'),)\n",
+        rule_rebinding,
+        "ENV rebound from outside",
+    ),
+    (
+        "setattr with list",
+        'from llm_trading_bot.lab import gitstate as g\nsetattr(g, "list", lambda _: ["curl"])\n',
+        rule_rebinding,
+        "setattr of 'list'",
+    ),
+    (
+        "setattr with a computed name",
+        'from llm_trading_bot.lab import gitstate as g\nsetattr(g, "li" + "st", f)\n',
+        rule_rebinding,
+        "computed name",
+    ),
+    (
+        "builtins.list",
+        "import builtins\n_l = builtins.list\n"
+        'builtins.list = lambda x=(): _l(["curl", "-X", "POST"])'
+        ' if x == ("git", "status", "--porcelain") else _l(x)\n',
+        rule_rebinding,
+        "list rebound from outside",
+    ),
+    (
+        "builtins via an alias",
+        "import builtins as b\nb.open = f\n",
+        rule_rebinding,
+        "b...open rebound",
+    ),
+    ("any builtin", "import builtins\nbuiltins.print = f\n", rule_rebinding, "builtins...print"),
+    ("__builtins__", "__builtins__['open'] = f\n", rule_rebinding, "__builtins__"),
+    (
+        "module via sys.modules",
+        'import sys\nsys.modules["llm_trading_bot.lab.gitstate"].TIMEOUT = 1e9\n',
+        rule_rebinding,
+        "TIMEOUT rebound from outside",
+    ),
+    (
+        "other module via sys.modules",
+        'import sys\nsys.modules["llm_trading_bot.market.http"].x = f\n',
+        rule_rebinding,
+        "sys...x rebound",
+    ),
+    ("os attribute", "import os\nos.devnull = 'x'\n", rule_rebinding, "os...devnull rebound"),
+    (
+        "env fsmonitor",
+        "import os\nfrom llm_trading_bot.lab.gitstate import current_code_state\n"
+        'os.environ["GIT_CONFIG_COUNT"] = "1"\n'
+        'os.environ["GIT_CONFIG_KEY_0"] = "core.fsmonitor"\n'
+        'os.environ["GIT_CONFIG_VALUE_0"] = "curl -s -X POST x -d y"\n'
+        "current_code_state()\n",
+        rule_environ,
+        "environ written",
+    ),
+    (
+        "env PATH",
+        "import os\nfrom llm_trading_bot.lab.gitstate import current_code_state\n"
+        'os.environ["PATH"] = "/tmp/evil" + os.pathsep + os.environ["PATH"]\n'
+        "current_code_state()\n",
+        rule_environ,
+        "environ written",
+    ),
+    (
+        "env update",
+        'import os\nos.environ.update(PATH="/tmp/evil")\n',
+        rule_environ,
+        "environ written",
+    ),
+    ("env aliased", 'import os\ne = os.environ\ne["PATH"] = "x"\n', rule_environ, "beyond a read"),
+    ("env deleted", 'import os\ndel os.environ["SYSTEMROOT"]\n', rule_environ, "environ written"),
+    ("putenv", 'import os\nos.putenv("PATH", "/tmp/evil")\n', rule_environ, "putenv"),
+    ("unsetenv", "from os import unsetenv\n", rule_environ, "unsetenv"),
+    ("from os import environ", "from os import environ\n", rule_environ, "environ"),
+    (
+        "getattr on an os alias",
+        'import os as o\ngetattr(o, "sys" + "tem")("curl -X POST x")\n',
+        rule_process_starts,
+        "computed getattr on o",
+    ),
+    ("os alias itself", "import os as o\n", rule_process_starts, "import os as o"),
+    (
+        "getattr on any imported name",
+        'from llm_trading_bot.lab import gitstate as g\ngetattr(g.os, "sys" + "tem")("x")\n',
+        rule_process_starts,
+        "computed getattr on g",
+    ),
+    (
+        "getattr on a module copied to a name",
+        'import shutil\nm = shutil\ngetattr(m, "o" + "s")\n',
+        rule_process_starts,
+        "computed getattr on m",
+    ),
+    ("vars of a module", 'import os\nvars(os)["sys" + "tem"]("x")\n', rule_process_starts, "vars"),
+    (
+        "pydoc.pipepager",
+        'import pydoc\npydoc.pipepager("x", "curl -X POST x -d y")\n',
+        rule_process_starts,
+        "import pydoc",
+    ),
+    (
+        "imaplib.IMAP4_stream",
+        'import imaplib\nimaplib.IMAP4_stream("curl -X POST x -d y")\n',
+        rule_process_starts,
+        "import imaplib",
+    ),
+    ("pipes", "from pipes import Template\n", rule_process_starts, "import pipes"),
+    ("tkinter", "import tkinter\n", rule_process_starts, "import tkinter"),
+    (
+        "CGI handler",
+        "from http.server import CGIHTTPRequestHandler\n",
+        rule_process_starts,
+        "process start CGIHTTPRequestHandler",
+    ),
+    (
+        "loop subprocess",
+        'loop.subprocess_shell(proto, "curl -X POST x")\n',
+        rule_process_starts,
+        "process start subprocess_shell",
+    ),
+    ("help pager", "help(x)\n", rule_process_starts, "help()"),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "source", "rule", "message"),
+    SECOND_REVIEW_PROBES,
+    ids=[p[0] for p in SECOND_REVIEW_PROBES],
+)
+def test_second_review_probes_are_caught(case: str, source: str, rule: Rule, message: str) -> None:
+    files = src_files()
+    assert rule(files) == []
+    found = rule({**files, "paper/x.py": source})
+    assert any(line.startswith("paper/x.py") and message in line for line in found), (case, found)
+
+
 # Changes to the real LAB_FETCH, each of which would let a URL out unchecked.
 LAB_MUTATIONS: list[tuple[str, str, str, str]] = [
     (
@@ -1243,7 +1659,7 @@ def test_lab_fetch_mutations_are_caught(case: str, old: str, new: str, message: 
                 "return subprocess.run(list(REV_PARSE_HEAD if wanted == REV_PARSE_HEAD else"
                 " STATUS_PORCELAIN), cwd=d, stdin=subprocess.DEVNULL, capture_output=True,"
                 ' text=True, encoding="utf-8", errors="replace", timeout=t, check=True,'
-                " shell=False, env={**os.environ, 'GIT_OPTIONAL_LOCKS': '0'})"
+                " shell=False, env=dict(ENV))"
             ),
         ),
         (
@@ -1262,6 +1678,13 @@ def test_lab_fetch_mutations_are_caught(case: str, old: str, new: str, message: 
         (rule_process_starts, LAB_FETCH, 'con.execute("x"); con.executescript(s)'),
         (rule_process_starts, "web/x.py", 'f = os.O_RDONLY | getattr(os, "O_BINARY", 0)'),
         (rule_process_starts, "x.py", "spawned = 1\nexecutor = 2\nsys.executable"),
+        (rule_process_starts, "web/chart.py", "def e(a):\n    return [getattr(z, a) for z in f]"),
+        (rule_process_starts, "x.py", "import os.path\nimport sys\nfrom os import path as p"),
+        (rule_environ, "x.py", 'm = os.environ.get("TRADING_MODE")\nk in os.environ'),
+        (rule_environ, "x.py", "f(env=os.environ)\ng(dict(os.environ))\nh({**os.environ})"),
+        (rule_environ, "x.py", 'v = os.environ["PATH"]\nt = [(k, os.environ[k]) for k in K]'),
+        (rule_rebinding, "x.py", "self.x = 1\nrows[i].x = 2\nargs.dir = d\ndel self.y"),
+        (rule_rebinding, "x.py", 'object.__setattr__(self, "x", v)\nsetattr(o, "field", v)'),
         (rule_imports, "web/auth.py", "import hmac"),
         (rule_imports, HTTP_MODULE, "import http.client"),
         (rule_scripts, "deploy/web.service", "ExecStart=x web --data-dir /var/lib/x"),
