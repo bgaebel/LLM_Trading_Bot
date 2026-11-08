@@ -561,7 +561,12 @@ M += [
     ),
     (PC, 'status="PAUSED" if paused else "OK"', 'status="OK"', "pause classic trades"),
     (PC, "== set(SYMBOLS) and not controls.paused:", "== set(SYMBOLS):", "pause buyhold buys"),
-    (PC, "paused=controls.paused,\n        ):", "paused=False,\n        ):", "pause gpt asked"),
+    (
+        PC,
+        "paused=controls.paused,\n            ):",
+        "paused=False,\n            ):",
+        "pause gpt asked",
+    ),
     (
         Y,
         "    if paused:\n        # ADR-0021",
