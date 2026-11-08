@@ -142,6 +142,10 @@ class _Feed:
     observations: ObservationBuffer | None = None
     fetched_at: float = float("-inf")
     errors: list[str] = field(default_factory=list)
+    failure: Exception | None = None
+    """The exception of the last failed fetch; observed only (Spec 015 AK2)."""
+    book: QuoteBook | None = None
+    """The book of the last fetch that returned one; observed only."""
 
     def fetch(self, purpose: str = "start") -> set[Symbol]:
         """Fetch and store; the markets stored by THIS fetch (a failed one stores none)."""
@@ -152,7 +156,9 @@ class _Feed:
             book = self.client.quotes()
         except DATA_ERRORS as exc:
             self.errors.append(f"{type(exc).__name__}: {exc}")
+            self.failure, self.book = exc, None
             return set()
+        self.failure, self.book = None, book
         # One clock reading for the stored and the observed stamp: as many readings as before.
         arrived = self.clock()
         note(self.observations, lambda b: b.book(purpose, arrived, book))
@@ -218,7 +224,7 @@ def paper_cycle(
     report.quotes_error = feed.errors[0] if feed.errors else ""
     if not qs:
         report.quotes_error = report.quotes_error or "stored quotes missing or stale"
-        note(obs, lambda b: _observe_no_quotes(b, report.quotes_error))
+        note(obs, lambda b: _observe_no_quotes(b, report.quotes_error, feed))
         return report
     if set(qs) == set(SYMBOLS) and not controls.paused:
         # Arena: the benchmark buys only on fresh quotes of both markets.
@@ -340,10 +346,19 @@ def paper_cycle(
     return report
 
 
-def _observe_no_quotes(obs: ObservationBuffer, message: str) -> None:
-    """No fresh stored quote at the start: no market got as far as a snapshot."""
+def _observe_no_quotes(obs: ObservationBuffer, message: str, feed: _Feed) -> None:
+    """No fresh stored quote at the start: no market got as far as a snapshot.
+
+    The code says why: the failed start fetch (``http``, ``parse``), else the code the book
+    gave each market (``spread``, ``parse``, ``conflict``), else ``quote_missing``.
+    """
+    codes: Mapping[Symbol, str] = getattr(feed.book, "codes", None) or {}
     for symbol in SYMBOLS:
-        _observe_snapshot(obs, symbol, "quote_missing", message, False)
+        if feed.failure is not None:
+            status = error_code(feed.failure)
+        else:
+            status = codes.get(symbol, "quote_missing")
+        _observe_snapshot(obs, symbol, status, message, False)
 
 
 def _observe_snapshot(

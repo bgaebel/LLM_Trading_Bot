@@ -20,6 +20,7 @@ from llm_trading_bot.market.models import (
     MarketDataError,
     Quote,
     QuoteBook,
+    RawRow,
     Symbol,
 )
 
@@ -80,21 +81,29 @@ class BitvavoClient:
         result: dict[Symbol, Quote] = {}
         errors: dict[Symbol, str] = {}
         depth: dict[Symbol, Depth] = {}
+        codes: dict[Symbol, str] = {}
+        # Spec 015 AK4, observed only: every row of a market as sent, so a rejected market's
+        # rows can be kept. Built beside the checks and never raising, so it cannot change them.
+        raw: dict[Symbol, list[RawRow]] = {}
         for item in data:
             if not isinstance(item, dict):
                 continue
             symbol = by_market.get(item.get("market"))  # type: ignore[arg-type]
             if symbol is None or symbol in errors:
                 continue
+            if (row := _raw_row(item)) is not None:
+                raw.setdefault(symbol, []).append(row)
             try:
                 quote = Quote(float(item["bid"]), float(item["ask"]))
                 quote.validate()
             except (KeyError, TypeError, ValueError) as exc:  # MarketDataError is a ValueError
                 errors[symbol] = f"ticker/book: unusable quote ({exc})"
+                codes[symbol] = exc.code if isinstance(exc, MarketDataError) else "parse"
                 result.pop(symbol, None)
                 continue
             if symbol in result and result[symbol] != quote:
                 errors[symbol] = "ticker/book: conflicting duplicate"
+                codes[symbol] = "conflict"
                 del result[symbol]
                 continue
             result[symbol] = quote
@@ -105,7 +114,14 @@ class BitvavoClient:
         for s in SYMBOLS:
             if s not in result and s not in errors:
                 errors[s] = "ticker/book: missing"
-        return QuoteBook(result, errors, {s: d for s, d in depth.items() if s in result})
+                codes[s] = "quote_missing"
+        return QuoteBook(
+            result,
+            errors,
+            {s: d for s, d in depth.items() if s in result},
+            codes,
+            {s: tuple(rows) for s, rows in raw.items() if s in codes and rows},
+        )
 
     def closed_candles(self, symbol: Symbol, interval: int, *, now_epoch: int) -> ClosedCandles:
         """Completed candles only, ascending by open time; forming and future bars are dropped.
@@ -145,6 +161,28 @@ class BitvavoClient:
 
 def _depth(item: dict[object, object]) -> Depth:
     return _size(item.get("bidSize")), _size(item.get("askSize"))
+
+
+def _raw_row(item: dict[object, object]) -> RawRow | None:
+    """bid, ask and sizes as sent, or None without a finite bid and ask (never raises).
+
+    Unvalidated (a crossed or wide book stays as it is): only for the observations, which
+    cannot store a missing or non-finite price.
+    """
+    bid, ask = _price(item.get("bid")), _price(item.get("ask"))
+    if bid is None or ask is None:
+        return None
+    return (bid, ask, *_depth(item))
+
+
+def _price(raw: object) -> float | None:
+    if isinstance(raw, bool) or not isinstance(raw, int | float | str):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if math.isfinite(value) else None
 
 
 def _size(raw: object) -> float | None:

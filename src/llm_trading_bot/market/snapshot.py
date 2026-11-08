@@ -155,13 +155,17 @@ def build_snapshots(
     if on_book is not None:
         _observe(on_book, quotes, quote_at)
 
+    # Spec 015 AK2: the code the client gave the rejected market (spread, parse, conflict).
+    # getattr: a book from another client may lack it, and only the code would suffer.
+    codes: Mapping[Symbol, str] = getattr(quotes, "codes", None) or {}
     snapshots: dict[Symbol, MarketSnapshot] = {}
     for symbol in bars:
         try:
             quote = quotes.get(symbol)
             if quote is None:
                 why = quotes.errors.get(symbol, "missing")
-                raise MarketDataError(f"{symbol.market}: no quote - {why}", "quote_missing")
+                code = codes.get(symbol, "quote_missing")
+                raise MarketDataError(f"{symbol.market}: no quote - {why}", code)
             snap = MarketSnapshot(symbol, bars[symbol], quote, fetched_at, quote_at, filled[symbol])
             snap.validate(now_epoch=int(clock()), min_bars=min_bars)
             snapshots[symbol] = snap

@@ -228,9 +228,17 @@ def test_records_snapshot_codes_and_whether_a_decision_fell(db: sqlite3.Connecti
     assert again.snapshots[0][1:] == ("BTCEUR", "ok", None, 0)
 
 
-def test_records_quote_missing_when_no_market_has_a_quote(db: sqlite3.Connection) -> None:
+def test_records_the_code_of_a_failed_start_fetch(db: sqlite3.Connection) -> None:
     client = ScenarioClient()
     client.fail_quotes = True
+    buffer = observed(db, client, TREND)
+    assert [s[1:3] for s in buffer.snapshots] == [("BTCEUR", "http"), ("ETHEUR", "http")]
+    assert buffer.books == [] and buffer.windows == []
+
+
+def test_records_quote_missing_when_no_market_has_a_quote(db: sqlite3.Connection) -> None:
+    client = ScenarioClient()
+    client.bad_quotes = {Symbol.BTCEUR, Symbol.ETHEUR}  # a book without codes: no reason known
     buffer = observed(db, client, TREND)
     assert [s[1:3] for s in buffer.snapshots] == [
         ("BTCEUR", "quote_missing"),

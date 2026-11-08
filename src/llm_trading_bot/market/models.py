@@ -55,6 +55,9 @@ SYMBOLS: tuple[Symbol, ...] = tuple(Symbol)
 Depth = tuple[float | None, float | None]
 """Best bid size and best ask size as the exchange sent them; None where unreadable."""
 
+RawRow = tuple[float, float, float | None, float | None]
+"""bid, ask, bid size, ask size of one book row as sent - not validated, observed only."""
+
 
 class QuoteBook(dict[Symbol, "Quote"]):
     """The valid quotes of one fetch, per market; ``errors`` says why a market is missing.
@@ -67,12 +70,19 @@ class QuoteBook(dict[Symbol, "Quote"]):
         quotes: "dict[Symbol, Quote] | None" = None,
         errors: dict[Symbol, str] | None = None,
         depth: dict[Symbol, Depth] | None = None,
+        codes: dict[Symbol, str] | None = None,
+        rejected: dict[Symbol, tuple[RawRow, ...]] | None = None,
     ) -> None:
         super().__init__(quotes or {})
         self.errors: dict[Symbol, str] = dict(errors or {})
         # Spec 015 AK1: sizes live beside the quotes, never inside them - Quote, its equality
         # and everything decided on it stay exactly as before; the sizes are only observed.
         self.depth: dict[Symbol, Depth] = dict(depth or {})
+        # Spec 015 AK2/AK4: why a market is missing as a stable code (ERROR_CODES), and the rows
+        # of that market as sent (only those with finite bid and ask). Observed only: nothing
+        # is ever traded, valued or validated on them.
+        self.codes: dict[Symbol, str] = dict(codes or {})
+        self.rejected: dict[Symbol, tuple[RawRow, ...]] = dict(rejected or {})
 
     def problem(self) -> str:
         """The missing markets and why, for reports; "" when every market is there."""

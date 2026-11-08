@@ -15,6 +15,13 @@ Two halves, so that observing can never change or block trading:
 
 Only the holder of the ``bot.db`` WriterLock (the service) writes here; there is no second lock,
 because a busy lock would end the service (exit 3) instead of only the recording.
+
+``books.purpose``: an accepted quote has one of PURPOSES (``start``, ``snapshot``, ``recheck``,
+``after_llm``). A market the client rejected keeps its rows as sent - bid, ask and sizes,
+unvalidated, only rows with a finite bid and ask - with ``<purpose>:rejected:<code>``, the code
+from ERROR_CODES (``spread``, ``parse``, ``conflict``), e.g. ``start:rejected:spread``. For a
+conflicting duplicate every row of that market is kept. Filter with ``purpose IN (...)`` for the
+quotes the round could trade on and ``purpose LIKE '%:rejected:%'`` for the refused ones.
 """
 
 import contextlib
@@ -27,7 +34,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
 from llm_trading_bot.llm.due import iso
-from llm_trading_bot.market.models import SYMBOLS, Candle, Quote, Symbol
+from llm_trading_bot.market.models import SYMBOLS, Candle, Quote, RawRow, Symbol
 from llm_trading_bot.paper.db import SchemaError
 from llm_trading_bot.paper.observations_schema import (
     OBS_FILE,
@@ -40,8 +47,14 @@ BUSY_TIMEOUT_MS = 1000
 PURPOSES = ("start", "snapshot", "recheck", "after_llm")
 """Why the order book was fetched: round start, snapshot quotes, refetch of quotes older than
 QUOTE_MAX_AGE, and the recheck after the GPT answers."""
+REJECTED = ":rejected:"
 UNKNOWN_RELEASE = "unknown"
 _SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def rejected_purpose(purpose: str, code: str) -> str:
+    """``books.purpose`` of a row the client rejected, e.g. ``start:rejected:spread``."""
+    return f"{purpose}{REJECTED}{code}"
 
 
 def observations_path(db: Path) -> Path:
@@ -108,15 +121,35 @@ class ObservationBuffer:
         self.round_at = int(at)
 
     def book(self, purpose: str, at: float, book: Mapping[Symbol, Quote]) -> None:
+        """One row per accepted quote, then one per row of a rejected market (see module doc)."""
         depth: Mapping[Symbol, tuple[float | None, float | None]] = getattr(book, "depth", {})
+        codes: Mapping[Symbol, str] = getattr(book, "codes", {})
+        rejected: Mapping[Symbol, tuple[RawRow, ...]] = getattr(book, "rejected", {})
+        stamp = iso(at)
         for symbol in SYMBOLS:
             quote = book.get(symbol)
             if quote is None:
                 continue
             bid_size, ask_size = depth.get(symbol, (None, None))
             self.books.append(
-                (iso(at), symbol.name, purpose, quote.bid, quote.ask, bid_size, ask_size)
+                (stamp, symbol.name, purpose, quote.bid, quote.ask, bid_size, ask_size)
             )
+        for symbol in SYMBOLS:
+            if symbol in book:
+                continue
+            code = codes.get(symbol, "other")
+            for bid, ask, bid_size, ask_size in rejected.get(symbol, ()):
+                self.books.append(
+                    (
+                        stamp,
+                        symbol.name,
+                        rejected_purpose(purpose, code),
+                        bid,
+                        ask,
+                        bid_size,
+                        ask_size,
+                    )
+                )
 
     def window(self, symbol: Symbol, interval: int, at: float, candles: tuple[Candle, ...]) -> None:
         """The closed candles one request returned; without the Bitvavo extras (another client)

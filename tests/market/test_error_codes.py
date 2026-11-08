@@ -183,3 +183,55 @@ def test_every_code_is_listed_and_messages_stay_plain() -> None:
     exc = MarketDataError("text", "stale")
     assert str(exc) == "text" and exc.args == ("text",) and isinstance(exc, ValueError)
     assert QuoteBook().errors == {}
+
+
+# ------------------------------------------------------------------ rejected quotes (review)
+
+
+def book_of(rows: object) -> QuoteBook:
+    return BitvavoClient(FakeTransport(lambda _url: rows)).quotes()
+
+
+def test_rejected_quotes_keep_their_code_and_rows_beside_the_book() -> None:
+    book = book_of(
+        [
+            {"market": "BTC-EUR", "bid": "66000", "ask": "66500", "bidSize": "0.5"},  # 75 bp
+            {"market": "ETH-EUR", "bid": "nan", "ask": "3200.2"},
+        ]
+    )
+    assert book == {} and book.depth == {}
+    assert book.codes == {Symbol.BTCEUR: "spread", Symbol.ETHEUR: "parse"}
+    # Unchanged messages; the non-finite row cannot be stored and is not kept.
+    assert book.errors[Symbol.BTCEUR] == "ticker/book: unusable quote (spread too wide: 75.5 bp)"
+    assert book.rejected == {Symbol.BTCEUR: ((66000.0, 66500.0, 0.5, None),)}
+
+
+def test_conflict_and_missing_markets_have_codes() -> None:
+    first = {"market": "BTC-EUR", "bid": "66000", "ask": "66005", "bidSize": "1", "askSize": "2"}
+    other = {"market": "BTC-EUR", "bid": "66001", "ask": "66005"}
+    book = book_of([first, other])
+    assert book == {} and book.errors[Symbol.BTCEUR] == "ticker/book: conflicting duplicate"
+    assert book.codes == {Symbol.BTCEUR: "conflict", Symbol.ETHEUR: "quote_missing"}
+    assert book.rejected == {
+        Symbol.BTCEUR: ((66000.0, 66005.0, 1.0, 2.0), (66001.0, 66005.0, None, None))
+    }
+    # A valid book has no codes and no rejected rows; the quotes compare as before.
+    valid = book_of([first, {"market": "ETH-EUR", "bid": "3200", "ask": "3200.2"}])
+    assert valid.codes == {} and valid.rejected == {}
+    assert valid == {Symbol.BTCEUR: Quote(66000, 66005), Symbol.ETHEUR: Quote(3200, 3200.2)}
+
+
+def test_snapshot_failure_carries_the_code_of_the_rejected_quote() -> None:
+    class Wide(FakeClient):
+        def quotes(self) -> QuoteBook:
+            return book_of(
+                [
+                    {"market": "BTC-EUR", "bid": "66000", "ask": "66005"},
+                    {"market": "ETH-EUR", "bid": "3200", "ask": "3219.3"},  # 60 bp
+                ]
+            )
+
+    found = failures(Wide())
+    exc = found[Symbol.ETHEUR]
+    assert list(found) == [Symbol.ETHEUR] and error_code(exc) == "spread"
+    assert str(exc) == "ETH-EUR: no quote - ticker/book: unusable quote (spread too wide: 60.1 bp)"
