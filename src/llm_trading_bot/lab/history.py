@@ -17,7 +17,7 @@ Never a value from the future: candles come only from rows that had closed at th
 quote mid is the close of the last minute that had ended at the clock.
 """
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import pairwise
@@ -31,6 +31,7 @@ from llm_trading_bot.market.bitvavo import (
 )
 from llm_trading_bot.market.models import (
     SYMBOLS,
+    Candle,
     ClosedCandles,
     MarketDataError,
     Quote,
@@ -169,6 +170,14 @@ class HistoricalClient:
     def rows_before(self, symbol: Symbol, interval: int, epoch: int) -> int:
         """Loaded rows with an open time before ``epoch`` (lead check of the backtest, AK4)."""
         return bisect_right(self._series[(symbol, interval)].ts, epoch - 1)
+
+    def candles_between(
+        self, symbol: Symbol, interval: int, start: int, end: int
+    ) -> tuple[Candle, ...]:
+        """Loaded candles with ``start <= open < end`` (the fidelity check asks whether the
+        forming bar had a trade before the clock)."""
+        series = self._series[(symbol, interval)]
+        return series.candles[bisect_left(series.ts, start) : bisect_left(series.ts, end)]
 
     def closed_candles(self, symbol: Symbol, interval: int, *, now_epoch: int) -> ClosedCandles:
         if interval not in TIMEFRAMES:

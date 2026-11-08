@@ -323,6 +323,98 @@ def test_forming_bar_explained_without_observations(live: Live, few: None) -> No
     assert failing(checked(live, obs=True)) == []
 
 
+def test_mid_bar_deviation_not_explained_as_forming(copy: Live, few: None) -> None:
+    """15 minutes into the 1h bar the archive's 1m rows show trades: live had that bar, so a
+    window one 1h bar further back is a real deviation (a window-start bug), not the
+    approximation - even though dropping the forming bar would make it disappear."""
+    row_id, inputs = classic_row(copy.bot, agent="breakout", round_at=ROUNDS[1])
+    with opened(copy, False) as (bot, _):
+        recs, _ = recorded_snapshots(bot)
+    (rec,) = [
+        r
+        for r in recs
+        if (r.agent, r.symbol, r.epoch, r.source) == ("breakout", BTC, ROUNDS[1], "decision")
+    ]
+    rebuilder = fidelity.Rebuilder(source(), [rec.epoch])
+    shifted = rebuilder.rebuild(rec, {60: False}).indicators
+    assert shifted is not None
+    stored = inputs["indicators"]["ema72_1h"]
+    wrong = round(float(shifted["ema72_1h"]), 5)
+    assert fidelity._steps(wrong, stored, 5) > 1, "the shifted window must be a real deviation"
+    inputs["indicators"]["ema72_1h"] = wrong
+    edit(copy.bot, "UPDATE decisions SET inputs=? WHERE id=?", json.dumps(inputs), row_id)
+    s = checked(copy, obs=False)
+    (d,) = [d for d in failing(s) if not d["cause"]]
+    assert (d["utc"], d["agent"], d["field"]) == (inputs["utc"], "breakout", "indicators.ema72_1h")
+    assert s.indicators_ok["BTC-EUR"] == s.compared["BTC-EUR"] - 1
+    assert s.established["BTC-EUR"] is False
+    # The hour-mark rounds still get the approximation: no 1m bar of the new hour had closed.
+    explained = {d["utc"] for d in failing(s) if d["cause"] == FORMING}
+    assert explained and all(u.endswith(":00:05+00:00") for u in explained)
+
+
+def test_traded_counts_only_closed_minutes_with_volume() -> None:
+    """Live lacks the forming bar only while it has no trade: a closed 1m bar with volume in
+    it rules that out; a zero-volume row or the 1m bar still forming does not."""
+    src = MemorySource()
+    zero = [P * 1000, "1", "1", "1", "1", "0"]
+    some = [(P + 60) * 1000, "1", "1", "1", "1", "0.5"]
+    src.add("BTC-EUR", 1, [zero, some])
+    rebuilder = fidelity.Rebuilder(src, [P + 600])
+    assert not rebuilder.traded(BTC, 60, P + 119)  # P+60 is still forming at P+119
+    assert rebuilder.traded(BTC, 60, P + 120)
+    assert not rebuilder.traded(BTC, 60, P + 3600 + 5)  # a new hour: nothing closed in it
+    assert not rebuilder.traded(BTC, 1, P + 120)  # the forming 1m bar itself: never known
+    real = fidelity.Rebuilder(source(), [ROUNDS[1]])
+    assert real.traded(BTC, 60, ROUNDS[1]) and not real.traded(BTC, 60, ROUNDS[4])
+
+
+def test_stale_quote_compared_with_fail_closed_hold(copy: Live, few: None) -> None:
+    """record_decision stores a STALE_QUOTE decision as HOLD with target 0; anything else is a
+    regression of the fail-closed path and must not count as equal."""
+    row_id, _ = classic_row(copy.bot, agent="meanrev", round_at=ROUNDS[2])
+    edit(
+        copy.bot,
+        "UPDATE decisions SET status='STALE_QUOTE', action='HOLD', target=0 WHERE id=?",
+        row_id,
+    )
+    s = checked(copy, obs=True)
+    assert failing(s) == []
+    assert s.equal_action == s.compared
+    edit(copy.bot, "UPDATE decisions SET action='SELL', target=0.77 WHERE id=?", row_id)
+    s = checked(copy, obs=True)
+    got = {(d["field"], d["live"], d["rebuilt"], d["cause"]) for d in failing(s)}
+    assert got == {("action", "SELL", "HOLD", ""), ("target", 0.77, 0.0, "")}
+    assert s.equal_action["BTC-EUR"] == s.compared["BTC-EUR"] - 1
+    assert s.established["BTC-EUR"] is False
+
+
+def test_classic_decision_without_utc_is_listed(copy: Live) -> None:
+    """Only buy & hold has no snapshot behind its decision; a classic row without ``utc`` is
+    listed as unreadable, never dropped silently."""
+    before = checked(copy, obs=False)
+    assert not [d for d in before.deviations if d["kind"] == "skipped"]
+    row_id, inputs = classic_row(copy.bot, agent="breakout", round_at=ROUNDS[3])
+    del inputs["utc"]
+    edit(copy.bot, "UPDATE decisions SET inputs=? WHERE id=?", json.dumps(inputs), row_id)
+    edit(
+        copy.bot,
+        "UPDATE decisions SET inputs='kein json'"
+        " WHERE id=(SELECT MIN(id) FROM decisions WHERE agent=?)",
+        "trend",
+    )
+    s = checked(copy, obs=False)
+    skipped = [d for d in s.deviations if d["kind"] == "skipped"]
+    assert sorted((d["agent"], d["cause"]) for d in skipped) == [
+        ("breakout", UNREADABLE),
+        ("trend", UNREADABLE),
+    ]
+    assert "utc" in next(d for d in skipped if d["agent"] == "breakout")["rebuilt"]
+    assert sum(s.compared.values()) == sum(before.compared.values()) - 2
+    assert "2 Snapshots übersprungen" in s.note and "2 davon mit nicht lesbaren Eingaben" in s.note
+    assert "Übersprungen: 2" in summary_text(s)
+
+
 def test_rounding_step_allowed(copy: Live, few: None) -> None:
     row_id, inputs = classic_row(copy.bot, agent="breakout", round_at=ROUNDS[1])
     stored = inputs["indicators"]["sma20_15m"]
