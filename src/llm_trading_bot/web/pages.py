@@ -197,7 +197,7 @@ def _page(
         f"</div></div></a>{tabs}"
         '<div class="status"><span class="chip ok"><i class="led"></i>Paper</span>'
         '<span class="chip lock"><i class="led"></i>Echtgeld gesperrt</span>'
-        f'<span class="chip net">127.0.0.1</span>{logout}</div></header>'
+        f"{logout}</div></header>"
         # The track holds the items twice so the loop has no visible seam.
         f'<div class="ticker" aria-hidden="true"><div class="ticker-track{phase}">'
         f"{items}{items}</div></div></div><main{view}>{body}</main>"

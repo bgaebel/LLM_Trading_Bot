@@ -115,6 +115,9 @@ def test_anonymous_overview_is_read_only(bot: Bot, access: Access) -> None:
     assert '<a class="quiet" href="/login">Anmelden</a>' in page
     assert '<script src="/app.js" defer></script>' in page  # live like the owner's view
     assert "Depots" in page and "Equity-Verlauf" in page
+    # The header shows no address (user 2026-11-08): the bind address means nothing to a visitor.
+    header = page.split("</header>", 1)[0]
+    assert "127.0.0.1" not in header and "chip net" not in header
 
 
 @WAYS
