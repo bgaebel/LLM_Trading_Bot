@@ -472,7 +472,7 @@ M += [
     (Y, "MAX_SNAPSHOT_AGE = 120", "MAX_SNAPSHOT_AGE = 125", "llm snapshot age"),
     (Y, "fresh = refresh_quotes()", "fresh = qs", "llm quote recheck"),
     (Y, "current_weight(p, s, qs),", "0.0,", "llm depot weight in prompt"),
-    (Y, "if not llm_due(", "if False and not llm_due(", "llm due respected"),
+    (Y, "if trigger is None:", "if False and trigger is None:", "llm due respected"),
     (
         Y,
         "if hourly_limit_reached(",
@@ -561,7 +561,12 @@ M += [
     ),
     (PC, 'status="PAUSED" if paused else "OK"', 'status="OK"', "pause classic trades"),
     (PC, "== set(SYMBOLS) and not controls.paused:", "== set(SYMBOLS):", "pause buyhold buys"),
-    (PC, "paused=controls.paused,\n        ):", "paused=False,\n        ):", "pause gpt asked"),
+    (
+        PC,
+        "paused=controls.paused,\n            ):",
+        "paused=False,\n            ):",
+        "pause gpt asked",
+    ),
     (
         Y,
         "    if paused:\n        # ADR-0021",

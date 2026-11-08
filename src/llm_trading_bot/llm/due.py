@@ -55,6 +55,10 @@ def _previous_signals(stored: str) -> dict[str, object]:
     return markets if isinstance(markets, dict) else {}
 
 
+DUE_REASONS = ("first", "interval", "move", "signal_change", "new_market")
+"""Why a depot is asked (Spec 015 AK2); stored with each attempt in the observations."""
+
+
 def llm_due(
     con: sqlite3.Connection,
     agent: str,
@@ -63,27 +67,64 @@ def llm_due(
     now_epoch: float,
     cadence: Cadence,
 ) -> bool:
-    """Every attempt counts as asked, also blocked or failed ones (Arena: attempts, not answers)."""
+    """Whether to ask now; the same rule as ``due_reason``, which also says why."""
+    return due_reason(con, agent, mids, signals, now_epoch, cadence)[0] is not None
+
+
+def due_reason(
+    con: sqlite3.Connection,
+    agent: str,
+    mids: Mapping[Symbol, float],
+    signals: ReferenceSignals,
+    now_epoch: float,
+    cadence: Cadence,
+) -> tuple[str | None, dict[str, object]]:
+    """Every attempt counts as asked, also blocked or failed ones (Arena: attempts, not answers).
+
+    Returns the reason and the values it was decided on (elapsed seconds, moves against the
+    reference mids, changed reference signals) - only for the observations, never for trading.
+    """
     row = con.execute(
         "SELECT ts,ref_mid_btc,ref_mid_eth,trigger_signals FROM llm_calls WHERE agent=?"
         " ORDER BY id DESC LIMIT 1",
         (agent,),
     ).fetchone()
     if not row:
-        return True
+        return "first", {}
     elapsed = max(0, now_epoch - datetime.fromisoformat(row["ts"]).timestamp())
+    detail: dict[str, object] = {"elapsed": elapsed}
     if elapsed >= cadence.min_interval:
-        return True
+        return "interval", detail
     if elapsed < cadence.event_cooldown:
-        return False
+        return None, detail
+    moves: dict[str, float] = {}
+    detail["moves"] = moves
+    moved = False
     for symbol, mid in mids.items():
         ref = row[_REF_COLUMN[symbol]]
-        if ref is not None and ref > 0 and abs(mid / ref - 1) >= cadence.move_threshold:
-            return True
+        if ref is not None and ref > 0:
+            moves[symbol.market] = mid / ref - 1
+            # The first market over the threshold decides; later ones only add their value.
+            moved = moved or abs(mid / ref - 1) >= cadence.move_threshold
+    if moved:
+        return "move", detail
     # ``signals`` must not depend on the depot's own position (computed with weight 0): otherwise
     # the depot's own trade would look like new market information and trigger another paid call.
     previous = _previous_signals(row["trigger_signals"])
+    changed = {
+        symbol.market: {"before": previous.get(symbol.market), "now": dict(now)}
+        for symbol, now in signals.items()
+        if previous.get(symbol.market) != dict(now)
+    }
+    detail["changed"] = changed
+    if not _signals_changed(previous, signals):
+        return None, detail
     # A market that was not part of the last request counts as changed: its picture is new.
+    known = any(market in previous for market in changed)
+    return ("signal_change" if known else "new_market"), detail
+
+
+def _signals_changed(previous: Mapping[str, object], signals: ReferenceSignals) -> bool:
     return any(previous.get(symbol.market) != dict(now) for symbol, now in signals.items())
 
 

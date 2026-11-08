@@ -41,4 +41,5 @@ migriert werden.
 - Neu bewerten, wenn: M2 – dann gehören Orderdaten in die Handels-DB, nicht in die Beobachtungen.
 
 ## Code-Anker
-- geplant: `src/llm_trading_bot/paper/observations.py` (Spec 015)
+- `src/llm_trading_bot/paper/observations.py`, `paper/observations_schema.py`, `service/run.py` (Schreiben nach der Runde),
+  `ops/backup.py` (Profil `observations`), `deploy/llm-trading-bot-backup.service` – Spec 015

@@ -15,7 +15,7 @@
    Bisher nur die zwei Erstkäufe von Buy & Hold: sehr ruhiger Markt, alle Strategien warten auf Bewegung.
 
 ## In Arbeit
-- Spec: 015 (freigegeben), 016 (freigegeben)
+- Spec: 015 (in Arbeit), 016 (freigegeben)
 - Offene Debug-Sitzung: –
 
 ## Blocker / wartet auf
@@ -25,5 +25,6 @@
 - Optional in der Hetzner-Oberfläche: Cloud-Firewall; Backups/Snapshot nur nach Anpassung der
   Datenschutzerklärung (Journal mit IP-Adressen, siehe `docs/betrieb/server.md`).
 - Ausgabenlimit im OpenAI-Konto setzen. Startkapital für M2 offen.
+- Beobachtungs-DB wächst ≈ 2 MB/Tag: vor 2027-05 Ausdünnung/Archivierung planen (neues ADR).
 - Lizenz des Repos: übernommener Arena-Code steht unter GPL-3.0, das Repo hat keine Lizenzangabe.
 - Für Spec 014: Postfach `kontakt@<domain>` bei Migadu erreichbar?, AVV mit Hetzner und Migadu prüfen.

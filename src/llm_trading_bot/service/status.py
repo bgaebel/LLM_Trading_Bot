@@ -15,9 +15,17 @@ from llm_trading_bot.web.files import write_private
 FILE_NAME = "service-status.json"
 STATES = ("starting", "running", "degraded", "stalled", "stopping", "stopped")
 RESULTS = ("ok", "incomplete", "no_quotes", "error")
-ADDED = frozenset({"trading_paused", "pause_source"})
-"""Fields added after the first release (Spec 011): a status file without them stays readable,
-e.g. right after an update, before the new service has written its first status."""
+ADDED = frozenset(
+    {
+        "trading_paused",
+        "pause_source",
+        "observations_written",
+        "observations_failed",
+        "observations_last_error",
+    }
+)
+"""Fields added after the first release (Spec 011, Spec 015): a status file without them stays
+readable, e.g. right after an update, before the new service has written its first status."""
 
 
 def status_path(db: Path) -> Path:
@@ -44,6 +52,12 @@ class ServiceStatus:
     """Applied in the last round (Spec 011 AK6); the request itself is in secrets.env."""
     pause_source: str = ""
     """environment, file, invalid (fail closed) or "" - see paper.risk.Controls."""
+    observations_written: int = 0
+    """Transactions written to observations.db since the service started (Spec 015 AK5)."""
+    observations_failed: int = 0
+    """Transactions lost since the start: failed or skipped while recording is off."""
+    observations_last_error: str | None = None
+    """The last recording failure; it never changes state, result or failures."""
 
     def __post_init__(self) -> None:
         if self.state not in STATES:
@@ -58,18 +72,24 @@ class ServiceStatus:
         data = asdict(self)
         data["last_error"] = redact(self.last_error)
         data["config_warning"] = redact(self.config_warning)
+        if self.observations_last_error is not None:
+            data["observations_last_error"] = redact(self.observations_last_error)
         return json.dumps(data, ensure_ascii=False, indent=1) + "\n"
 
     @classmethod
     def from_json(cls, text: str) -> Self:
-        """Raises ValueError for anything that is not a status written by this version or by an
-        older one (which lacks only the fields added later, see ADDED)."""
+        """Raises ValueError for anything that is not a status written by this version, an older
+        one (which lacks only the fields added later, see ADDED) or a newer one.
+
+        Spec 015 AK5: fields this version does not know are ignored, so after a rollback the
+        older reader still reads the file the newer service wrote until it writes its own.
+        """
         data = json.loads(text)
         names = {f.name for f in fields(cls)}
-        if not isinstance(data, dict) or not names - ADDED <= set(data) <= names:
+        if not isinstance(data, dict) or not names - ADDED <= set(data):
             raise ValueError("not a service status file of this version")
         try:
-            return cls(**data)
+            return cls(**{k: v for k, v in data.items() if k in names})
         except TypeError as exc:
             raise ValueError(str(exc)) from None
 

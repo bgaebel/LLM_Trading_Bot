@@ -21,6 +21,10 @@
 # /etc/llm-trading-bot/impressum.md; the web UI reads it on every request. Its content never goes to
 # the output or deploy.log.
 #
+# Observations (Spec 015, ADR-0027): observations.db next to bot.db holds measurements only. Its
+# backup before an update is one more copy that may fail with a warning, never a stop; a release
+# from before 015 neither backs it up nor reads it, and a rollback leaves the file and its copies.
+#
 # Real host names, IPs, domains and user names never go into this file: the repository is public.
 # LTB_* variables exist only for the sandbox tests (tests/deploy/test_release.py).
 set -euo pipefail
@@ -60,6 +64,14 @@ TIMER=llm-trading-bot-backup.timer
 UNITS=(llm-trading-bot.service llm-trading-bot-web.service llm-trading-bot-backup.service
   llm-trading-bot-backup.timer)
 JOURNALD_CONF=journald@llm-trading-bot.conf
+
+# Spec 015 AK6: its own backup profile and directories; the daily copies come from the backup unit.
+OBS_DB=observations.db
+OBS_BACKUPS="$BACKUPS/observations"
+# Fewer than bot.db's 5: the file only grows, and the 14 daily copies keep its history anyway.
+OBS_KEEP_PRE_UPDATE=3
+# The services are stopped meanwhile: a copy that hangs must not keep the bot down.
+OBS_BACKUP_SECONDS=600
 
 # Spec 013: Caddy in front of the web UI's public listener (127.0.0.1 only, like the tunnel port).
 PUBLIC_HOST_FILE="$ROOT/etc/llm-trading-bot/public-host"
@@ -214,6 +226,9 @@ cmd_install() {
   ensure_dir "$BACKUPS" 700 "$service:"
   ensure_dir "$BACKUPS/daily" 700 "$service:"
   ensure_dir "$BACKUPS/pre-update" 700 "$service:"
+  ensure_dir "$OBS_BACKUPS" 700 "$service:"
+  ensure_dir "$OBS_BACKUPS/daily" 700 "$service:"
+  ensure_dir "$OBS_BACKUPS/pre-update" 700 "$service:"
   install_uv
   # ADR-0020: time-sync.target only waits for NTP when this service is enabled.
   if "$SYSTEMCTL" is-enabled --quiet systemd-time-wait-sync.service; then
@@ -489,6 +504,31 @@ pre_update_backup() {
     --dir "$BACKUPS/pre-update" --keep 5
 }
 
+# A release from Spec 015 on: its backup unit copies observations.db (the CLI of an older release
+# has no --profile and would fail). The comment above that line in the unit does not count.
+knows_observations() {
+  grep -qsE '^ExecStart=-?[^ ]*trading-bot backup .*--profile observations' \
+    "$1/deploy/llm-trading-bot-backup.service"
+}
+
+# Spec 015 AK6 (ADR-0027): after the trade history is safe, while nothing writes. Never fails the
+# deploy: observations are measurements, and the daily copies are there as well.
+pre_update_observations() {
+  local release="$1" service="$2"
+  if [ ! -f "$DATA/$OBS_DB" ]; then
+    log "no $OBS_DB yet - nothing to back up besides bot.db"
+  elif ! knows_observations "$release"; then
+    log "release $(basename "$release") is from before Spec 015: it neither backs up nor reads" \
+      "$OBS_DB - the file and its backups stay as they are"
+  elif ! quietly as_service "$service" timeout "$OBS_BACKUP_SECONDS" \
+    "$release/.venv/bin/trading-bot" backup --profile observations --db "$DATA/$OBS_DB" \
+    --dir "$OBS_BACKUPS/pre-update" --keep "$OBS_KEEP_PRE_UPDATE"; then
+    log "WARNING: the backup of $OBS_DB before the update failed - the deploy goes on" \
+      "(bot.db is backed up; the recording is measurements only)"
+  fi
+  return 0
+}
+
 wait_web() {
   local deadline=$((SECONDS + 15))
   while [ "$SECONDS" -lt "$deadline" ]; do
@@ -565,6 +605,7 @@ activate() {
     if [ -n "$old" ]; then start_release "$old" "$service" || true; fi
     die "backup before the update failed - stayed on ${old:-nothing}"
   fi
+  pre_update_observations "$RELEASES/$sha" "$service"
   start_release "$sha" "$service" || result=$?
   if [ "$result" -eq 2 ]; then
     log "no secrets.env yet: only the web UI runs. Set password, key and depots through the"
@@ -673,6 +714,9 @@ cmd_status() {
   fi
   log "latest backups: $(find "$BACKUPS" -name 'bot-*.db' -printf '%P ' 2>/dev/null | tr ' ' '\n' \
     | sort | tail -n 3 | tr '\n' ' ')"
+  log "observations: $(observations_state)"
+  log "$OBS_DB: $(observations_file_state)"
+  log "latest observations backup: $(latest_observations_backup)"
   log "public host: $(public_host_state)"
   if caddy_installed; then
     log "caddy: $(caddy_version), $("$SYSTEMCTL" is-active "$CADDY_UNIT" 2>/dev/null || true)"
@@ -683,6 +727,52 @@ cmd_status() {
   log "web unit: $(web_impressum_state)"
   # Caddy shares the namespace's 200 MB with the bot (Spec 014): attack noise would show up here.
   log "journal: $("$JOURNALCTL" --namespace=llm-trading-bot --disk-usage 2>/dev/null || echo unknown)"
+}
+
+# Spec 015 AK5: the recording's counters from the status file. A status file of a release before
+# 015 has none - the recording is off, which is no error. Read with the system Python (no venv).
+observations_state() {
+  local status="$DATA/service-status.json"
+  if [ ! -f "$status" ]; then
+    echo "no status file"
+    return
+  fi
+  python3 - "$status" <<'PY' || echo "status file unreadable"
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        s = json.load(f)
+except (OSError, ValueError):
+    sys.exit(1)
+if not isinstance(s, dict) or "observations_written" not in s:
+    print("no counters in the status file (release before Spec 015) - not recorded")
+    sys.exit(0)
+error = " ".join(str(s.get("observations_last_error") or "none").split())[:200]
+print(
+    f"written {s.get('observations_written')}, failed {s.get('observations_failed')},"
+    f" last error: {error}"
+)
+PY
+}
+
+observations_file_state() {
+  if [ -f "$DATA/$OBS_DB" ]; then
+    echo "$(stat -c %s "$DATA/$OBS_DB") B"
+  else
+    echo "missing (no round of a release from Spec 015 yet)"
+  fi
+}
+
+# The newest copy by the time in its name, daily or pre-update.
+latest_observations_backup() {
+  local latest
+  latest="$(find "$OBS_BACKUPS" -type f -name 'observations-*.db' -printf '%f\t%P\t%s\n' \
+    2>/dev/null | sort | tail -n 1)" || true
+  if [ -z "$latest" ]; then
+    echo "none"
+  else
+    printf 'observations/%s (%s B)\n' "$(cut -f2 <<<"$latest")" "$(cut -f3 <<<"$latest")"
+  fi
 }
 
 # Spec 014 AK9: never the content, only whether the web UI can serve it.

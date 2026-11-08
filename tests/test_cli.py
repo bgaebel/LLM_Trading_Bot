@@ -389,6 +389,7 @@ def test_paper_cycle_reports_controls_releases_and_stops(tmp_path: Path) -> None
         ["web", "--data-dir", "{dir}"],
         ["backup", "--db", "{db}", "--dir", "{dir}/b"],
         ["verify-db", "--db", "{db}"],
+        ["backup", "--profile", "observations", "--if-exists", "--db", "{db}", "--dir", "{dir}/o"],
     ],
 )
 def test_live_mode_stops_every_command_before_any_client_or_database(
