@@ -250,99 +250,105 @@ def paper_cycle(
         on_window=None if obs is None else on_window,
         on_book=None if obs is None else on_book,
     )
-    for fresh_snap in snaps.values():
-        last_minute = fresh_snap.bars[1][-1]
-        record_bar(con, fresh_snap.symbol, bar_ts=last_minute.ts, last_close=last_minute.close)
+    try:
+        for fresh_snap in snaps.values():
+            last_minute = fresh_snap.bars[1][-1]
+            record_bar(con, fresh_snap.symbol, bar_ts=last_minute.ts, last_close=last_minute.close)
 
-    # One quote set for every classic depot of the round, no older than QUOTE_MAX_AGE.
-    classic_qs = feed.current() if config.classic else {}
-    for agent in config.classic:
-        for symbol in SYMBOLS:
-            snap = snaps.get(symbol)
-            if snap is None:
-                report.markets.append(
-                    MarketResult(agent, symbol, error=errors.get(symbol, "no snapshot"))
-                )
-                continue
-            try:
-                report.markets.append(
-                    _decide(
-                        con,
-                        snap,
-                        agent,
-                        classic_qs,
-                        costs,
-                        now,
-                        report.risk_stops,
-                        controls.paused,
-                        obs,
+        # One quote set for every classic depot of the round, no older than QUOTE_MAX_AGE.
+        classic_qs = feed.current() if config.classic else {}
+        for agent in config.classic:
+            for symbol in SYMBOLS:
+                snap = snaps.get(symbol)
+                if snap is None:
+                    report.markets.append(
+                        MarketResult(agent, symbol, error=errors.get(symbol, "no snapshot"))
                     )
-                )
-            except Exception as exc:
-                # CLAUDE.md: a BTC failure never blocks ETH. record_decision rolled back its own
-                # transaction; the error stays visible in the report and the exit code.
-                report.markets.append(
-                    MarketResult(agent, symbol, error=f"{type(exc).__name__}: {exc}")
-                )
+                    continue
+                try:
+                    report.markets.append(
+                        _decide(
+                            con,
+                            snap,
+                            agent,
+                            classic_qs,
+                            costs,
+                            now,
+                            report.risk_stops,
+                            controls.paused,
+                            obs,
+                        )
+                    )
+                except Exception as exc:
+                    # CLAUDE.md: a BTC failure never blocks ETH. record_decision rolled back its own
+                    # transaction; the error stays visible in the report and the exit code.
+                    report.markets.append(
+                        MarketResult(agent, symbol, error=f"{type(exc).__name__}: {exc}")
+                    )
 
-    if config.llm is not None and stop_requested():
-        report.llm.extend(
-            LlmOutcome(a.name, a.model, "STOPPING", "service is stopping")
-            for a in config.llm.agents
-        )
-    elif config.llm is not None:
-        if model is None:
-            raise ValueError("GPT depots configured but no model client given")
+        if config.llm is not None and stop_requested():
+            report.llm.extend(
+                LlmOutcome(a.name, a.model, "STOPPING", "service is stopping")
+                for a in config.llm.agents
+            )
+        elif config.llm is not None:
+            if model is None:
+                raise ValueError("GPT depots configured but no model client given")
 
-        def refresh() -> Quotes | None:
-            # Fail closed: only markets stored by THIS fetch count. Falling back to quotes
-            # stored before the request would compare two prices from the same moment in the
-            # drift check and trade at a price from before the answer (Spec 005 AK6).
-            stored = feed.fetch("after_llm")
-            return {s: q for s, q in fresh_quotes(con, now_epoch=clock()).items() if s in stored}
+            def refresh() -> Quotes | None:
+                # Fail closed: only markets stored by THIS fetch count. Falling back to quotes
+                # stored before the request would compare two prices from the same moment in the
+                # drift check and trade at a price from before the answer (Spec 005 AK6).
+                stored = feed.fetch("after_llm")
+                return {
+                    s: q for s, q in fresh_quotes(con, now_epoch=clock()).items() if s in stored
+                }
 
-        for outcome, results in run_llm_depots(
-            con,
-            config.llm.agents,
-            config.llm,
-            model,
-            snaps,
-            costs,
-            refresh_quotes=refresh,
-            clock=clock,
-            stops=report.risk_stops,
-            observations=obs,
-            paused=controls.paused,
-        ):
-            report.llm.append(outcome)
-            report.markets.extend(results)
+            for outcome, results in run_llm_depots(
+                con,
+                config.llm.agents,
+                config.llm,
+                model,
+                snaps,
+                costs,
+                refresh_quotes=refresh,
+                clock=clock,
+                stops=report.risk_stops,
+                observations=obs,
+                paused=controls.paused,
+            ):
+                report.llm.append(outcome)
+                report.markets.extend(results)
 
-    names = (*config.agents, BUYHOLD)
-    # Spec 011 AK8: the final valuation never uses quotes older than QUOTE_MAX_AGE.
-    latest = feed.current()
-    valued = []
-    with write_tx(con):
-        for name in names:
+        names = (*config.agents, BUYHOLD)
+        # Spec 011 AK8: the final valuation never uses quotes older than QUOTE_MAX_AGE.
+        latest = feed.current()
+        valued = []
+        with write_tx(con):
+            for name in names:
+                p = balance(con, name)
+                if held := unquoted_holdings(p, latest):
+                    report.unvalued.extend(
+                        MarketResult(
+                            name,
+                            s,
+                            error=f"MarketDataError: {s.market}: no fresh quote for the held"
+                            " position - no equity point",
+                        )
+                        for s in held
+                    )
+                    continue
+                if (stop := mark(con, name, latest, now, costs)) is not None:
+                    report.risk_stops.append(stop)
+                valued.append(name)
+        for name in valued:
             p = balance(con, name)
-            if held := unquoted_holdings(p, latest):
-                report.unvalued.extend(
-                    MarketResult(
-                        name,
-                        s,
-                        error=f"MarketDataError: {s.market}: no fresh quote for the held"
-                        " position - no equity point",
-                    )
-                    for s in held
-                )
-                continue
-            if (stop := mark(con, name, latest, now, costs)) is not None:
-                report.risk_stops.append(stop)
-            valued.append(name)
-    for name in valued:
-        p = balance(con, name)
-        report.equity.append(Equity(name, value(p, latest), p["cash"], p["btc"], p["eth"]))
-    # Last and guarded as a whole: the round is done, an observing bug must not undo that.
-    note(obs, lambda b: _observe_snapshots(b, snaps, failures, report))
+            report.equity.append(Equity(name, value(p, latest), p["cash"], p["btc"], p["eth"]))
+    finally:
+        # Spec 015 AK4: also when the round fails after the snapshots (e.g. in the
+        # valuation), with the decisions known so far; guarded as a whole, so an observing
+        # bug can neither undo the round nor hide its error.
+        note(obs, lambda b: _observe_snapshots(b, snaps, failures, report))
     return report
 
 

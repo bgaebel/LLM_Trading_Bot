@@ -8,11 +8,12 @@ from typing import Any
 
 import pytest
 
-from fakes import VALID_BOOK, FakeTransport, bitvavo_handler
+from fakes import VALID_BOOK, FakeTransport, ScenarioClient, bitvavo_handler
 from golden_scenarios import NOW
 from llm_trading_bot.llm.agents import BotConfig
 from llm_trading_bot.market.bitvavo import BitvavoClient
 from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.paper import cycle as cycle_module
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
@@ -118,3 +119,26 @@ def test_a_failed_start_fetch_is_recorded_as_http(db: sqlite3.Connection) -> Non
     buffer = observed(db, client, TREND)
     assert [s[1:3] for s in buffer.snapshots] == [("BTCEUR", "http"), ("ETHEUR", "http")]
     assert buffer.books == []
+
+
+# ------------------------------------------------------------------ a failing round
+
+
+def test_snapshots_are_recorded_when_the_round_fails_in_the_valuation(
+    db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("valuation bug")
+
+    monkeypatch.setattr(cycle_module, "mark", broken)
+    buffer = ObservationBuffer(SHA)
+    with pytest.raises(RuntimeError, match="valuation bug"):
+        paper_cycle(
+            db, ScenarioClient(), TREND, costs=Costs(), clock=lambda: NOW, observations=buffer
+        )
+    # The decisions fell before the valuation failed.
+    assert [s[1:] for s in buffer.snapshots] == [
+        ("BTCEUR", "ok", None, 1),
+        ("ETHEUR", "ok", None, 1),
+    ]
+    assert len(buffer.decisions) == 2 and buffer.dropped == 0
