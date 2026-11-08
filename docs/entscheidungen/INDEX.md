@@ -28,7 +28,8 @@
 | [0021](0021-risiko-grenzen-m1.md) | Risiko in M1: Drawdown-Stopp 10 % wie Arena, Freigabe und Handelspause über die Weboberfläche, Kurse je Markt | angenommen |
 | [0022](0022-broker-naht-m1.md) | Broker-Naht in M1: Protokoll plus Paper-Delegation, Sperren als Tests, keine Laufzeitänderung | angenommen |
 | [0023](0023-live-ausfuehrung-m2-vorschlag.md) | Live-Ausführung für M2: zwei Phasen, nie blind wiederholen, getrennte Historie (Vorschlag bis M2) | vorgeschlagen |
-| [0024](0024-weboberflaeche-oeffentlich-https.md) | Weboberfläche öffentlich per HTTPS hinter Caddy mit gehärtetem Login; App bleibt auf 127.0.0.1 (löst 0005 ab) | angenommen |
+| [0024](0024-weboberflaeche-oeffentlich-https.md) | Weboberfläche öffentlich per HTTPS hinter Caddy mit gehärtetem Login; App bleibt auf 127.0.0.1 (löst 0005 ab) | abgelöst durch [0028](0028-uebersicht-ohne-login.md) |
 | [0025](0025-rechtstexte.md) | Impressum nur auf dem Server, Datenschutzerklärung im Repo an den Code gebunden; Log-Fristen auf dem Server durchgesetzt | angenommen |
 | [0026](0026-strategie-labor.md) | Strategie-Labor auf dem PC: unveränderter Live-Code im Backtest, Treue-Test, Prüfregister, versiegelter Prüfzeitraum ab 2025-10-01, GPT nur live bewertet | angenommen |
 | [0027](0027-beobachtungs-db.md) | Zusätzliche Live-Aufzeichnung (Quotes mit Tiefe, GPT-Rohantworten, Auslöser, Version, Ausfälle) in eigener `observations.db`; `bot.db` bleibt v2 | angenommen |
+| [0028](0028-uebersicht-ohne-login.md) | Weboberfläche wie 0024; Übersicht ohne Login lesbar (ohne Fehlerdetails, 10-s-Zwischenspeicher, noindex, abschaltbar), nur im Paper-Modus (löst 0024 ab) | angenommen |

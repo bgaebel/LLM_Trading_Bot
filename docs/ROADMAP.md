@@ -21,7 +21,7 @@ Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft,
 | 4 | Risiko-Grenzen und Fail-closed (veraltete Kurse, Feed-/LLM-Ausfall, BTC/ETH entkoppelt) | [011](specs/011-risiko-grenzen.md) | – |
 | 5 | Dienst: Worker-Schleife, sauberer Shutdown, Health, Logging | [008](specs/008-dienst.md) | – |
 | 6 | Hetzner-Server: Härtung (SSH-Key, Firewall, Updates), systemd, Backup, Update/Rollback | [002](specs/002-server-grundeinrichtung.md) (Härtung), [009](specs/009-deploy.md) (Deploy, Backup) | – |
-| 7 | Status-Ansicht nur auf 127.0.0.1, Zugriff per SSH-Tunnel; zuerst Login + Zugangsdaten, dann Übersicht; öffentlich per HTTPS mit Login | [006](specs/006-weboberflaeche.md) (Login, Zugangsdaten), [007](specs/007-uebersicht.md) (Übersicht), [010](specs/010-live-uebersicht.md) (live), [013](specs/013-oeffentlich-https.md) (öffentlich), [014](specs/014-rechtstexte.md) (Impressum, Datenschutz) | – |
+| 7 | Status-Ansicht nur auf 127.0.0.1, Zugriff per SSH-Tunnel; zuerst Login + Zugangsdaten, dann Übersicht; öffentlich per HTTPS mit Login | [006](specs/006-weboberflaeche.md) (Login, Zugangsdaten), [007](specs/007-uebersicht.md) (Übersicht), [010](specs/010-live-uebersicht.md) (live), [013](specs/013-oeffentlich-https.md) (öffentlich), [014](specs/014-rechtstexte.md) (Impressum, Datenschutz), [019](specs/019-uebersicht-ohne-login.md) (Übersicht ohne Login) | – |
 | 8 | Echtgeld-Schnittstelle als Entwurf (Interface + ADR-Vorschlag, keine Implementierung) | [012](specs/012-broker-naht.md) | – |
 
 ## M2 – Echtgeld-Minimalbetrieb ⬜
