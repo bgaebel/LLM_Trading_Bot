@@ -62,15 +62,29 @@ Kosten gebracht hätte – mit Unsicherheitsbändern und Vergleich mit Buy & Hol
   `::test_workers_do_not_write`
 - [ ] AK5: **Treue-Test gegen live** (`trading-bot lab fidelity --bot <kopie> [--obs <kopie>]`): Für jeden aufgezeichneten
   Snapshot (klassische und GPT-Entscheidungen; Referenzsignale in `inputs` und `trigger_signals`) wird zur Zeit
-  `inputs.utc` nachgebaut, mit Kosten aus der gespeicherten Quote und Gewicht aus `current_weight`:
-  - Aktion und Ziel exakt gleich; Indikatoren `round(neu, 5)` = gespeichert ± eine Stelle; Prozentfelder als „nur grob
+  `inputs.utc` nachgebaut, mit Kosten aus der gespeicherten Quote und Gewicht aus `current_weight`
+  (geändert mit Zustimmung des Nutzers am 2026-11-08):
+  - Aktion und Ziel müssen in allen Vergleichen gleich sein;
+  - Indikatoren (`round(neu, 5)` = gespeichert ± eine Stelle; mit Beobachtungen zusätzlich Fenster-Prüfsummen und
+    ungerundete Indikatoren, 1e-12) nur dort exakt gleich, wo die Aufzeichnung (Spec 015) gleichen Eingang belegt –
+    auch über ein kürzeres Live-Fenster, dessen Zeilen das Archiv genau so hat; Prozentfelder als „nur grob
     prüfbar“ getrennt;
-  - mit Beobachtungen (Spec 015) zusätzlich Gleichheit der Fenster-Prüfsummen und ungerundeten Indikatoren (1e-12);
-  - unter 300 Vergleichen je Markt: „Treue nicht belegt“, nie „100 %“; jede Abweichung mit Ursache.
+  - jede andere Abweichung mit belegter Ursache („Kerze live vorläufig (späte Trades)“, „Live-Fenster anders als
+    Archiv“, ohne Aufzeichnung „Eingangskerze anders als Archiv“ bzw. „ohne Aufzeichnung nicht prüfbar“); eine
+    Abweichung bei belegt gleichem Eingang bleibt ungeklärt und lässt den Test scheitern;
+  - „Treue belegt“ erst ab `FIDELITY_MIN` (300) exakt gleichen Snapshots mit belegt gleichem Eingang je Markt;
+    darunter „Treue nicht belegt“ mit Grund, nie „100 %“.
 
   — Nachweis: `tests/lab/test_fidelity.py::test_too_few_is_not_established`, `::test_rounding_step_allowed`,
-  `::test_action_mismatch_listed`, [manuell] Lauf gegen eine Live-Kopie (Spec 017 `lab-copy`, sonst eine mit
-  Zustimmung gezogene Sicherung)
+  `::test_action_mismatch_listed`, `::test_truncated_live_window_is_the_same_input`,
+  `::test_truncated_window_with_other_rows_is_another_input`,
+  `::test_late_trades_in_the_last_bar_are_another_input`, `::test_more_volume_live_is_no_late_bar`,
+  `::test_deviation_with_the_same_input_is_never_explained`, `::test_another_input_never_explains_the_costs`,
+  `::test_unrecorded_round_with_another_input_candle`, `::test_mid_bar_deviation_not_explained_as_forming`,
+  `::test_old_summary_json_is_never_established`, `::test_observations_without_the_volume_column`,
+  `tests/lab/test_model.py::test_fidelity_needs_exact_snapshots_with_equal_input`,
+  `tests/lab/test_report.py::test_fidelity_needs_exactly_equal_snapshots`, Mutationsgruppe `lab`,
+  [manuell] Lauf gegen eine Live-Kopie (Spec 017 `lab-copy`, sonst eine mit Zustimmung gezogene Sicherung)
 - [ ] AK6: **Kostenmodell und Kosten-Empfindlichkeit:**
   - Spread je Zeitraum: vor eigener Aufzeichnung ein vorsichtiger Wert je Quartal aus Stichproben öffentlicher Trades
     (`/trades`), danach der aufgezeichnete Median; im Bericht als Annahme;
@@ -194,6 +208,20 @@ Kosten gebracht hätte – mit Unsicherheitsbändern und Vergleich mit Buy & Hol
   ausdrückliche Konfiguration ohne USDC-Depots, Gleichheit über `SYMBOLS`, zusätzlich ein Gleichheitslauf mit
   USDC-Depots auf den echten Büchern; Treue-Test mit Wegkosten aus `observations.db`; Variante `usdc` (AK14) und Doku
   (AK13).
+- 2026-11-08: Treue-Test gegen eine mit Zustimmung gezogene Live-Kopie (bot.db, observations.db): 987 Vergleiche,
+  Aktion und Ziel 987/987 gleich; von den aufgezeichneten Snapshots waren 102 exakt gleich, 113 hatten ein anderes
+  Live-Fenster als das Archiv, keiner wich bei gleichem Fenster ab. Zwei Ursachen bei Bitvavo (`LEARNINGS.md`): die
+  letzte geschlossene Kerze live vorläufig (weniger Volumen, späte Trades) und seit etwa 13:00 UTC gekürzte
+  ETH-1m-Fenster. AK5 mit Zustimmung des Nutzers geändert (Wortlaut oben): Aktion und Ziel überall gleich, exakte
+  Gleichheit nur bei belegt gleichem Eingang, „Treue belegt“ erst ab 300 exakt gleichen Snapshots je Markt. Danach:
+  BTC-EUR 619 Vergleiche, 55 exakt gleich; ETH-EUR 368 Vergleiche, 71 exakt gleich (davon 24 mit gekürztem
+  Live-Fenster); keine Abweichung ohne Ursache; Ergebnis je Markt „Treue nicht belegt (zu wenige exakt gleiche
+  Snapshots)“ – für 300 braucht es eine spätere Kopie. Drei ETH-Snapshots einer Runde (2026-11-08 09:30 UTC):
+  live fehlte die gerade geschlossene 1m-Kerze ganz, das Fenster ist sonst gleich (Prüfsumme) – „Live-Fenster anders
+  als Archiv“. Zwei Prüfbefunde behoben: (A1) der Ergebnis-Hash enthielt seit `Variant.usdc` immer `"usdc": false`,
+  ältere Läufe bestanden `verify` nicht mehr und jeder Bericht wurde verweigert – jetzt dieselbe Regel wie im
+  Konfigurations-Hash; (A2) in der Variante `usdc` bekam Buy & Hold in den Kennzahlen die Kosten und den Spread des
+  USDC-Wegs – jetzt je Depot wie live (`paper.usdc.routed`), der Spread des Wegs steht unter eigenem Schlüssel.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

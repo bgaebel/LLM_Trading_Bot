@@ -66,11 +66,48 @@ Alle Befehle mit `uv run trading-bot lab <befehl>`; `--help` zeigt die Optionen.
 - **Datenqualität, Diagnose, Treue, Annahmen, Zahl der Versuche, Laufzeit** – die Zahl der Versuche ist wichtig:
   Wer viele Varianten prüft, findet zufällig eine gute.
 
+## Treue-Test: so liest man das Ergebnis
+
+Der Treue-Test prüft den Code, nicht die Rendite: Bekommt das Labor aus denselben Kerzen dieselbe Entscheidung wie
+live? Die Regel (AK5, vom Nutzer am 2026-11-08 freigegeben):
+
+- **Aktion und Ziel** müssen in allen Vergleichen gleich sein – auch dort, wo der Eingang verschieden war.
+- **Indikatoren** müssen nur dort exakt gleich sein, wo die Aufzeichnung (`observations.db`, Spec 015) belegt, dass
+  live dieselben Kerzen hatte wie das Archiv (gleiche Prüfsumme der Fenster).
+- **Jede andere Abweichung** braucht eine belegte Ursache. Eine Abweichung bei belegt gleichem Eingang bleibt
+  „ungeklärt“ und lässt den Test scheitern – ein Fehler im Code wird nie wegerklärt.
+- **„Treue belegt“** erst ab 300 exakt gleichen Snapshots mit belegt gleichem Eingang je Markt. Darunter steht
+  „Treue nicht belegt“ mit Grund, z. B. „zu wenige exakt gleiche Snapshots: 55 < 300“ – nie „100 %“.
+
+Je Markt zeigen Konsole und Bericht: Vergleiche, Aktion gleich, exakt gleich bei belegt gleichem Eingang (davon mit
+gekürztem Live-Fenster), Eingang verschieden (nach Ursache), ohne Aufzeichnung nicht prüfbar und das Ergebnis mit
+Grund. „Indikatoren gleich“ steht nur noch zur Information da.
+
+Zwei Eigenheiten von Bitvavo machen den Eingang oft verschieden (`docs/LEARNINGS.md`, „Bitvavo-Kerzen sind kurz nach
+Schluss vorläufig“):
+
+1. **Kerze live vorläufig (späte Trades):** Die letzte geschlossene Kerze, 5 s nach Schluss abgefragt, hatte live
+   weniger Volumen als später im Archiv – späte Trades werden nachgetragen, nie abgezogen. Mehr Volumen live zählt
+   deshalb nicht als späte Kerze, sondern als „Live-Fenster anders als Archiv“.
+2. **Gekürztes Live-Fenster:** Seit etwa 2026-11-08 13:00 UTC liefert `/candles?limit=500` bei ETH-1m weniger
+   Zeilen. Hat das Archiv im Live-Fenster genau dieselben Zeilen (Anzahl und Prüfsumme), ist der Eingang gleich: Der
+   Test baut den Snapshot dann aus dem gekürzten Fenster nach und verlangt exakte Gleichheit.
+
+Ohne aufgezeichnete Runde (ältere Live-Daten, Ausfälle der Aufzeichnung) ist kein Eingang belegt gleich: Weicht
+eine Eingangskerze ab, heißt die Ursache „Eingangskerze anders als Archiv (ohne Aufzeichnung)“, sonst sind die
+Indikatoren „ohne Aufzeichnung nicht prüfbar“. Solche Snapshots zählen nie als exakt gleich; nur Aktion und Ziel
+werden dort streng geprüft.
+
+Der erste Lauf gegen eine Live-Kopie (2026-11-08, 987 Vergleiche) erreichte 55 (BTC-EUR) und 71 (ETH-EUR) exakt
+gleiche Snapshots, Aktionen überall gleich, keine Abweichung ohne Ursache. Für 300 je Markt braucht es eine spätere
+Kopie mit mehr aufgezeichneten Runden (eine Kopie vom Server nur mit Zustimmung).
+
 ## Grenzen
 
 - Kerzen haben keine Kauf- und Verkaufskurse: Kurs = Schluss der letzten Minute vor der Runde, Spread angenommen.
 - Ob live die laufende Kerze schon in der Antwort war, weiß das Archiv nicht (Näherung; der Treue-Test erklärt die
   Abweichungen, mit Beobachtungen ist er exakt).
+- Live entscheidet auf vorläufigen Kerzen (späte Trades fehlen noch), der Backtest auf endgültigen.
 - Tageswerte und Drawdown beruhen auf dem Tagesende; Einbrüche innerhalb eines Tages fehlen darin.
 - GPT-Depots fehlen: GPT wird nur live bewertet, nie auf historischen Kursen (ADR-0026).
 - Vor 2021Q2 wird nichts gewertet (BTC-EUR hat erst ab 2021-02-20 15m-Kerzen).
@@ -98,7 +135,9 @@ Die USDC-Depots (Spec 020, ADR-0029/0030) haben dieselben Regeln wie v0.3.1, kau
 (Euro → USDC → BTC und zurück, Version `v0.3.1-usdc`); ETH handeln sie wie die Basis auf ETH-EUR.
 
 - Der Lauf rechnet `trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc` und `buyhold-usdc` über dasselbe
-  Archiv wie `base`. Buy & Hold läuft wie live immer mit und ist mit dem des Basislaufs identisch.
+  Archiv wie `base`. Buy & Hold läuft wie live immer mit und ist mit dem des Basislaufs identisch, auch in den
+  Kennzahlen: Es kauft BTC auf BTC-EUR und zahlt deren Kosten und Spread. Die Kosten des Wegs gelten je Depot, nur
+  für das BTC der `*-usdc`-Depots.
 - Im Register ist `usdc` eine eigene Variante und zählt als eigener Versuch. Die Läufe `base`, Kostenraster und
   Diagnose rechnen weiter genau die v0.3.1-Depots, ausdrücklich ohne USDC-Depots – unabhängig von
   `BOT_USDC_AGENTS`.

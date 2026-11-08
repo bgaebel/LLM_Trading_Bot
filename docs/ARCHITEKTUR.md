@@ -278,7 +278,8 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
   - `archive`: `Archive` über `candles.db` – Fenster `[start, start + 1440 Intervalle)`, nur abgeschlossene Zeilen,
     geprüft mit dem Parser des Live-Clients, fertige Fenster unveränderlich; `open_readonly`, `rows`, `last_rows`,
     `checksum`, `window_state`
-  - `history`: `HistoricalClient(source, spreads, clock, start=, end=, quotes=, forming_hint=, route=)` erfüllt
+  - `history`: `HistoricalClient(source, spreads, clock, start=, end=, quotes=, forming_hint=, route=,
+    row_limit=)` erfüllt
     `market.snapshot.MarketClient`; letzte 500 Zeilen bis zur Uhr, dann der Live-Filter; Quote = Schluss der
     letzten abgeschlossenen Minute ± halber Spread; `UsdcRoute` bildet BTC-USDC/USDC-EUR aus der BTC-EUR-Mitte
     (nur mit `route`)
@@ -287,7 +288,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
     `BASE`, Kostenraster, Diagnose, `USDC`
   - `fidelity`: `check(bot, source, obs=)` / `run(...)` – baut jeden aufgezeichneten Snapshot zur Zeit `inputs.utc`
     nach (klassisch, GPT-Referenzsignale, USDC-Depots mit den Wegkosten aus den Büchern von `observations.db`)
-    → `FidelitySummary`
+    → `FidelitySummary`; exakte Gleichheit nur bei belegt gleichem Eingang (Fenster-Prüfsumme, ggf. über das
+    gekürzte Live-Fenster), sonst eine belegte Ursache; `FidelitySummary.verdict` ist die eine Regel für
+    Konsole und Bericht (AK5)
   - `spread`: Spread je Quartal aus Stichproben öffentlicher Trades (`QuarterSpreads`, `DEFAULT_SPREAD`)
   - `metrics`: `summarize(results)` → `LabMetrics` (Rendite, Drawdown, FIFO-Round-Trips, Benchmark gleicher Quote,
     Block-Bootstrap, Marktphasen, Datenqualität)
