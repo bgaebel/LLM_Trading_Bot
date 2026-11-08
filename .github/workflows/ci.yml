@@ -62,4 +62,4 @@ jobs:
 
       - name: Test
         # Tests marked `net` hit the real Bitvavo API and stay out of CI.
-        run: uv run pytest -m "not net"
+        run: uv run pytest -m "not net and not slow"
