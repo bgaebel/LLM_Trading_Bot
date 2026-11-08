@@ -68,6 +68,9 @@ body::after {
 
 /* ---------------------------------------------------------------- header + ticker */
 header, .ticker, main, footer { position: relative; z-index: 1; }
+/* Sticky as one block, so the ticker never slides under the header (user 2026-11-08); below
+   the scanline overlay (z 40), above the panels. */
+.masthead { position: sticky; top: 0; z-index: 30; }
 header {
   display: flex; flex-wrap: wrap; gap: 12px 20px; justify-content: space-between;
   align-items: center; padding: 12px 22px;
