@@ -41,6 +41,7 @@ import json
 import sqlite3
 import sys
 import time
+from bisect import bisect_left, bisect_right
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -49,7 +50,8 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any, TextIO
 
-from llm_trading_bot.lab.archive import SETTLE_SECONDS, Archive, ArchiveError, window_start
+from llm_trading_bot.lab.archive import SETTLE_SECONDS, Archive, ArchiveError
+from llm_trading_bot.lab.archive import windows as archive_windows
 from llm_trading_bot.lab.history import (
     CandleRow,
     CandleSource,
@@ -354,23 +356,70 @@ def _skip(market: str, utc: str, agent: str, cause: str, why: object = "") -> di
     }
 
 
+@dataclass
+class _WindowIndex:
+    """The window rows of one (symbol, interval), sorted by round: ``latest[k]`` is the
+    highest row id among the first ``k + 1`` rounds' rows."""
+
+    rounds: list[int] = field(default_factory=list)
+    latest: list[int] = field(default_factory=list)
+
+
 class Observations:
     """What Spec 015 recorded for a snapshot: the windows of its round and the decision's
-    unrounded indicators. None where the round or decision was not recorded."""
+    unrounded indicators. None where the round or decision was not recorded.
+
+    The copy has no index on ``rounds.ts`` and none that serves "latest window of a symbol
+    and interval up to a round", and a read-only copy cannot get one: per snapshot those
+    queries read the whole table, so months of observations took hours (quadratic). Both are
+    read once here, as sorted keys only; every query per snapshot then goes through an index
+    (``snapshots.round_id``, the window's row id, the unique key of ``decision_meta``).
+    """
 
     def __init__(self, con: sqlite3.Connection) -> None:
         self._con = con
+        # ISO strings compared as SQLite compares TEXT (bytewise): the same rounds as
+        # ``WHERE ts<=? AND ts>=?`` would find.
+        rounds = sorted((str(ts), int(rid)) for rid, ts in con.execute("SELECT id, ts FROM rounds"))
+        self._round_ts = [ts for ts, _ in rounds]
+        self._round_id = [rid for _, rid in rounds]
+        grouped: dict[tuple[str, int], list[tuple[int, int]]] = {}
+        for wid, rid, sym, interval in con.execute(
+            "SELECT id, round_id, symbol, interval FROM windows"
+        ):
+            grouped.setdefault((str(sym), int(interval)), []).append((int(rid), int(wid)))
+        self._windows: dict[tuple[str, int], _WindowIndex] = {}
+        for key, pairs in grouped.items():
+            pairs.sort()
+            index = _WindowIndex()
+            best = -1
+            for rid, wid in pairs:
+                best = max(best, wid)
+                index.rounds.append(rid)
+                index.latest.append(best)
+            self._windows[key] = index
+
+    def _round(self, epoch: int) -> int | None:
+        """The last round (highest id) that began in ``[epoch - 30, epoch]``."""
+        lo = bisect_left(self._round_ts, _iso(epoch - 30))
+        hi = bisect_right(self._round_ts, _iso(epoch))
+        return max(self._round_id[lo:hi]) if hi > lo else None
+
+    def _window_id(self, symbol: Symbol, interval: int, round_id: int) -> int | None:
+        """Windows are written only when they change (changed_windows): the one a round used
+        is the latest row (highest id) of its interval up to that round."""
+        index = self._windows.get((symbol.name, interval))
+        if index is None:
+            return None
+        k = bisect_right(index.rounds, round_id)
+        return index.latest[k - 1] if k else None
 
     def windows(self, symbol: Symbol, epoch: int) -> dict[int, ObservedWindow] | None:
         con = self._con
         # The round began before its snapshot (quotes first) and at most a few seconds earlier.
-        round_row = con.execute(
-            "SELECT id FROM rounds WHERE ts<=? AND ts>=? ORDER BY id DESC LIMIT 1",
-            (_iso(epoch), _iso(epoch - 30)),
-        ).fetchone()
-        if round_row is None:
+        round_id = self._round(epoch)
+        if round_id is None:
             return None
-        round_id = int(round_row["id"])
         ok = con.execute(
             "SELECT 1 FROM snapshots WHERE round_id=? AND symbol=? AND status='ok'",
             (round_id, symbol.name),
@@ -379,13 +428,16 @@ class Observations:
             return None
         out: dict[int, ObservedWindow] = {}
         for interval in INTERVALS:
-            # Windows are written only when they change (changed_windows): the one a round used
-            # is the latest row of its interval up to that round.
-            row = con.execute(
-                "SELECT rows, first_open, last_open, forming, rows_sha256 FROM windows"
-                " WHERE symbol=? AND interval=? AND round_id<=? ORDER BY id DESC LIMIT 1",
-                (symbol.name, interval, round_id),
-            ).fetchone()
+            wid = self._window_id(symbol, interval, round_id)
+            row = (
+                None
+                if wid is None
+                else con.execute(
+                    "SELECT rows, first_open, last_open, forming, rows_sha256 FROM windows"
+                    " WHERE id=?",
+                    (wid,),
+                ).fetchone()
+            )
             if row is None:
                 return None
             out[interval] = ObservedWindow(
@@ -875,9 +927,50 @@ def _note(tally: _Tally, with_obs: bool) -> str:
 
 
 def archive_coverage(archive: Archive) -> Callable[[str, int], bool]:
-    """True if the archive window holding the bar that was forming at ``epoch`` is complete,
-    or was fetched after that bar had closed and settled, for every interval."""
+    """True if, for every interval, each archive window the rebuild at ``epoch`` reads is
+    complete, or was fetched after the bars it must hold had closed and settled.
+
+    The rebuild reads the newest ``CANDLE_LIMIT`` rows (one bar further back without the
+    forming bar), and these reach into earlier windows. A window left open by an earlier
+    fetch has a gap there; the 500 rows then start earlier than live's, and the deviations
+    would blame the live code for a hole in the archive. The 1m rows also have to cover the
+    forming bar of every interval (``Rebuilder.traded``).
+    """
+    states = {
+        (str(m), int(i), int(s)): (str(status), int(fetched))
+        for m, i, s, status, fetched in archive.db.execute(
+            "SELECT market, interval, start, status, fetched_at FROM windows"
+        )
+    }
+    reach: dict[tuple[str, int, int], int | None] = {}
     cache: dict[tuple[str, int], bool] = {}
+
+    def first_open(market: str, interval: int, last: int) -> int | None:
+        """Open of the oldest of the newest CANDLE_LIMIT rows opened at or before ``last``
+        (the primary key serves it); None without a row."""
+        key = (market, interval, last)
+        if key not in reach:
+            row = archive.db.execute(
+                "SELECT MIN(ts) FROM (SELECT ts FROM candles WHERE market=? AND interval=?"
+                " AND ts<=? ORDER BY ts DESC LIMIT ?)",
+                (market, interval, last, CANDLE_LIMIT),
+            ).fetchone()
+            reach[key] = None if row is None or row[0] is None else int(row[0])
+        return reach[key]
+
+    def window_ok(market: str, interval: int, epoch: int, start: int) -> bool:
+        step = interval * 60
+        forming_open = epoch // step * step
+        for w, w_end in archive_windows(interval, start, epoch + 1):
+            state = states.get((market, interval, w))
+            if state is None:
+                return False
+            status, fetched_at = state
+            # Bars it must hold: all of an earlier window, up to the forming bar of the last.
+            needed = min(w_end, forming_open + step)
+            if status != "done" and fetched_at < needed + SETTLE_SECONDS:
+                return False
+        return True
 
     def covered(market: str, epoch: int) -> bool:
         key = (market, epoch)
@@ -885,12 +978,13 @@ def archive_coverage(archive: Archive) -> Callable[[str, int], bool]:
             ok = True
             for interval in INTERVALS:
                 step = interval * 60
-                forming_open = epoch // step * step
-                state = archive.window_state(market, interval, window_start(interval, forming_open))
-                if state is None or (
-                    state.status != "done"
-                    and state.fetched_at < forming_open + step + SETTLE_SECONDS
-                ):
+                start = first_open(market, interval, epoch // step * step - step)
+                if start is None:
+                    ok = False
+                    break
+                if interval == 1:
+                    start = min(start, *(epoch // (i * 60) * (i * 60) for i in INTERVALS))
+                if not window_ok(market, interval, epoch, start):
                     ok = False
                     break
             cache[key] = ok
