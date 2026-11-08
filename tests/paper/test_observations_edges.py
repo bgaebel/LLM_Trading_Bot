@@ -1,7 +1,10 @@
 """Spec 015 AK3/AK4 (ADR-0027): edge cases of recording - rejected quotes, blocked and refused
 GPT attempts, failing rounds, repeated keys, the file's creation, journal mode and errors."""
 
+import os
 import sqlite3
+import stat
+import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -16,7 +19,9 @@ from llm_trading_bot.llm.cycle import REFUSAL_MARK
 from llm_trading_bot.llm.openai_client import ModelReply
 from llm_trading_bot.market.bitvavo import BitvavoClient
 from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.ops.backup import OBSERVATIONS, backup_db, restore_db
 from llm_trading_bot.paper import cycle as cycle_module
+from llm_trading_bot.paper import observations_schema as schema_module
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
@@ -26,7 +31,7 @@ from llm_trading_bot.paper.observations import (
     ignored_message,
     rejected_purpose,
 )
-from llm_trading_bot.paper.observations_schema import OBS_FILE, create
+from llm_trading_bot.paper.observations_schema import OBS_FILE, OBS_SCHEMA_VERSION, create
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 TREND = BotConfig(("trend",), None)
@@ -208,6 +213,130 @@ def test_repeated_keys_are_counted_and_recording_stays_on(tmp_path: Path) -> Non
     assert writer.last_error == ignored_message(1)
     writer.write(small_buffer(call_id=9, bar_ts=NOW))
     assert writer.last_error is None and counts(path)["decision_meta"] == 2
+
+
+# ------------------------------------------------------------------ creating the file
+
+
+def test_create_leaves_only_the_file(tmp_path: Path) -> None:
+    path = tmp_path / OBS_FILE
+    create(path)
+    # Checkpointed and closed: no -wal/-shm, no temporary file.
+    assert sorted(p.name for p in tmp_path.iterdir()) == [OBS_FILE]
+    if sys.platform != "win32":
+        assert stat.S_IMODE(path.stat().st_mode) & 0o077 == 0
+
+
+def test_an_interrupted_create_leaves_no_file_and_the_next_start_creates_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / OBS_FILE
+
+    def half(con: sqlite3.Connection) -> None:
+        con.execute("CREATE TABLE service_starts (id INTEGER)")
+        raise RuntimeError("power cut")
+
+    monkeypatch.setattr(schema_module, "_build", half)
+    writer = ObservationWriter(path)
+    writer.start("t", SHA, 1)
+    assert not path.exists() and writer.failed == 1 and not writer.off
+    assert writer.last_error == "RuntimeError: power cut"
+    monkeypatch.undo()
+    writer.start("t", SHA, 2)
+    assert (writer.written, last_error(writer)) == (1, None)
+    assert counts(path)["service_starts"] == 1
+    assert sorted(p.name for p in tmp_path.iterdir() if not p.name.endswith(("-wal", "-shm"))) == [
+        OBS_FILE
+    ]
+
+
+def test_a_leftover_temporary_file_is_removed_before_creating(tmp_path: Path) -> None:
+    """As after a kill during create: the half-made temporary file is never taken as live."""
+    path = tmp_path / OBS_FILE
+    leftover = tmp_path / f".{OBS_FILE}.creating"
+    leftover.write_bytes(b"half a database")
+    (tmp_path / f".{OBS_FILE}.creating-journal").write_bytes(b"x")
+    create(path)
+    assert sorted(p.name for p in tmp_path.iterdir()) == [OBS_FILE]
+    con = sqlite3.connect(path)
+    try:
+        assert con.execute("PRAGMA user_version").fetchone()[0] == OBS_SCHEMA_VERSION
+    finally:
+        con.close()
+
+
+def test_create_never_links_over_a_file_that_appeared_meanwhile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / OBS_FILE
+    real_link = os.link
+
+    def racing(src: Any, dst: Any) -> None:
+        Path(dst).write_bytes(b"theirs")
+        real_link(src, dst)
+
+    monkeypatch.setattr(os, "link", racing)
+    with pytest.raises(FileExistsError):
+        create(path)
+    assert path.read_bytes() == b"theirs"
+    assert sorted(p.name for p in tmp_path.iterdir()) == [OBS_FILE]
+
+
+@pytest.mark.parametrize("kind", ["empty file", "empty database"])
+def test_a_blank_file_from_an_older_create_is_initialised(tmp_path: Path, kind: str) -> None:
+    path = tmp_path / OBS_FILE
+    if kind == "empty file":
+        path.write_bytes(b"")
+    else:
+        sqlite3.connect(path).close()
+        con = sqlite3.connect(path)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.close()
+    writer = ObservationWriter(path)
+    writer.start("t", SHA, 1)
+    assert (writer.written, writer.failed, writer.off) == (1, 0, False)
+    assert counts(path)["service_starts"] == 1
+
+
+def test_a_version_0_file_with_tables_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / OBS_FILE
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE something (x)")
+    con.close()
+    writer = ObservationWriter(path)
+    writer.start("t", SHA, 1)
+    assert writer.off and writer.last_error is not None
+    assert writer.last_error.startswith("recording off: SchemaError")
+    con = sqlite3.connect(path)
+    try:
+        assert [r[0] for r in con.execute("SELECT name FROM sqlite_master")] == ["something"]
+    finally:
+        con.close()
+
+
+# ------------------------------------------------------------------ journal mode
+
+
+def test_writer_switches_a_restored_copy_to_wal(tmp_path: Path) -> None:
+    source = tmp_path / "data" / OBS_FILE
+    source.parent.mkdir()
+    ObservationWriter(source).write(small_buffer())
+    done = backup_db(source, tmp_path / "backups", profile=OBSERVATIONS)
+    target = tmp_path / "restored" / OBS_FILE
+    restore_db(done.path, target, OBSERVATIONS)
+
+    def mode() -> str:
+        con = sqlite3.connect(target)
+        try:
+            return str(con.execute("PRAGMA journal_mode").fetchone()[0])
+        finally:
+            con.close()
+
+    assert mode() == "delete"
+    writer = ObservationWriter(target)
+    writer.write(small_buffer(call_id=8, bar_ts=NOW))
+    assert (writer.written, writer.last_error) == (1, None)
+    assert mode() == "wal"
 
 
 # ------------------------------------------------------------------ last error

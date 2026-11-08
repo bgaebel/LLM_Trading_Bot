@@ -6,9 +6,13 @@ and release behind each decision, and what GPT answered before it was parsed and
 Measurements only - nothing here feeds back into trading.
 
 ADR-0027: own ``PRAGMA user_version``; another version or shape is refused, never migrated. The
-file is created only when it is missing (``create``); a damaged file is never replaced.
+file is created only when it is missing (``create``, atomically); a damaged file is never
+replaced. An empty database (user_version 0, no tables) is initialised in place
+(``initialise_blank``), like ``open_db`` does for bot.db.
 """
 
+import contextlib
+import os
 import sqlite3
 from collections.abc import Mapping
 from pathlib import Path
@@ -122,19 +126,67 @@ def check_observations_schema(con: sqlite3.Connection) -> None:
             raise SchemaError(f"observations.{table}: columns {actual}, expected {expected}")
 
 
+def _blank(con: sqlite3.Connection) -> bool:
+    """user_version 0 and no tables: an empty database, nothing in it to lose."""
+    if con.execute("PRAGMA user_version").fetchone()[0] != 0:
+        return False
+    return con.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone() is None
+
+
+def _build(con: sqlite3.Connection) -> None:
+    con.execute("PRAGMA journal_mode=WAL")
+    con.executescript(f"BEGIN IMMEDIATE;{_SCHEMA}PRAGMA user_version={OBS_SCHEMA_VERSION};COMMIT;")
+
+
+def initialise_blank(con: sqlite3.Connection) -> bool:
+    """Give an empty database the schema in place, like ``open_db`` does for bot.db.
+
+    Only for a file with user_version 0 and no tables (e.g. left by ``create`` before it was
+    atomic); any other file is left exactly as it is. Returns whether it was initialised.
+    """
+    if not _blank(con):
+        return False
+    _build(con)
+    return True
+
+
+def _creating(path: Path) -> Path:
+    # Same directory, so the link below stays on one file system; hidden and with another
+    # suffix, so nothing that looks for observations.db or its -wal/-shm ever takes it.
+    return path.with_name(f".{path.name}.creating")
+
+
+def _remove(path: Path) -> None:
+    for leftover in (path, *(path.with_name(path.name + s) for s in ("-wal", "-shm", "-journal"))):
+        with contextlib.suppress(FileNotFoundError):
+            leftover.unlink()
+
+
 def create(path: Path) -> None:
     """Create a fresh observations DB at ``path``; refuses if anything already exists there.
 
     ADR-0027: only a missing file is created - an existing (maybe damaged) one is never replaced.
+    Atomic: the schema is built in a temporary file next to ``path``, committed and closed (the
+    WAL is checkpointed, no -wal/-shm stays), then linked to ``path`` only if that is still
+    missing. An interrupted attempt leaves at most the temporary file, never a half-made
+    ``path``; the next attempt removes it first.
     """
     if path.exists():
         raise FileExistsError(f"{path} exists - observations.db is never recreated")
-    con = sqlite3.connect(path, isolation_level=None)
+    temp = _creating(path)
+    _remove(temp)
+    # Exclusive and 600: the service's umask may narrow it further, never widen it.
+    os.close(
+        os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
+    )
     try:
-        con.execute("PRAGMA journal_mode=WAL")
-        con.executescript(
-            f"BEGIN IMMEDIATE;{_SCHEMA}PRAGMA user_version={OBS_SCHEMA_VERSION};COMMIT;"
-        )
-        check_observations_schema(con)
+        con = sqlite3.connect(temp, isolation_level=None)
+        try:
+            _build(con)
+            check_observations_schema(con)
+        finally:
+            con.close()  # the last connection: checkpoints the WAL and removes -wal/-shm
+        # Fails with FileExistsError if path appeared meanwhile: that file is never replaced.
+        os.link(temp, path)
     finally:
-        con.close()
+        _remove(temp)

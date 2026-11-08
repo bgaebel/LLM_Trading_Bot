@@ -40,6 +40,7 @@ from llm_trading_bot.paper.observations_schema import (
     OBS_FILE,
     check_observations_schema,
     create,
+    initialise_blank,
 )
 
 BUSY_TIMEOUT_MS = 1000
@@ -399,10 +400,12 @@ class ObservationWriter:
             self.last_error = f"recording off: {self.last_error}"
 
     def _open(self) -> sqlite3.Connection:
-        # ADR-0027: created only when missing; an existing file is opened as it is (mode=rw
-        # cannot create one), checked, and never replaced.
+        # ADR-0027: created only when missing (atomically: the name appears only with the whole
+        # schema); an existing file is opened as it is (mode=rw cannot create one), checked, and
+        # never replaced.
         if not self.path.exists():
-            create(self.path)
+            with contextlib.suppress(FileExistsError):  # made meanwhile: open that one
+                create(self.path)
         con = sqlite3.connect(
             self.path.resolve().as_uri() + "?mode=rw",
             uri=True,
@@ -411,7 +414,12 @@ class ObservationWriter:
         )
         try:
             con.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+            # Like open_db: an empty database (the remains of a create before it was atomic)
+            # gets the schema in place; anything else must already be exactly this schema.
+            initialise_blank(con)
             check_observations_schema(con)
+            # Like open_db, on every open: a restored copy comes back in rollback-journal mode.
+            con.execute("PRAGMA journal_mode=WAL")
         except BaseException:
             con.close()
             raise
