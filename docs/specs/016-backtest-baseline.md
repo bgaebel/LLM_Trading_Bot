@@ -1,6 +1,6 @@
 # Spec 016: Strategie-Labor II – Kerzenarchiv, Backtest mit dem Live-Code und Basisbericht v0.3.1
 
-- **Status:** freigegeben
+- **Status:** in Arbeit
 - **Issue:** – · **Branch:** `feat/s016-backtest` · **Meilenstein:** M3 (vorgezogen: Strategie-Labor)
 - **Erstellt:** 2026-11-07
 

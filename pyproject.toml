@@ -26,8 +26,11 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "--import-mode=importlib", "-m", "not net"]
-markers = ["net: talks to a real external API (Bitvavo, OpenAI); excluded by default, run with -m net"]
+addopts = ["-ra", "--strict-markers", "--import-mode=importlib", "-m", "not net and not slow"]
+markers = [
+    "net: talks to a real external API (Bitvavo, OpenAI); excluded by default, run with -m net",
+    "slow: lab benchmarks (Spec 016 AK11); excluded by default, run with -m slow",
+]
 # Shared test helpers (tests/fakes.py) are imported as top-level modules.
 pythonpath = ["tests"]
 
