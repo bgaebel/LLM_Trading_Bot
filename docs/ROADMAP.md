@@ -24,6 +24,7 @@ Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft,
 | 7 | Status-Ansicht nur auf 127.0.0.1, Zugriff per SSH-Tunnel; zuerst Login + Zugangsdaten, dann Übersicht; öffentlich per HTTPS mit Login | [006](specs/006-weboberflaeche.md) (Login, Zugangsdaten), [007](specs/007-uebersicht.md) (Übersicht), [010](specs/010-live-uebersicht.md) (live), [013](specs/013-oeffentlich-https.md) (öffentlich), [014](specs/014-rechtstexte.md) (Impressum, Datenschutz), [019](specs/019-uebersicht-ohne-login.md) (Übersicht ohne Login) | – |
 | 8 | Echtgeld-Schnittstelle als Entwurf (Interface + ADR-Vorschlag, keine Implementierung) | [012](specs/012-broker-naht.md) | – |
 | 9 | USDC-Depots: BTC über BTC/USDC ausgeführt, Geld in Euro (ADR-0030) | [020](specs/020-usdc-depots.md) | – |
+| 10 | Euro-Buy-&-Hold abschalten, Referenz ist Buy & Hold USDC (ADR-0031) | [021](specs/021-buyhold-aus.md) | – |
 
 ## M2 – Echtgeld-Minimalbetrieb ⬜
 **Ziel:** Echte Orders über die Bitvavo-Trading-API mit Kleinstbetrag, harten Limits (Positionsgröße,

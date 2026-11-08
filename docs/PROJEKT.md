@@ -17,7 +17,7 @@ Keine ungewollte echte Order und keine verfälschte Handelshistorie – im Zweif
 - [ ] Bot läuft 24/7 auf dem Hetzner-Server; Neustart/Reboot erzeugt keine doppelten Orders, Historie bleibt unverändert.
 - [ ] Jede Entscheidung ist nachvollziehbar gespeichert (Strategie-/Modellversion, Datenzeitstempel, Grund, Kostenannahmen).
 - [ ] Ohne Quellcodeeinsicht erkennbar: läuft der Bot, wann kam der letzte gültige Kurs, warum handelt er gerade (nicht).
-- [ ] Paper-Ergebnis nach Gebühren/Slippage gegen Buy & Hold ausgewiesen.
+- [ ] Paper-Ergebnis nach Gebühren/Slippage gegen Buy & Hold ausgewiesen (Referenz: Buy & Hold USDC, ADR-0031).
 - [ ] Echtgeld-Betrieb erst nach eigener Spec, eigenem ADR und ausdrücklicher Freigabe – mit harten Limits und Not-Aus.
 
 ## Nicht-Ziele

@@ -1,6 +1,6 @@
 # ADR-0012: Zwei GPT-Depots – gpt-6-luna als Haupt-Trader, gpt-6.1-sol als Gegenprobe
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0031](0031-euro-buyhold-abgeschaltet.md)
 - **Löst ab:** [ADR-0010](0010-mehrere-llm-depots.md)
 - **Datum:** 2026-11-06
 - **Bereich:** #llm #paper #budget
