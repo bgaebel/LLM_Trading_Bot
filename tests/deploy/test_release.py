@@ -1483,7 +1483,7 @@ def test_observations_backup_daily_is_its_own_invocation(box: Sandbox) -> None:
         f"ExecStart={trading_bot} backup --db {box.data}/bot.db"
         f" --dir {box.root}/var/backups/llm-trading-bot/daily --keep 14",
         f"ExecStart=-{trading_bot} backup --profile observations --if-exists"
-        f" --db {box.data}/observations.db --dir {obs_dir(box, 'daily')} --keep 14",
+        f" --db {box.data}/observations.db --dir {obs_dir(box, 'daily')} --keep 7",
     ]
 
 
