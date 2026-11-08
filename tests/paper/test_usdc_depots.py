@@ -11,11 +11,17 @@ import pytest
 from fakes import FakeClock, ScenarioClient, UsdcScenarioClient
 from golden_scenarios import NOW
 from llm_trading_bot.llm.agents import USDC_AGENTS, BotConfig, load_config
-from llm_trading_bot.market.models import QUOTED, Symbol
+from llm_trading_bot.market.models import QUOTED, MarketDataError, Quote, Symbol
 from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.cycle import paper_cycle, quote_problem
 from llm_trading_bot.paper.db import START_CASH, balance, open_db, write_tx
-from llm_trading_bot.paper.execution import BUYHOLD, Costs, fresh_quotes
+from llm_trading_bot.paper.execution import (
+    BUYHOLD,
+    BUYHOLD_USDC_MARKETS,
+    Costs,
+    fresh_quotes,
+    initialize_buyhold_usdc,
+)
 from llm_trading_bot.paper.risk import Controls
 
 CLASSIC = ("trend", "breakout", "meanrev", "ensemble")
@@ -227,3 +233,32 @@ def test_drawdown_stop_of_a_usdc_depot_sells_over_the_route_and_spares_its_bench
     p = balance(con, "trend-usdc")
     assert p["halted"] == 1 and p["btc"] == 0.0 and p["eth"] == 0.0
     assert balance(con, usdc.BUYHOLD_USDC)["halted"] == 0
+
+
+def test_buyhold_usdc_refuses_missing_or_broken_quotes(con: sqlite3.Connection) -> None:
+    client = UsdcScenarioClient()
+    book = {**client.quotes()}
+    for market in BUYHOLD_USDC_MARKETS:
+        without = {s: q for s, q in book.items() if s is not market}
+        with pytest.raises(MarketDataError, match="needs fresh quotes"):
+            initialize_buyhold_usdc(con, without, Costs(), when="2026-11-08T12:00:00+00:00")
+    crossed = {**book, Symbol.USDCEUR: Quote(0.9, 0.8)}
+    with pytest.raises(MarketDataError, match="invalid bid/ask"):
+        initialize_buyhold_usdc(con, crossed, Costs(), when="2026-11-08T12:00:00+00:00")
+    assert trades(con, usdc.BUYHOLD_USDC) == []
+    # BTC-EUR is not needed: the benchmark's BTC is priced over the route.
+    del book[Symbol.BTCEUR]
+    assert initialize_buyhold_usdc(con, book, Costs(), when="2026-11-08T12:00:00+00:00") == 2
+
+
+def test_usdc_depots_alone_decide_and_trade(tmp_path: Path) -> None:
+    config = BotConfig((), None, ("trend-usdc",))
+    con = db(tmp_path / "bot.db", config)
+    try:
+        report = paper_cycle(con, UsdcScenarioClient(), config, costs=Costs(), clock=lambda: NOW)
+        by = {(m.agent, m.symbol): m for m in report.markets}
+        assert by[("trend-usdc", Symbol.BTCEUR)].action == "BUY"
+        assert [t["symbol"] for t in trades(con, "trend-usdc")][:1] == ["BTCUSDC"]
+        assert [e.agent for e in report.equity] == ["trend-usdc", BUYHOLD, usdc.BUYHOLD_USDC]
+    finally:
+        con.close()

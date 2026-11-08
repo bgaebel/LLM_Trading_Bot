@@ -207,6 +207,7 @@ def test_drawdown_stop_sells_btc_over_the_route_at_the_bids(con: sqlite3.Connect
     assert (sale["symbol"], sale["side"], sale["qty"]) == ("BTCUSDC", "RISK_SELL", 0.1)
     close(sale["notional"], 0.1 * 73_500.0 * 0.9995 * 0.8975 * 0.9999)
     close(sale["fee"], sale["notional"] * 0.0015)
+    close(sale["slip_rate"], 0.0006)  # both legs, as in a BUY or SELL of the route
     p = balance(con, AGENT)
     assert p["halted"] == 1 and p["btc"] == 0.0
     close(p["cash"], 5_000.0 + sale["notional"] - sale["fee"])
@@ -318,3 +319,25 @@ def test_usdc_depot_with_a_neutral_route_matches_v031_bit_for_bit(
     # The cases do trade BTC over the route: a comparison of nothing would prove nothing.
     routed = [e for e in results[AGENT] if e[0] == "trades" and "'BTCEUR'" in e[1]]
     assert len(routed) > 10, len(routed)
+
+
+def test_selling_everything_sells_exactly_the_held_btc(con: sqlite3.Connection) -> None:
+    # 0.997 * mid / mid is 0.9970000000000001 in floats: without the cap at the held amount
+    # the trade would book more BTC than the depot holds (as in v0.3.1, ``exec sell qty cap``).
+    held = 0.997
+    assert held * usdc.btc_mid(QS) / usdc.btc_mid(QS) > held
+    with write_tx(con):
+        con.execute("UPDATE portfolios SET cash=1000, btc=? WHERE agent=?", (held, AGENT))
+        trade_to_target(con, AGENT, Symbol.BTCEUR, 0.0, QS, None, Costs(), executed_at=NOW)
+    (sale,) = trades(con)
+    assert (sale["side"], sale["qty"]) == ("SELL", held)
+    close(sale["notional"], held * 73_500.0 * 0.9995 * 0.8975 * 0.9999)
+    assert balance(con, AGENT)["btc"] == 0.0
+
+
+def test_the_route_quotes_do_not_cover_a_held_eth_without_its_quote() -> None:
+    p = {"agent": AGENT, "cash": 100.0, "btc": 0.0, "eth": 1.0}
+    route_only = {Symbol.BTCUSDC: BTC_USDC, Symbol.USDCEUR: USDC_EUR}
+    assert not covers(p, route_only, Symbol.BTCEUR)
+    assert covers({**p, "eth": 0.0}, route_only, Symbol.BTCEUR)
+    assert covers(p, QS, Symbol.BTCEUR)
