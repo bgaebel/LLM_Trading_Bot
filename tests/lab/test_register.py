@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from llm_trading_bot.lab import register as register_module
 from llm_trading_bot.lab.model import (
     DayPoint,
     DepotResult,
@@ -21,7 +22,6 @@ from llm_trading_bot.lab.model import (
     Trade,
     Variant,
 )
-from llm_trading_bot.lab import register as register_module
 from llm_trading_bot.lab.paths import CHAIN_FILE, LAB_DIR_ENV, RUNS_FILE
 from llm_trading_bot.lab.register import (
     CEILING_ENV,
