@@ -75,6 +75,20 @@ What a result means (the conventions ``lab.metrics`` and the report rely on):
 - ``dataset_sha256``: sha256 over ``Archive.checksum`` of every preloaded market and interval
   range, so a repeat on other data is a different trial (AK8).
 
+Execution over USDC (AK14, from Spec 020 AK8): the variant ``usdc`` runs the four USDC depots
+(``trend-usdc`` ...) instead of v0.3.1, through the same unchanged cycle with an explicit
+``BotConfig`` (never the ``BOT_USDC_AGENTS`` default); buy & hold runs along as live always
+does, ``buyhold-usdc`` with it. Signals come from the same BTC-EUR/ETH-EUR archive, the BTC is
+traded over the synthetic route quotes of ``history.UsdcRoute`` (BTC-USDC only exists from
+2024-07-01). Its own trial in the register, with version ``v0.3.1-usdc``. Every other variant
+runs exactly the v0.3.1 depots and buy & hold, with ``usdc=()`` written out.
+
+- A routed BTC trade is stored live under BTC-USDC; the lab books it under BTC-EUR, the
+  market it was decided on, so FIFO, cells and benchmark line up with the base run. Its
+  costs (``Variant.side_cost``) and ``spread["BTC-EUR"]`` are those of the route.
+- Weights, day values and ``end_liquidated`` value and sell that BTC over the route
+  (``paper.usdc.btc_mid``/``sell``), like the live depot.
+
 Diagnostic run (AK9): a variant with ``gap_window`` validates the higher intervals (15m, 1h, 4h)
 with that gap tolerance instead of the live ``GAP_WINDOW``; the 1m bars keep the live rule. The
 module global is read at call time, so it is set only while one of those intervals is checked,
@@ -106,10 +120,9 @@ from llm_trading_bot.lab.archive import (
     parse_cli,
 )
 from llm_trading_bot.lab.gitstate import git_runner
-from llm_trading_bot.lab.history import CandleRow, HistoricalClient, MemorySource
+from llm_trading_bot.lab.history import CandleRow, HistoricalClient, MemorySource, UsdcRoute
 from llm_trading_bot.lab.model import (
     CLASSIC,
-    DEPOTS,
     FIRST_GRADED,
     LEAD_ROWS,
     MARKETS,
@@ -127,8 +140,9 @@ from llm_trading_bot.lab.register import Register, RegisterError
 from llm_trading_bot.lab.spread import QuarterSpreads, stored_quarter_spreads
 from llm_trading_bot.llm.agents import BotConfig
 from llm_trading_bot.market import snapshot
-from llm_trading_bot.market.models import SYMBOLS, Quote, Symbol
+from llm_trading_bot.market.models import QUOTED, SYMBOLS, Quote, Symbol
 from llm_trading_bot.market.snapshot import INTERVALS, MarketSnapshot
+from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME, paper_cycle
 from llm_trading_bot.paper.db import SchemaError, open_db
 from llm_trading_bot.paper.execution import Costs, fresh_quotes
@@ -154,7 +168,7 @@ DIAGNOSTIC_GAP_WINDOW = 4
 """Gap tolerance of the diagnostic run: only the newest 4 bars of 15m, 1h and 4h must be gap-free
 (3 steps). Short enough that a single missing bar no longer blocks for days (60 bars of 1h =
 60 h, of 4h = 10 days), long enough that the newest bars every signal looks at are contiguous."""
-VARIANT_SETS = ("base", "cost-grid", "diagnostic", "all")
+VARIANT_SETS = ("base", "cost-grid", "diagnostic", "usdc", "all")
 EXIT_OK = 0
 """At least one quarter was graded and none aborted."""
 EXIT_ABORTED = 1
@@ -164,6 +178,8 @@ EXIT_REFUSED = 2
 """Nothing ran: sealed span, bad input or no archive."""
 
 BASE = Variant()
+USDC = Variant(name="usdc", usdc=True)
+"""AK14: the USDC depots at the live costs (ETH-EUR as base, BTC over the route)."""
 
 
 def cost_variant(roundtrip: float) -> Variant:
@@ -198,8 +214,10 @@ def _selection(selection: str) -> list[Variant]:
         return cost_grid()
     if selection == "diagnostic":
         return [diagnostic_variant()]
+    if selection == "usdc":
+        return [USDC]
     if selection == "all":
-        return [BASE, *cost_grid(), diagnostic_variant()]
+        return [BASE, *cost_grid(), diagnostic_variant(), USDC]
     raise ValueError(f"unknown variant set {selection!r}, expected one of {VARIANT_SETS}")
 
 
@@ -399,12 +417,20 @@ def _dataset_sha256(arch: Archive, pre: _Preload, end: int) -> str:
     return digest.hexdigest()
 
 
+def holding_mid(agent: str, symbol: Symbol, qs: Mapping[Symbol, Quote]) -> float | None:
+    """EUR per unit as the live depot values it: the route's mid for the BTC of a USDC depot
+    (``paper.usdc.btc_mid``), else the market's own; None without the quotes it needs."""
+    if any(m not in qs for m in usdc.route_markets(agent, symbol)):
+        return None
+    return usdc.btc_mid(qs) if usdc.routed(agent, symbol) else qs[symbol].mid
+
+
 def round_weights(eq: Equity, qs: Mapping[Symbol, Quote]) -> dict[str, float]:
     """Market -> share of the depot value held in it in one round, at that round's mid."""
     weights = {}
     for symbol, qty in ((Symbol.BTCEUR, eq.btc), (Symbol.ETHEUR, eq.eth)):
-        quote = qs.get(symbol)
-        worth = qty * quote.mid if quote is not None and qty else 0.0
+        mid = holding_mid(eq.agent, symbol, qs)
+        worth = qty * mid if mid is not None and qty else 0.0
         weights[symbol.market] = worth / eq.value if eq.value > 0 else 0.0
     return weights
 
@@ -467,6 +493,8 @@ class _Tracker:
             self.pending[eq.agent] = (day, eq, qs)
             self.exposure.setdefault(eq.agent, _Exposure()).add(round_weights(eq, qs))
         for symbol, quote in qs.items():
+            if symbol not in SYMBOLS:
+                continue  # the route's quote-only markets have no benchmark of their own
             market = symbol.market
             mid = quote.mid
             seen = self.mid_day.get(market)
@@ -499,7 +527,11 @@ class _Tracker:
         _, eq, qs = item
         sold = eq.cash
         for symbol, qty in ((Symbol.BTCEUR, eq.btc), (Symbol.ETHEUR, eq.eth)):
-            if qty > 0:
+            if qty > 0 and usdc.routed(agent, symbol):
+                # Over the route at both bids with both legs' fees, as the live depot sells.
+                fill = usdc.sell(qty, qs)
+                sold += fill.notional - fill.fee
+            elif qty > 0:
                 gross = qty * qs[symbol].bid * (1 - self.costs.slippage)
                 sold += gross - gross * self.costs.fee_rate
         return float(eq.value), float(sold)
@@ -511,11 +543,13 @@ def _trades(con: sqlite3.Connection) -> dict[str, list[Trade]]:
         "SELECT t.ts, t.agent, t.symbol, t.side, t.qty, t.fill, t.notional, t.fee, d.inputs"
         " FROM trades t LEFT JOIN decisions d ON d.id = t.decision_id ORDER BY t.id"
     ):
+        symbol = Symbol[r["symbol"]]
         out.setdefault(r["agent"], []).append(
             Trade(
                 ts=_epoch(r["ts"]),
                 agent=r["agent"],
-                market=Symbol[r["symbol"]].market,
+                # The decided market (module doc): a routed BTC trade is stored as BTC-USDC.
+                market=Symbol.BTCEUR.market if symbol is Symbol.BTCUSDC else symbol.market,
                 side=r["side"],
                 qty=float(r["qty"]),
                 fill=float(r["fill"]),
@@ -538,14 +572,17 @@ def _actions(con: sqlite3.Connection) -> dict[str, dict[str, int]]:
 
 
 def _quality(
-    con: sqlite3.Connection, quarter: Quarter, track: _Tracker
+    con: sqlite3.Connection,
+    quarter: Quarter,
+    track: _Tracker,
+    strategies: Sequence[str] = CLASSIC,
 ) -> dict[str, MarketQuality]:
     out = {}
     for symbol in SYMBOLS:
         market = symbol.market
         due = decided = 0
-        for agent in CLASSIC:
-            step = STRATEGY_TIMEFRAME[agent] * MINUTE
+        for agent in strategies:
+            step = STRATEGY_TIMEFRAME[usdc.strategy_of(agent)] * MINUTE
             halted = track.halted_at.get(agent)
             # A stop in round t: bars decided in earlier rounds closed at or before t - 60.
             before = None if halted is None else halted - OFFSET
@@ -589,11 +626,12 @@ def run_quarter(
         )
     began = time.perf_counter()
     model = QuarterSpreads(spreads or {})
-    result = QuarterResult(
-        quarter,
-        variant,
-        spread={m: model.spread(m, quarter.start) for m in MARKETS},
-    )
+    route = UsdcRoute() if variant.usdc else None
+    spread = {m: model.spread(m, quarter.start) for m in MARKETS}
+    if route is not None:
+        # What a BTC trade pays in this variant (QuarterResult.spread): the route's books.
+        spread[Symbol.BTCEUR.market] = route.spread
+    result = QuarterResult(quarter, variant, spread=spread)
     if quarter.start % MINUTE or quarter.end <= quarter.start:
         raise ValueError(f"quarter must start on a minute and not be empty: {quarter}")
     with Archive.open_readonly(archive_path) as arch:
@@ -606,13 +644,23 @@ def run_quarter(
         result.status, result.error = "incomplete", "; ".join(problems)
         return result
     clock = _SimClock(quarter.start + OFFSET)
-    client = HistoricalClient(pre.source, model, clock, start=pre.first_open, end=quarter.end)
+    client = HistoricalClient(
+        pre.source, model, clock, start=pre.first_open, end=quarter.end, route=route
+    )
     costs = Costs(variant.fee_rate, variant.slippage)
-    config = BotConfig(classic=CLASSIC, llm=None)
+    # Written out, never the BOT_USDC_AGENTS default (module doc).
+    if variant.usdc:
+        config = BotConfig(classic=(), llm=None, usdc=variant.strategies)
+    else:
+        config = BotConfig(classic=CLASSIC, llm=None, usdc=())
+    depots = variant.depots
+    if set(config.depots) != set(depots):
+        raise ValueError(f"variant {variant.name}: cycle runs {config.depots}, not {depots}")
+    stored = QUOTED if variant.usdc else SYMBOLS
     controls = Controls()
     codes = _FailureCodes()
     track = _Tracker(costs)
-    con = open_db(Path(":memory:"), agents=DEPOTS)
+    con = open_db(Path(":memory:"), agents=depots)
     try:
         with gap_tolerance(variant.gap_window):
             for t in range(quarter.start + OFFSET, quarter.end, MINUTE):
@@ -627,16 +675,16 @@ def run_quarter(
                     controls=controls,
                     observations=codes,
                 )
-                quotes = fresh_quotes(con, now_epoch=t)
+                quotes = fresh_quotes(con, now_epoch=t, markets=stored)
                 track.round(t, report, codes.codes, codes.blocked, quotes)
                 result.rounds += 1
         track.finish()
         trades = _trades(con)
         actions = _actions(con)
-        result.quality = _quality(con, quarter, track)
+        result.quality = _quality(con, quarter, track, variant.strategies)
     finally:
         con.close()
-    for agent in DEPOTS:
+    for agent in depots:
         end_mid, end_sold = track.end_values(agent)
         result.depots[agent] = DepotResult(
             agent,
@@ -817,7 +865,8 @@ def _parser(out: TextIO) -> LabArgumentParser:
         "--variant",
         choices=VARIANT_SETS,
         default="base",
-        help="base = Live-Kosten; cost-grid = andere Kosten; diagnostic = Lückentoleranz; all",
+        help="base = Live-Kosten; cost-grid = andere Kosten; diagnostic = Lückentoleranz; "
+        "usdc = USDC-Depots, BTC über USDC; all = alle",
     )
     p.add_argument(
         "--workers",

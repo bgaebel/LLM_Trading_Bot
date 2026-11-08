@@ -863,3 +863,61 @@ def test_cell_with_one_round_trip_shows_no_band() -> None:
     )
     assert any(" bis " in r[5] for r in rows if r[4] != "1")
     assert "t-Verteilung" in section(markdown, "Marktphasen")
+
+
+USDC_SMALL = {
+    "trend-usdc": 3,
+    "breakout-usdc": 2,
+    "meanrev-usdc": 1,
+    "ensemble-usdc": 4,
+    "buyhold": 0,
+    "buyhold-usdc": 0,
+}
+
+
+def test_usdc_variant_shown_next_to_base() -> None:
+    """Spec 016 AK14: the usdc run is its own section "Ausführung über USDC", paired with the
+    base depots over the quarters graded in both - never a point of the cost grid."""
+    routed = Variant(name="usdc", usdc=True)
+    cheap = Variant(name="cost-0.3", fee_rate=0.001, slippage=0.0005)
+    results = {
+        "base": [result("2022Q1", SMALL), result("2022Q2", SMALL)],
+        "cost-0.3": [result("2022Q1", SMALL, variant=cheap)],
+        "usdc": [
+            result("2022Q1", USDC_SMALL, variant=routed, drift=0.0007),
+            result("2022Q2", USDC_SMALL, variant=routed, drift=0.0007, share=0.85),
+        ],
+    }
+    markdown, html_text = build(results)
+    part = section(markdown, "Ausführung über USDC")
+    assert "v0.3.1-usdc" in part and "BTC-USDC gibt es erst ab 2024-07-01" in part
+    assert "1,1 Basispunkten" in part and "3,0 Basispunkten" in part
+    assert "0,42 %" in part and "0,60 %" in part
+    assert "nur Quartale, die in beiden Läufen gewertet sind: 2022Q1." in part
+    assert "Nur im Basislauf gewertet, nicht verglichen: 2022Q2." in part
+    rows = {r[0]: r for r in table_after(markdown, "## Ausführung über USDC")}
+    assert list(rows) == [
+        "trend / trend-usdc",
+        "breakout / breakout-usdc",
+        "meanrev / meanrev-usdc",
+        "ensemble / ensemble-usdc",
+        "Buy & Hold / Buy & Hold über USDC",
+    ]
+    # Same quarters on both sides: 3 round trips each.
+    assert rows["trend / trend-usdc"][7:9] == ["3", "3"]
+    assert all("[" in r[2] for r in rows.values())
+    per_quarter = table_after(markdown, "### Je Quartal (zum Mittelkurs bewertet)")
+    assert {r[0] for r in per_quarter} == {"2022Q1"}
+    assert [r[1] for r in per_quarter][:2] == ["trend-usdc", "breakout-usdc"]
+    # Never in the cost grid, never as a diagnosis; listed with its kind among the trials.
+    grid = table_after(markdown, "### Kostenraster: Entscheidungen reagieren auf Kosten")
+    assert {r[0] for r in grid} == {"base", "cost-0.3"}
+    assert "usdc" not in section(markdown, "Diagnose: Was kosten die Sperrzeiten?")
+    kinds = {r[0]: r[1] for r in table_after(markdown, "## Zahl der Versuche")}
+    assert kinds["usdc"] == "Ausführung über USDC" and kinds["base"] == "Basis"
+    assert "Ausführung über USDC" in html_text
+
+
+def test_without_usdc_run_the_section_says_so() -> None:
+    markdown, _ = build({"base": [result("2022Q1", SMALL)]})
+    assert "Kein Lauf der Variante „usdc“" in section(markdown, "Ausführung über USDC")

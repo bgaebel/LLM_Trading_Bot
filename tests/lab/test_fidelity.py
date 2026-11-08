@@ -1,7 +1,8 @@
 """Spec 016 AK5: the fidelity check rebuilds every live snapshot and lists each deviation.
 
 The "live" databases are written by the unchanged ``paper_cycle`` (classic depots, a GPT depot
-with a scripted model, buy & hold) over a synthetic market whose client hides a forming bar
+with a scripted model, buy & hold; a second run adds the USDC depots of Spec 020 with their
+route quotes) over a synthetic market whose client hides a forming bar
 younger than 5 s, as Bitvavo does until the bar's first trade. The rebuild reads the same rows
 from an archive, where every bar has a row - the approximation the check must explain.
 """
@@ -28,6 +29,7 @@ from llm_trading_bot.lab.fidelity import (
     FORMING,
     NOT_COVERED,
     ROUGH,
+    ROUTE_MISSING,
     UNREADABLE,
     check,
     cli_main,
@@ -42,19 +44,21 @@ from llm_trading_bot.lab.history import (
     ConstantSpreads,
     HistoricalClient,
     MemorySource,
+    UsdcRoute,
 )
-from llm_trading_bot.lab.model import FIDELITY_MIN, MARKETS, FidelitySummary
+from llm_trading_bot.lab.model import FIDELITY_MIN, MARKETS, USDC_AGENTS, FidelitySummary
 from llm_trading_bot.lab.paths import CANDLES_FILE, REPORTS_DIR
 from llm_trading_bot.llm.agents import BotConfig, load_config
 from llm_trading_bot.market.bitvavo import CANDLE_LIMIT, BitvavoClient
-from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.market.models import Quote, Symbol
 from llm_trading_bot.market.snapshot import INTERVALS, MarketClient
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
-from llm_trading_bot.paper.execution import BUYHOLD, Costs
+from llm_trading_bot.paper.execution import Costs
 from llm_trading_bot.paper.observations import ObservationBuffer, ObservationWriter
 from llm_trading_bot.paper.observations_schema import create
 from llm_trading_bot.paper.risk import Controls
+from llm_trading_bot.paper.usdc import BUYHOLD_USDC
 
 P = 1_793_577_600
 """2026-11-02T00:00:00Z, aligned to every interval; the first round is P + 5 s."""
@@ -112,7 +116,7 @@ def record(
 ) -> Live:
     """The service's round: paper_cycle with an observation buffer, written after the round."""
     live = Live(folder / "bot.db", folder / "observations.db")
-    con = open_db(live.bot, agents=(*config.agents, BUYHOLD))
+    con = open_db(live.bot, agents=config.depots)
     writer = ObservationWriter(live.obs)
     try:
         for at, client in clients:
@@ -135,8 +139,14 @@ def record(
     return live
 
 
-def run_live(folder: Path) -> Live:
-    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": AGENTS})
+def run_live(folder: Path, *, with_usdc: bool = False) -> Live:
+    """``with_usdc``: the server's default (BOT_USDC_AGENTS missing = all four on), the route
+    quotes from the BTC-EUR mid; otherwise written out without them (the v0.3.1 depots)."""
+    env = {"OPENAI_API_KEY": KEY, "BOT_AGENTS": AGENTS}
+    if not with_usdc:
+        env["BOT_USDC_AGENTS"] = ""
+    config = load_config(env)
+    assert config.usdc == (USDC_AGENTS if with_usdc else ())
     src = source()
     clients: list[tuple[int, MarketClient]] = [
         (
@@ -148,6 +158,7 @@ def run_live(folder: Path) -> Live:
                 start=P - LEAD * 240 * 60,
                 end=END,
                 forming_hint=live_hint,
+                route=UsdcRoute() if with_usdc else None,
             ),
         )
         for at in ROUNDS
@@ -158,6 +169,19 @@ def run_live(folder: Path) -> Live:
 @pytest.fixture(scope="module")
 def live(tmp_path_factory: pytest.TempPathFactory) -> Live:
     return run_live(tmp_path_factory.mktemp("live"))
+
+
+@pytest.fixture(scope="module")
+def live_usdc(tmp_path_factory: pytest.TempPathFactory) -> Live:
+    return run_live(tmp_path_factory.mktemp("live_usdc"), with_usdc=True)
+
+
+@pytest.fixture
+def copy_usdc(live_usdc: Live, tmp_path: Path) -> Live:
+    out = Live(tmp_path / "bot.db", tmp_path / "observations.db")
+    out.bot.write_bytes(live_usdc.bot.read_bytes())
+    out.obs.write_bytes(live_usdc.obs.read_bytes())
+    return out
 
 
 @pytest.fixture
@@ -961,3 +985,165 @@ def test_real_captures_rebuilt_exactly_with_observations(tmp_path: Path) -> None
     assert all(d["utc"].endswith(":00:05+00:00") for d in found)
     assert {round((d["rebuilt"] - d["live"]) * 1e5) for d in found} == {8}
     assert approx.equal_action == approx.compared
+
+
+# ------------------------------------------------------------------ USDC depots (Spec 020)
+
+
+def _count(path: Path, sql: str, *args: object) -> int:
+    con = sqlite3.connect(path)
+    try:
+        return int(con.execute(sql, args).fetchone()[0])
+    finally:
+        con.close()
+
+
+USDC_BTC = "SELECT COUNT(*) FROM decisions WHERE agent LIKE '%-usdc' AND agent != ? AND symbol=?"
+FIFTEEN = {"breakout-usdc", "meanrev-usdc", "ensemble-usdc"}
+"""The USDC depots on 15m bars: they decide in every round; trend-usdc (1h) at hour marks."""
+
+
+def test_usdc_decisions_rebuilt_on_the_route_costs(live_usdc: Live) -> None:
+    """Every decision of a USDC depot is rebuilt like its classic twin; the BTC ones on the
+    route's costs from the round's recorded BTC-USDC/USDC-EUR books - equal to the last digit,
+    unrounded indicators included."""
+    btc = _count(live_usdc.bot, USDC_BTC, BUYHOLD_USDC, "BTCEUR")
+    eth = _count(live_usdc.bot, USDC_BTC, BUYHOLD_USDC, "ETHEUR")
+    assert btc >= 2 * len(ROUNDS) and eth >= 2 * len(ROUNDS)
+    assert _count(live_usdc.bot, "SELECT COUNT(*) FROM trades WHERE agent=?", BUYHOLD_USDC) == 2
+    with opened(live_usdc, False) as (bot, _):
+        recs, unreadable = recorded_snapshots(bot)
+    assert not unreadable
+    usdc_recs = [r for r in recs if r.agent.endswith("-usdc")]
+    assert len(usdc_recs) == btc + eth
+    assert BUYHOLD_USDC not in {r.agent for r in recs}
+    assert all(r.route == (r.symbol is BTC) for r in usdc_recs)
+    s = checked(live_usdc, obs=True)
+    assert failing(s) == []
+    assert not [d for d in s.deviations if d["kind"] == "skipped"]
+    assert sum(s.compared.values()) == len(recs)
+    assert s.equal_action == s.indicators_ok == s.compared
+    assert f"{btc} BTC-Entscheidungen der USDC-Depots" in s.note
+
+
+def test_usdc_btc_without_observations_listed_not_compared(live_usdc: Live, few: None) -> None:
+    """Without observations.db the route quotes are unknown: the BTC decisions of the USDC
+    depots are listed with their cause, never compared on BTC-EUR costs; their ETH decisions
+    and everything else are compared as before."""
+    btc = _count(live_usdc.bot, USDC_BTC, BUYHOLD_USDC, "BTCEUR")
+    s = checked(live_usdc, obs=False)
+    skipped = [d for d in s.deviations if d["kind"] == "skipped"]
+    assert len(skipped) == btc
+    assert {(d["market"], d["cause"]) for d in skipped} == {("BTC-EUR", ROUTE_MISSING)}
+    assert all(d["agent"].endswith("-usdc") for d in skipped)
+    assert {d["cause"] for d in failing(s)} <= {FORMING}
+    with_obs = checked(live_usdc, obs=True)
+    assert sum(s.compared.values()) + btc == sum(with_obs.compared.values())
+    assert s.compared["ETH-EUR"] == with_obs.compared["ETH-EUR"]
+    assert f"{btc} davon BTC-Entscheidungen der USDC-Depots ohne aufgezeichnete" in s.note
+    assert f"Übersprungen: {btc}" in summary_text(s)
+
+
+def test_usdc_round_without_route_books_listed(copy_usdc: Live) -> None:
+    con = sqlite3.connect(copy_usdc.obs)
+    (round_id,) = con.execute(
+        "SELECT id FROM rounds WHERE ts<=? ORDER BY id DESC LIMIT 1", (fidelity._iso(ROUNDS[2]),)
+    ).fetchone()
+    con.close()
+    edit(copy_usdc.obs, "DELETE FROM books WHERE round_id=? AND symbol='BTCUSDC'", round_id)
+    s = checked(copy_usdc, obs=True)
+    skipped = [d for d in s.deviations if d["kind"] == "skipped"]
+    assert skipped and {d["cause"] for d in skipped} == {ROUTE_MISSING}
+    assert {fidelity._epoch(d["utc"]) for d in skipped} == {ROUNDS[2]}
+    assert {d["agent"] for d in skipped} == FIFTEEN
+    assert failing(s) == []
+
+
+def test_usdc_route_spread_change_is_found(copy_usdc: Live) -> None:
+    """The rebuild really uses the recorded route books: a wider USDC-EUR book in one round
+    moves the cost input of exactly that round's USDC BTC decisions."""
+    con = sqlite3.connect(copy_usdc.obs)
+    (round_id,) = con.execute(
+        "SELECT id FROM rounds WHERE ts<=? ORDER BY id DESC LIMIT 1", (fidelity._iso(ROUNDS[3]),)
+    ).fetchone()
+    con.close()
+    edit(
+        copy_usdc.obs,
+        "UPDATE books SET ask=ask*1.001 WHERE round_id=? AND symbol='USDCEUR'",
+        round_id,
+    )
+    s = checked(copy_usdc, obs=True)
+    found = failing(s)
+    assert found and all(not d["cause"] for d in found)
+    assert {(d["agent"], d["market"]) for d in found} == {(a, "BTC-EUR") for a in FIFTEEN}
+    assert {fidelity._epoch(d["utc"]) for d in found} == {ROUNDS[3]}
+    assert "indicators.roundtrip_cost_pct" in {d["field"] for d in found}
+    assert s.established["BTC-EUR"] is False
+
+
+def test_usdc_route_fee_stored_must_be_the_route(copy_usdc: Live) -> None:
+    row_id, inputs = classic_row(copy_usdc.bot, agent="trend-usdc", round_at=ROUNDS[4])
+    assert inputs["taker_fee_per_side_pct"] == 0.15
+    inputs["taker_fee_per_side_pct"] = 0.25
+    edit(copy_usdc.bot, "UPDATE decisions SET inputs=? WHERE id=?", json.dumps(inputs), row_id)
+    (d,) = failing(checked(copy_usdc, obs=True))
+    assert (d["agent"], d["field"], d["live"], d["rebuilt"]) == (
+        "trend-usdc",
+        "taker_fee_per_side_pct",
+        0.25,
+        0.15,
+    )
+
+
+def test_route_quotes_follow_the_fetches_of_the_round(tmp_path: Path) -> None:
+    """start, then a recheck that only refreshed USDC-EUR (BTC-USDC rejected): two quote sets,
+    the second keeping the start's BTC-USDC; rejected rows and other purposes never count."""
+    path = tmp_path / "observations.db"
+    create(path)
+    con = sqlite3.connect(path)
+    t0, t1 = fidelity._iso(P + 5), fidelity._iso(P + 30)
+    rows = [
+        (t0, "BTCEUR", "start", 60_000.0, 60_001.0),
+        (t0, "BTCUSDC", "start", 66_000.0, 66_002.0),
+        (t0, "USDCEUR", "start", 0.9, 0.9001),
+        (t0, "BTCUSDC", "snapshot", 1.0, 2.0),
+        (t1, "USDCEUR", "recheck", 0.91, 0.9101),
+        (t1, "BTCUSDC", "recheck:rejected:spread", 1.0, 9.0),
+        (t1, "BTCUSDC", "after_llm", 5.0, 6.0),
+    ]
+    with con:
+        con.execute("INSERT INTO rounds(id, ts, release) VALUES (1, ?, 'r')", (t0,))
+        con.executemany(
+            "INSERT INTO books(round_id, ts, symbol, purpose, bid, ask) VALUES (1, ?, ?, ?, ?, ?)",
+            rows,
+        )
+    con.close()
+    ro = open_readonly(path)
+    try:
+        obs = fidelity.Observations(ro)
+        got = obs.route_quotes(P + 5)
+        assert obs.route_quotes(P - 60) == []
+    finally:
+        ro.close()
+    btc = Quote(66_000.0, 66_002.0)
+    assert got == [
+        {Symbol.BTCUSDC: btc, Symbol.USDCEUR: Quote(0.9, 0.9001)},
+        {Symbol.BTCUSDC: btc, Symbol.USDCEUR: Quote(0.91, 0.9101)},
+    ]
+
+
+def test_real_captures_with_usdc_depots_rebuilt_exactly(tmp_path: Path) -> None:
+    """The frozen real responses (BTC-USDC and USDC-EUR from the same /ticker/book) through the
+    real BitvavoClient with the four USDC depots: rebuilt exactly with observations."""
+    clients: list[tuple[int, MarketClient]] = [
+        (c.at, BitvavoClient(FakeTransport(c.handler()))) for c in captures()
+    ]
+    config = BotConfig(("trend", "breakout", "meanrev", "ensemble"), None, USDC_AGENTS)
+    live = record(tmp_path, config, clients, False)
+    exact = checked(live, obs=True, src=merged(captures()))
+    assert failing(exact) == []
+    assert not [d for d in exact.deviations if d["kind"] == "skipped"]
+    assert exact.equal_action == exact.indicators_ok == exact.compared
+    btc = _count(live.bot, USDC_BTC, BUYHOLD_USDC, "BTCEUR")
+    assert btc >= 2 * len(FIFTEEN)  # two 15m bars (and the 1h bar) across the captures
+    assert f"{btc} BTC-Entscheidungen der USDC-Depots" in exact.note

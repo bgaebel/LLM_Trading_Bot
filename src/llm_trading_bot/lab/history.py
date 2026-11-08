@@ -15,6 +15,11 @@ check passes it as ``forming_hint`` and the window is rebuilt exactly.
 
 Never a value from the future: candles come only from rows that had closed at the clock, and the
 quote mid is the close of the last minute that had ended at the clock.
+
+Spec 016 AK14: with ``route`` (the ``usdc`` variant) the book also holds the two quote-only
+markets of the USDC route (Spec 020), explicitly synthesised from the BTC-EUR mid because
+BTC-USDC has no history before 2024-07-01 (``UsdcRoute``). Without it the book has exactly the
+v0.3.1 markets, as before.
 """
 
 from bisect import bisect_left, bisect_right
@@ -23,6 +28,7 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Protocol
 
+from llm_trading_bot.lab.model import BTC_USDC_SPREAD, USDC_EUR_RATE, USDC_EUR_SPREAD
 from llm_trading_bot.market.bitvavo import (
     CANDLE_LIMIT,
     TIMEFRAMES,
@@ -30,6 +36,7 @@ from llm_trading_bot.market.bitvavo import (
     _parse_candle,
 )
 from llm_trading_bot.market.models import (
+    QUOTE_MARKETS,
     SYMBOLS,
     Candle,
     ClosedCandles,
@@ -75,6 +82,32 @@ class ConstantSpreads:
 
     def half_spread(self, market: str, epoch: int) -> float:
         return self.markets.get(market, self.default)
+
+
+@dataclass(frozen=True)
+class UsdcRoute:
+    """Synthetic quotes of the USDC route at the clock (Spec 016 AK14, assumptions in
+    ``lab.model``): USDC-EUR around ``usdc_eur``, BTC-USDC around ``BTC-EUR mid / usdc_eur``,
+    each with its full spread (a fraction of mid) split evenly around the mid."""
+
+    usdc_eur: float = USDC_EUR_RATE
+    usdc_eur_spread: float = USDC_EUR_SPREAD
+    btc_usdc_spread: float = BTC_USDC_SPREAD
+
+    @property
+    def spread(self) -> float:
+        """Full spread a BTC trade over the route pays: both books, both crossed."""
+        return self.usdc_eur_spread + self.btc_usdc_spread
+
+    def quotes(self, btc_eur_mid: float) -> dict[Symbol, Quote]:
+        out = {}
+        for symbol, centre, spread in (
+            (Symbol.BTCUSDC, btc_eur_mid / self.usdc_eur, self.btc_usdc_spread),
+            (Symbol.USDCEUR, self.usdc_eur, self.usdc_eur_spread),
+        ):
+            offset = centre * spread / 2
+            out[symbol] = Quote(centre - offset, centre + offset)
+        return out
 
 
 class MemorySource:
@@ -143,6 +176,7 @@ class HistoricalClient:
         intervals: Sequence[int] = INTERVALS,
         quotes: Callable[[], QuoteBook] | None = None,
         forming_hint: FormingHint | None = None,
+        route: UsdcRoute | None = None,
     ) -> None:
         if start >= end:
             raise ValueError(f"empty preload range {start}..{end}")
@@ -152,6 +186,7 @@ class HistoricalClient:
         self._end = end
         self._override = quotes
         self._forming_hint = forming_hint
+        self._route = route
         self._markets = tuple(markets)
         self._series: dict[tuple[Symbol, int], _Series] = {}
         # The quotes need the 1m series even when the candles of 1m are not asked for.
@@ -215,6 +250,7 @@ class HistoricalClient:
         result: dict[Symbol, Quote] = {}
         errors: dict[Symbol, str] = {}
         codes: dict[Symbol, str] = {}
+        closes: dict[Symbol, float] = {}
         for symbol in self._markets:
             series = self._series[(symbol, 1)]
             # The last minute that had ended at the clock (ts + 60 <= now): its close is the
@@ -226,6 +262,7 @@ class HistoricalClient:
                 codes[symbol] = "quote_missing"
                 continue
             mid = series.candles[last].close
+            closes[symbol] = mid
             half = self._spreads.half_spread(symbol.market, int(now))
             quote = Quote(mid * (1 - half), mid * (1 + half))
             try:
@@ -240,4 +277,31 @@ class HistoricalClient:
             if symbol not in result and symbol not in errors:
                 errors[symbol] = "history: market not loaded"
                 codes[symbol] = "quote_missing"
+        if self._route is not None:
+            self._route_quotes(closes.get(Symbol.BTCEUR), result, errors, codes)
         return QuoteBook(result, errors, codes=codes)
+
+    def _route_quotes(
+        self,
+        btc_eur_mid: float | None,
+        result: dict[Symbol, Quote],
+        errors: dict[Symbol, str],
+        codes: dict[Symbol, str],
+    ) -> None:
+        """The synthetic route quotes, from the same last-trade mid as BTC-EUR's own quote
+        (even where that one failed its checks: the route has its own books). Checked like
+        live; without a BTC-EUR mid both are missing, fail closed."""
+        assert self._route is not None
+        if btc_eur_mid is None:
+            for symbol in QUOTE_MARKETS:
+                errors[symbol] = "history: no BTC-EUR mid to derive the USDC route from"
+                codes[symbol] = "quote_missing"
+            return
+        for symbol, quote in self._route.quotes(btc_eur_mid).items():
+            try:
+                quote.validate()
+            except MarketDataError as exc:
+                errors[symbol] = f"history: unusable quote ({exc})"
+                codes[symbol] = exc.code
+                continue
+            result[symbol] = quote

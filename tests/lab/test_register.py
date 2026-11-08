@@ -257,6 +257,50 @@ def test_config_hash_and_trial_key() -> None:
     assert trial_key(base, q1, Variant()) != trial_key(base, q2, Variant())
 
 
+def test_variant_field_added_later_keeps_earlier_hashes() -> None:
+    """Spec 016 AK14 added ``Variant.usdc``: a run recorded before has no such key in its
+    stored result, its config hash was computed without it, and it must still verify."""
+    before = {
+        "strategy_version": "v0.3.1",
+        "depots": sorted(["trend", "breakout", "meanrev", "ensemble", "buyhold"]),
+        "variant": {
+            "name": "base",
+            "fee_rate": 0.0025,
+            "slippage": 0.0005,
+            "gap_window": None,
+            "diagnostic": False,
+        },
+        "commit": COMMIT,
+    }
+    assert config_hash(Variant(), COMMIT) == sha256_text(canonical(before))
+    routed = Variant(name="usdc", usdc=True)
+    assert config_hash(routed, COMMIT) != config_hash(Variant(name="usdc"), COMMIT)
+    # A result as the code before the field stored it (no "usdc" key): verify() recomputes the
+    # hash from exactly this, and the append-only register can never rewrite the old row.
+    data = json.loads(result().to_json())
+    del data["variant"]["usdc"]
+    old = QuarterResult.from_json(json.dumps(data))
+    assert old.variant == Variant()
+    assert config_hash(old.variant, COMMIT) == sha256_text(canonical(before))
+
+
+def test_usdc_run_recorded_with_its_own_depots_and_version(tmp_path: Path) -> None:
+    routed = Variant(name="usdc", usdc=True)
+    with open_reg(tmp_path) as reg:
+        reg.record(result())
+        reg.record(result(variant=routed))
+        reg.record_aborted(Quarter.parse("2022Q2"), routed, "boom", dataset_sha256=DATA)
+        assert reg.verify().ok
+        rows = reg.con.execute("SELECT variant, strategy_version, depots FROM runs").fetchall()
+    assert [(r[0], r[1]) for r in rows] == [
+        ("base", "v0.3.1"),
+        ("usdc", "v0.3.1-usdc"),
+        ("usdc", "v0.3.1-usdc"),
+    ]
+    assert json.loads(rows[1][2]) == sorted(routed.depots)
+    assert "buyhold-usdc" in routed.depots and "trend" not in routed.depots
+
+
 def test_diagnostic_and_filters(tmp_path: Path) -> None:
     diag = Variant(name="gap-tolerance", gap_window=3, diagnostic=True)
     with open_reg(tmp_path) as reg:

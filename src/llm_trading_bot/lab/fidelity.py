@@ -29,6 +29,15 @@ cannot be read is listed as unreadable (only buy & hold has no snapshot to compa
 ``FIDELITY_MIN`` comparisons per market fidelity is "nicht belegt"
 (``FidelitySummary.established``).
 
+USDC depots (Spec 020): ``trend-usdc`` & co. are rebuilt like their classic twin (the same
+rules on the same snapshot, ``paper.usdc.strategy_of``); their ETH costs come from the payload
+as above. Their BTC decided on the route's costs, ``paper.usdc.roundtrip_cost`` over the
+BTC-USDC and USDC-EUR quotes, which the payload does not hold: they are read from the round's
+recorded books (``observations.db``, fetches ``start``/``recheck``, the ones the round's
+depots read back). Without observations, or when the round's books lack one of the two
+markets, such a decision is listed as skipped with the cause ``ROUTE_MISSING`` - never
+compared on BTC-EUR costs, never dropped. ``buyhold-usdc`` has no snapshot, like buy & hold.
+
 This is a technical check of the code path: nothing about returns is evaluated, so the sealed
 period (ADR-0026) does not apply to it. It reads only copies of the live databases, opened
 read-only (``mode=ro``, ``query_only``); a copy needs the user's consent (ADR-0026), and the
@@ -71,6 +80,7 @@ from llm_trading_bot.market.models import (
     Symbol,
 )
 from llm_trading_bot.market.snapshot import INTERVALS, MarketSnapshot, build_snapshots
+from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.cycle import STRATEGY_TIMEFRAME
 from llm_trading_bot.paper.db import SchemaError, check_schema
 from llm_trading_bot.paper.execution import BUYHOLD, REASON_MAX
@@ -86,6 +96,13 @@ ROUGH = "nur grob prüfbar"
 """Cause of a percent field outside one rounding step: listed apart, never failing."""
 NOT_COVERED = "Archiv deckt den Zeitpunkt nicht ab"
 UNREADABLE = "Eingaben nicht lesbar"
+ROUTE_MISSING = "USDC-Quoten der Runde nicht aufgezeichnet"
+"""Cause of a skipped BTC decision of a USDC depot: its costs need the round's BTC-USDC and
+USDC-EUR quotes, which only observations.db holds (module doc)."""
+ROUTE_PURPOSES = ("start", "recheck")
+"""``books.purpose`` of the fetches whose quotes the round's classic and USDC depots read."""
+BENCHMARKS = frozenset({BUYHOLD, usdc.BUYHOLD_USDC})
+"""Depots without a snapshot behind their decision: they buy once on the quotes."""
 DIGITS = 5
 """``feature_payload`` rounds the indicators to 5 places; one step is 1e-5."""
 RAW_TOL = 1e-12
@@ -140,6 +157,16 @@ class Recorded:
     @property
     def market(self) -> str:
         return self.symbol.market
+
+    @property
+    def strategy(self) -> str:
+        """The rules behind the decision: a USDC depot follows its classic twin (Spec 020)."""
+        return usdc.strategy_of(self.agent)
+
+    @property
+    def route(self) -> bool:
+        """True for the BTC of a USDC depot: decided on the USDC route's costs."""
+        return usdc.routed(self.agent, self.symbol)
 
 
 @dataclass
@@ -233,14 +260,14 @@ def recorded_snapshots(bot: sqlite3.Connection) -> tuple[list[Recorded], list[di
     ).fetchall()
     for row in rows:
         agent = str(row["agent"])
-        if agent == BUYHOLD:
+        if agent in BENCHMARKS:
             continue  # no snapshot behind its decision: it buys once on the quotes
         try:
             payload = json.loads(row["inputs"])
             if not isinstance(payload, dict):
                 raise TypeError("inputs not an object")
             symbol = _symbol(str(row["symbol"]))
-            if agent in STRATEGY_TIMEFRAME:
+            if usdc.strategy_of(agent) in STRATEGY_TIMEFRAME:
                 stored = row["target"]
                 cw = _weight(payload)
                 # A classic HOLD (and a clamped BUY/SELL) stores the unrounded weight as target;
@@ -449,6 +476,34 @@ class Observations:
             )
         return out
 
+    def route_quotes(self, epoch: int) -> list[dict[Symbol, Quote]]:
+        """The BTC-USDC and USDC-EUR quotes a USDC depot of the round at ``epoch`` may have
+        decided on: after each ``start``/``recheck`` fetch of that round, the newest accepted
+        quote of each route market so far (the depots read the stored quotes back, and a
+        market a fetch rejected keeps its earlier quote). Rejected rows carry another purpose.
+        In fetch order, repeats left out; empty if the round or a market was not recorded."""
+        round_id = self._round(epoch)
+        if round_id is None:
+            return []
+        markets = {m.name: m for m in usdc.ROUTE_MARKETS}
+        fetches: dict[tuple[str, str], dict[Symbol, Quote]] = {}
+        for row in self._con.execute(
+            "SELECT ts, symbol, purpose, bid, ask FROM books WHERE round_id=?"
+            f" AND purpose IN ({','.join('?' * len(ROUTE_PURPOSES))}) ORDER BY id",
+            (round_id, *ROUTE_PURPOSES),
+        ):
+            symbol = markets.get(str(row["symbol"]))
+            if symbol is not None:
+                key = (str(row["ts"]), str(row["purpose"]))
+                fetches.setdefault(key, {})[symbol] = Quote(float(row["bid"]), float(row["ask"]))
+        out: list[dict[Symbol, Quote]] = []
+        current: dict[Symbol, Quote] = {}
+        for quotes in fetches.values():
+            current.update(quotes)
+            if len(current) == len(markets) and (not out or out[-1] != current):
+                out.append(dict(current))
+        return out
+
     def indicators(self, symbol: Symbol, meta: tuple[str, int, str | None]) -> dict[str, Any]:
         agent, bar_ts, ts = meta
         sql = "SELECT indicators FROM decision_meta WHERE agent=? AND symbol=? AND bar_ts=?"
@@ -552,12 +607,17 @@ class Rebuilder:
         minutes = self.client.candles_between(symbol, 1, forming_open, epoch - 60 + 1)
         return any(c.volume > 0 for c in minutes)
 
-    def rebuild(self, rec: Recorded, hint: Hint) -> Rebuilt:
+    def rebuild(
+        self, rec: Recorded, hint: Hint, route: Mapping[Symbol, Quote] | None = None
+    ) -> Rebuilt:
+        """``route``: the recorded route quotes for the BTC of a USDC depot (``rec.route``);
+        its costs are then the route's (``paper.usdc.roundtrip_cost``), as live."""
         p = rec.payload
         quote = Quote(float(p["quote_bid"]), float(p["quote_ask"]))
         fee = float(p["taker_fee_per_side_pct"]) / 100
         slip = float(p["slippage_per_side_pct"]) / 100
-        key = (rec.symbol, rec.epoch, quote, fee, slip, tuple(sorted(hint.items())))
+        routes = tuple(sorted((s.name, q) for s, q in (route or {}).items()))
+        key = (rec.symbol, rec.epoch, quote, fee, slip, tuple(sorted(hint.items())), routes)
         if key in self._cache:
             self._cache.move_to_end(key)
             return self._cache[key]
@@ -581,8 +641,12 @@ class Rebuilder:
             exc = errors.get(rec.symbol)
             result = Rebuilt(None, f"{type(exc).__name__}: {exc}", windows)
         else:
-            ind = indicators(snap, cost_roundtrip(snap.quote.spread_bps, fee, slip))
-            result = Rebuilt(snap, "", windows, ind)
+            if route is not None:
+                # Spec 020 AK3: both legs' fees and slippage plus the spreads of both books.
+                cost = usdc.roundtrip_cost(route)
+            else:
+                cost = cost_roundtrip(snap.quote.spread_bps, fee, slip)
+            result = Rebuilt(snap, "", windows, indicators(snap, cost))
         self._cache[key] = result
         if len(self._cache) > CACHE_SIZE:
             self._cache.popitem(last=False)
@@ -678,7 +742,7 @@ def compare(
         if bars.get(str(tf)) != _utc(snap.bars[tf][-1].ts):
             add(DATA, f"closed_bars_utc.{tf}", bars.get(str(tf)), _utc(snap.bars[tf][-1].ts))
     if rec.bar_ts is not None:
-        own = snap.bars[STRATEGY_TIMEFRAME[rec.agent]][-1].ts
+        own = snap.bars[STRATEGY_TIMEFRAME[rec.strategy]][-1].ts
         if own != rec.bar_ts:
             add(DATA, "bar_ts", rec.bar_ts, own)
     last_close = snap.bars[1][-1].close
@@ -687,6 +751,15 @@ def compare(
     filled = sum(b.volume == 0 for b in snap.bars[1][-60:])
     if p.get(_FILLED) != filled:
         add(DATA, _FILLED, p.get(_FILLED), filled)
+    if rec.route:
+        # The rebuild costs the route with paper.usdc's numbers; live must have stored them.
+        for name, rate in (
+            ("taker_fee_per_side_pct", usdc.ROUTE_FEE),
+            ("slippage_per_side_pct", usdc.ROUTE_SLIPPAGE),
+        ):
+            stored_rate = round(100 * rate, 3)
+            if p.get(name) != stored_rate:
+                add(DATA, name, p.get(name), stored_rate)
 
     stored_ind = p.get("indicators", {})
     for name, value in ind.items():
@@ -717,7 +790,7 @@ def compare(
                 add(ACTION, f"trigger_signals.{name}", rec.triggers.get(name), trig)
 
     if rec.source == "decision":
-        sig = run_strategy(rec.agent, snap, ind, rec.weight)
+        sig = run_strategy(rec.strategy, snap, ind, rec.weight)
         action, target, clamped = _expected(rec, sig)
         if rec.action != action:
             add(ACTION, "action", rec.action, action)
@@ -785,6 +858,7 @@ def _explain(
     got: Rebuilt,
     raw: Mapping[str, Any] | None,
     found: list[dict[str, Any]],
+    route: Mapping[Symbol, Quote] | None = None,
 ) -> list[dict[str, Any]] | None:
     """Without observations: the forming-bar count that leaves the fewest deviations, if it
     leaves only some of ``found``. Those it removes get the cause FORMING (in place); the rest
@@ -792,7 +866,7 @@ def _explain(
     failing = {d["field"]: d for d in _failing(found)}
     best: tuple[dict[int, bool | None], list[dict[str, Any]]] | None = None
     for alt in _alternatives(rec, rebuilder, got):
-        again = compare(rec, rebuilder.rebuild(rec, alt), None, raw)
+        again = compare(rec, rebuilder.rebuild(rec, alt, route), None, raw)
         left = {d["field"] for d in _failing(again)}
         # Only a strict improvement over the same fields: a count that trades one deviation
         # for another explains nothing.
@@ -821,6 +895,10 @@ class _Tally:
     explained: int = 0
     unobserved: int = 0
     """With observations: snapshots whose round was not recorded (compared as without)."""
+    routed: int = 0
+    """BTC decisions of USDC depots compared on the recorded route quotes."""
+    no_route: int = 0
+    """Of ``skipped``: BTC decisions of USDC depots without recorded route quotes."""
 
     def count(self, market: str, equal: bool, ind_ok: bool) -> None:
         s = self.summary
@@ -864,6 +942,20 @@ def check(
             summary.deviations.append(_skip(rec.market, rec.utc, rec.agent, NOT_COVERED))
             tally.skipped += 1
             continue
+        routes: list[dict[Symbol, Quote]] = []
+        if rec.route:
+            routes = [] if observations is None else observations.route_quotes(rec.epoch)
+            if not routes:
+                why = (
+                    "ohne observations.db"
+                    if observations is None
+                    else "Runde ohne BTC-USDC/USDC-EUR"
+                )
+                summary.deviations.append(_skip(rec.market, rec.utc, rec.agent, ROUTE_MISSING, why))
+                tally.skipped += 1
+                tally.no_route += 1
+                continue
+            tally.routed += 1
         windows = None if observations is None else observations.windows(rec.symbol, rec.epoch)
         raw = None
         if observations is not None and rec.meta is not None:
@@ -873,11 +965,20 @@ def check(
             tally.unobserved += 1
         if windows is not None:
             hint = {tf: w.forming for tf, w in windows.items()}
-        got = rebuilder.rebuild(rec, hint)
+        route = routes[0] if routes else None
+        got = rebuilder.rebuild(rec, hint, route)
         found = compare(rec, got, windows, raw)
+        # A round that fetched again (recheck) offers more than one quote set; the decision
+        # read one of them. The first that leaves nothing failing is the one it read.
+        for other in routes[1:] if _failing(found) else []:
+            again = rebuilder.rebuild(rec, hint, other)
+            alt = compare(rec, again, windows, raw)
+            if not _failing(alt):
+                route, got, found = other, again, alt
+                break
         equal, ind_ok = _counts(found)
         if _failing(found) and windows is None:
-            better = _explain(rec, rebuilder, got, raw, found)
+            better = _explain(rec, rebuilder, got, raw, found, route)
             if better is not None:
                 equal, ind_ok = _counts(better)
                 tally.explained += not _failing(better)
@@ -913,8 +1014,18 @@ def _note(tally: _Tally, with_obs: bool) -> str:
             "Ohne Beobachtungen: ob live die laufende Kerze mitkam, ist unbekannt (Näherung); "
             f"{tally.explained} Vergleiche nur damit erklärt."
         )
+    if tally.routed:
+        parts.append(
+            f"{tally.routed} BTC-Entscheidungen der USDC-Depots mit den Kosten des USDC-Wegs aus "
+            "den aufgezeichneten BTC-USDC- und USDC-EUR-Quoten der Runde verglichen."
+        )
     if tally.skipped:
         parts.append(f"{tally.skipped} Snapshots übersprungen (nicht verglichen).")
+    if tally.no_route:
+        parts.append(
+            f"{tally.no_route} davon BTC-Entscheidungen der USDC-Depots ohne aufgezeichnete "
+            "USDC-Quoten (nur mit observations.db nachbaubar)."
+        )
     if tally.unreadable:
         parts.append(
             f"{tally.unreadable} davon mit nicht lesbaren Eingaben: diese Entscheidungen "

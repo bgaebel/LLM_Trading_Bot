@@ -42,6 +42,8 @@ from llm_trading_bot.lab.metrics import (
     Uncertainty,
 )
 from llm_trading_bot.lab.model import (
+    BTC_USDC_SPREAD,
+    CLASSIC,
     DEPOTS,
     ELIGIBLE_SHARE,
     FIDELITY_MIN,
@@ -49,6 +51,9 @@ from llm_trading_bot.lab.model import (
     LEAD_ROWS,
     MARKETS,
     STRATEGY_VERSION,
+    USDC_DEPOTS,
+    USDC_EUR_RATE,
+    USDC_EUR_SPREAD,
     FidelitySummary,
     Quarter,
     QuarterResult,
@@ -72,6 +77,7 @@ from llm_trading_bot.lab.spread import (
     stored_quarter_spreads,
 )
 from llm_trading_bot.lab.spread import METHOD as SPREAD_METHOD
+from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.db import SchemaError
 from llm_trading_bot.paper.execution import BUYHOLD
 
@@ -153,6 +159,8 @@ def stamp(epoch: float) -> str:
 
 
 def depot_name(agent: str) -> str:
+    if agent == usdc.BUYHOLD_USDC:
+        return "Buy & Hold über USDC"
     return "Buy & Hold" if agent == BUYHOLD else agent
 
 
@@ -162,9 +170,11 @@ def round_trip_label(round_trips: int) -> str:
 
 
 def _ordered(agents: Iterable[str]) -> list[str]:
-    """Strategies in the bot's order, buy & hold last; unknown names after them."""
+    """Strategies in the bot's order, buy & hold last (the USDC depots after that, in the same
+    order); unknown names after them."""
     names = set(agents)
-    return [a for a in DEPOTS if a in names] + sorted(names - set(DEPOTS))
+    known = (*DEPOTS, *USDC_DEPOTS[:-2], usdc.BUYHOLD_USDC)
+    return [a for a in known if a in names] + sorted(names - set(known))
 
 
 # --- document model ------------------------------------------------------------------------
@@ -374,6 +384,8 @@ class _Variants:
     grid: list[str]
     diagnostic: list[str]
     specs: dict[str, Variant]
+    usdc: list[str] = field(default_factory=list)
+    """Execution over USDC (AK14): other depots, so never a point of the cost grid."""
 
 
 def _classify(results: Mapping[str, Sequence[QuarterResult]], base: str) -> _Variants:
@@ -382,11 +394,12 @@ def _classify(results: Mapping[str, Sequence[QuarterResult]], base: str) -> _Var
         if rows:
             specs[name] = rows[0].variant
     diagnostic = sorted(n for n, rows in results.items() if any(r.variant.diagnostic for r in rows))
+    routed = sorted(n for n in specs if n != base and n not in diagnostic and specs[n].usdc)
     grid = sorted(
-        (n for n in specs if n != base and n not in diagnostic),
+        (n for n in specs if n != base and n not in diagnostic and n not in routed),
         key=lambda n: (specs[n].roundtrip, n),
     )
-    return _Variants(base if base in specs else None, grid, diagnostic, specs)
+    return _Variants(base if base in specs else None, grid, diagnostic, specs, routed)
 
 
 def _visible(results: Sequence[QuarterResult]) -> tuple[list[QuarterResult], int]:
@@ -492,6 +505,7 @@ def build_report(
     _costs(doc, kinds, summaries, visible, base, base_rows, spread_sources or {}, draws)
     _cells(doc, base)
     _uncertainty(doc, base)
+    _usdc(doc, kinds, visible, base_rows, draws)
     _quality(doc, kinds, base, summaries)
     _diagnosis(doc, kinds, visible, base_rows, draws)
     _fidelity(doc, fidelity)
@@ -604,6 +618,168 @@ def _summary(
         "bis 300 ist es nur indikativ.",
         "note",
     )
+
+
+USDC_SECTION = "Ausführung über USDC"
+
+
+def _twin(agent: str) -> str:
+    """The USDC depot with the rules of ``agent`` (Spec 020): trend -> trend-usdc."""
+    return usdc.BUYHOLD_USDC if agent == BUYHOLD else f"{agent}{usdc.USDC_SUFFIX}"
+
+
+def _usdc(
+    doc: Doc,
+    kinds: _Variants,
+    visible: Mapping[str, Sequence[QuarterResult]],
+    base_rows: Sequence[QuarterResult],
+    draws: int,
+) -> None:
+    """AK14 (Spec 020 AK8): the USDC depots next to their v0.3.1 twins, same quarters only."""
+    doc.section(USDC_SECTION, "usdc")
+    if not kinds.usdc:
+        doc.p("Kein Lauf der Variante „usdc“ im Register.", "note")
+        return
+    route = 2 * (usdc.ROUTE_FEE + usdc.ROUTE_SLIPPAGE)
+    doc.p(
+        f"Gleiche Regeln wie {STRATEGY_VERSION}, anderer Ausführungsweg (Version "
+        f"{usdc.USDC_VERSION}, Spec 020): Die USDC-Depots entscheiden auf denselben BTC-EUR- und "
+        "ETH-EUR-Kerzen, kaufen und verkaufen BTC aber über USDC (Euro → USDC → BTC und zurück). "
+        f"Kosten je Round-Trip über beide Wege: {pct(route, 2, sign=False)} plus Spreads statt "
+        f"{pct(kinds.specs[kinds.usdc[0]].roundtrip, 2, sign=False)} plus Spread auf BTC-EUR; "
+        "ETH handeln sie wie die Basis auf ETH-EUR. Buy & Hold über USDC kauft einmal auf "
+        "demselben Weg."
+    )
+    doc.ul(
+        [
+            "Annahme Kurse: BTC-USDC gibt es erst ab 2024-07-01. Beide Kurse des Wegs sind "
+            "deshalb aus der BTC-EUR-Mitte gebildet: USDC-EUR = "
+            f"{num(USDC_EUR_RATE, 2)} mit {num(USDC_EUR_SPREAD * 10_000, 1)} Basispunkten "
+            "Spread (gemessen 1,1), BTC-USDC = BTC-EUR-Mitte / USDC-EUR mit "
+            f"{num(BTC_USDC_SPREAD * 10_000, 1)} Basispunkten Spread (gemessen 1,5 bis 4,2, "
+            "Median 2; bewusst vorsichtig).",
+            "Der Wechselkurs hebt sich in Euro auf; Kosten machen nur Gebühren, Slippage und die "
+            "beiden Spreads. Kursabweichungen zwischen BTC-USDC und BTC-EUR und Zeiten, in denen "
+            "das dünne BTC-USDC-Buch weiter auseinanderlag, fehlen darin.",
+            "Gebühren laut öffentlicher Bitvavo-Gebührenseite (Einstiegsstufe, nicht über das "
+            f"Konto bestätigt): BTC-USDC {pct(usdc.BTC_USDC_FEE, 2, sign=False)}, USDC-EUR "
+            f"{pct(usdc.USDC_EUR_FEE, 2, sign=False)} je Seite.",
+            "Eigene Variante im Prüfregister: Sie zählt als eigener Versuch.",
+        ]
+    )
+    for name in kinds.usdc:
+        rows_u = visible.get(name, [])
+        if len(kinds.usdc) > 1:
+            doc.sub(f"Variante {name}")
+        if not rows_u:
+            doc.p("Keine Ergebnisse.", "note")
+            continue
+        _usdc_variant(doc, rows_u, base_rows, draws)
+
+
+def _usdc_variant(
+    doc: Doc,
+    rows_u: Sequence[QuarterResult],
+    base_rows: Sequence[QuarterResult],
+    draws: int,
+) -> None:
+    graded_u = {r.quarter.label for r in rows_u if r.graded}
+    graded_b = {r.quarter.label for r in base_rows if r.graded}
+    if base_rows:
+        common = graded_u & graded_b
+        text = (
+            "Verglichen werden nur Quartale, die in beiden Läufen gewertet sind: "
+            f"{_labels(common)}."
+        )
+        if only_u := graded_u - graded_b:
+            text += f" Nur über USDC gewertet, nicht verglichen: {_labels(only_u)}."
+        if only_b := graded_b - graded_u:
+            text += f" Nur im Basislauf gewertet, nicht verglichen: {_labels(only_b)}."
+        doc.p(text)
+    else:
+        common = graded_u
+        doc.p("Kein Basislauf vorhanden: nur die Zahlen über USDC, ohne Vergleich.", "note")
+    if not common:
+        doc.p("Kein Quartal ist in beiden Läufen gewertet; ein Vergleich entfällt.", "note")
+        return
+    s = metrics.summarize([r for r in rows_u if r.quarter.label in common], draws=draws)
+    compared = [r for r in base_rows if r.quarter.label in common]
+    b = metrics.summarize(compared, draws=draws) if compared else None
+    rows = []
+    for agent in (*CLASSIC, BUYHOLD):
+        twin = _twin(agent)
+        if twin not in s.round_trips:
+            continue
+        u = s.uncertainty.get(twin)
+        ub = b.uncertainty.get(agent) if b else None
+        diff = u.mean_return.estimate - ub.mean_return.estimate if u and ub else None
+        fees_u = sum(m.fees for m in _graded_rows(s, twin))
+        fees_b = sum(m.fees for m in _graded_rows(b, agent)) if b else None
+        rows.append(
+            [
+                f"{depot_name(agent)} / {depot_name(twin)}",
+                pct(ub.mean_return.estimate) if ub else NOT_SHOWN,
+                band_pct(u.mean_return if u else None) + (_band_days(u) if u else ""),
+                pct(diff),
+                band_pct(u.excess if u else None) if agent != BUYHOLD else NOT_SHOWN,
+                eur(fees_b) if fees_b is not None else NOT_SHOWN,
+                eur(fees_u),
+                count(b.round_trips.get(agent, 0)) if b else NOT_SHOWN,
+                count(s.round_trips[twin]),
+                s.labels[twin],
+            ]
+        )
+    doc.table(
+        [
+            "Depot (Basis / über USDC)",
+            "Netto p. a. Basis",
+            "Netto p. a. über USDC [Band]",
+            "Unterschied",
+            "Übertrendite p. a. über USDC [Band]",
+            "Gebühren Basis",
+            "Gebühren über USDC",
+            "Round-Trips Basis",
+            "Round-Trips über USDC",
+            "Einstufung über USDC",
+        ],
+        rows,
+    )
+    doc.sub("Je Quartal (zum Mittelkurs bewertet)")
+    by_base = {(d.quarter, d.agent): d for d in (b.depots if b else [])}
+    per_quarter = []
+    rank = {a: i for i, a in enumerate(_ordered({d.agent for d in s.depots}))}
+    for d in sorted(s.depots, key=lambda d: (_quarter_start(d.quarter), rank[d.agent])):
+        if d.agent == BUYHOLD:
+            continue  # runs along as live does; the same depot as in the base run
+        strategy = usdc.strategy_of(d.agent)
+        twin_of = BUYHOLD if d.agent == usdc.BUYHOLD_USDC else strategy
+        other = by_base.get((d.quarter, twin_of))
+        per_quarter.append(
+            [
+                d.quarter,
+                depot_name(d.agent),
+                pct(other.net_return_mid) if other else NOT_SHOWN,
+                pct(d.net_return_mid),
+                pct(d.net_return_mid - other.net_return_mid) if other else NOT_SHOWN,
+                count(other.round_trips) if other else NOT_SHOWN,
+                count(d.round_trips),
+            ]
+        )
+    doc.table(
+        [
+            "Quartal",
+            "Depot",
+            "Netto Basis",
+            "Netto über USDC",
+            "Unterschied",
+            "Round-Trips Basis",
+            "Round-Trips über USDC",
+        ],
+        per_quarter,
+    )
+    if s.data_issues:
+        doc.p(f"Lücken in den verglichenen Quartalen über USDC ({DATA_QUALITY}):")
+        doc.ul([i.text for i in s.data_issues])
 
 
 DATA_QUALITY = "Datenqualität"
@@ -1283,6 +1459,8 @@ def _data_issues(doc: Doc, kinds: _Variants, summaries: Mapping[str, LabMetrics]
         doc.p("Keine Läufe mit Depotwerten.", "note")
     if kinds.diagnostic:
         doc.p("Lücken der Diagnose-Läufe stehen bei der jeweiligen Diagnose.", "note")
+    if kinds.usdc:
+        doc.p(f"Lücken der Läufe über USDC stehen im Abschnitt „{USDC_SECTION}“.", "note")
 
 
 def _labels(labels: Iterable[str]) -> str:
@@ -1604,13 +1782,21 @@ def _trials(
     rows = [
         [
             name,
-            "Diagnose" if name in kinds.diagnostic else "Basis" if name == kinds.base else "Kosten",
+            _kind(kinds, name),
             count(len(rows)),
             count(sum(1 for r in rows if r.graded)),
         ]
         for name, rows in sorted(visible.items())
     ]
     doc.table(["Variante", "Art", "Quartale", "davon gewertet"], rows)
+
+
+def _kind(kinds: _Variants, name: str) -> str:
+    if name in kinds.diagnostic:
+        return "Diagnose"
+    if name == kinds.base:
+        return "Basis"
+    return "Ausführung über USDC" if name in kinds.usdc else "Kosten"
 
 
 def _runtime(

@@ -14,7 +14,9 @@ tools/, deploy/, scripts/ and uv.lock, which the broker guards read - without th
 mutant would be "killed" by a missing file instead of by a test.
 
 Spec 016 adds the lab's historical client (lab/history.py, tests/lab): its window, closed-bar
-filter, forming bar and quote time are checked against frozen live responses (AK3).
+filter, forming bar and quote time are checked against frozen live responses (AK3). AK14 adds
+the lab's USDC route (labels "lab usdc ..." and "lab fidelity ..."): synthetic route quotes,
+the route's spread and sale in the backtest, the route costs and benchmarks in the fidelity check.
 
 Spec 020 adds the USDC route as group "usdc" (labels starting with "usdc "): fees, legs, sides
 of the books, the cost input of the signals and the fail-closed checks, run against the USDC
@@ -794,6 +796,37 @@ M += [
         "if not self._start <= epoch < self._end:",
         "if not self._start <= epoch <= self._end:",
         "lab preload end exclusive",
+    ),
+    # Spec 016 AK14: the lab's USDC route (synthetic quotes, backtest costs, fidelity).
+    (
+        "lab/history.py",
+        "(Symbol.BTCUSDC, btc_eur_mid / self.usdc_eur, self.btc_usdc_spread),",
+        "(Symbol.BTCUSDC, btc_eur_mid / self.usdc_eur, self.usdc_eur_spread),",
+        "lab usdc route btc spread",
+    ),
+    (
+        "lab/backtest.py",
+        "spread[Symbol.BTCEUR.market] = route.spread",
+        "spread[Symbol.BTCEUR.market] = spread[Symbol.BTCEUR.market]",
+        "lab usdc spread of the route",
+    ),
+    (
+        "lab/backtest.py",
+        "if qty > 0 and usdc.routed(agent, symbol):",
+        "if False:",
+        "lab usdc sold over the route",
+    ),
+    (
+        "lab/fidelity.py",
+        "cost = usdc.roundtrip_cost(route)",
+        "cost = cost_roundtrip(snap.quote.spread_bps, fee, slip)",
+        "lab fidelity route costs",
+    ),
+    (
+        "lab/fidelity.py",
+        "if agent in BENCHMARKS:",
+        "if agent == BUYHOLD:",
+        "lab fidelity skips buyhold-usdc",
     ),
     (
         "core.py",

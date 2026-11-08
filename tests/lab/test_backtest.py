@@ -34,9 +34,14 @@ from llm_trading_bot.lab.backtest import (
     stale_interval,
     variants,
 )
+from llm_trading_bot.lab.history import UsdcRoute
 from llm_trading_bot.lab.model import (
+    BTC_USDC_SPREAD,
+    DEPOTS,
     LEAD_ROWS,
     SEAL_EPOCH,
+    USDC_DEPOTS,
+    USDC_EUR_SPREAD,
     DepotResult,
     MarketQuality,
     Quarter,
@@ -53,6 +58,7 @@ from llm_trading_bot.lab.spread import (
 from llm_trading_bot.market import snapshot
 from llm_trading_bot.market.models import Candle, MarketDataError, Quote, Symbol
 from llm_trading_bot.market.snapshot import MarketSnapshot
+from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.execution import Costs
 from llm_trading_bot.paper.report import CycleReport, Equity
 
@@ -583,6 +589,7 @@ def test_no_selection_reruns_base_under_another_name() -> None:
         "cost-0.9",
         "cost-1.2",
         "diagnostic-gap-4",
+        "usdc",
     ]
     assert [v.name for v in variants("cost-grid")] == ["cost-0.3", "cost-0.9", "cost-1.2"]
     assert [v.name for v in variants("base")] == ["base"]
@@ -655,6 +662,131 @@ def test_diagnostic_flagged_in_register(tmp_path: Path) -> None:
     assert d.decided > b.decided
     assert base.quality["BTC-EUR"] == flagged.quality["BTC-EUR"]
     assert snapshot.GAP_WINDOW == 60  # restored in this (the running) process
+
+
+# ---------------------------------------------------------------- AK14 (Spec 020 AK8)
+
+
+def test_usdc_variant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The variant ``usdc`` runs the four USDC depots and their benchmark through the unchanged
+    cycle, BTC over the synthetic route; ``base`` keeps exactly the v0.3.1 depots, whatever
+    ``BOT_USDC_AGENTS`` says."""
+    path = build_archive(tmp_path / "c.db", T0, T0 + 9 * HOUR)
+    q = span(T0, 8)
+    plain = run_quarter(path, q, BASE)
+    # The lab never reads the service's environment: base stays the same with it set.
+    monkeypatch.setenv("BOT_USDC_AGENTS", "trend-usdc,meanrev-usdc")
+    with Register.open(tmp_path / "runs.db", tmp_path / "register.jsonl") as register:
+        base, routed = run_quarters(path, [q], [BASE, backtest.USDC], workers=1, register=register)
+        runs = register.list_runs()
+        assert [(r.variant, r.diagnostic) for r in runs] == [("base", False), ("usdc", False)]
+        assert runs[0].config_hash != runs[1].config_hash
+        stored = dict(register.con.execute("SELECT variant, strategy_version FROM runs").fetchall())
+        assert stored == {"base": "v0.3.1", "usdc": usdc.USDC_VERSION}
+        depots = dict(register.con.execute("SELECT variant, depots FROM runs").fetchall())
+        assert json.loads(depots["usdc"]) == sorted(USDC_DEPOTS)
+        assert json.loads(depots["base"]) == sorted(DEPOTS)
+        assert register.verify().ok
+    assert outcome(base) == outcome(plain)
+    assert (
+        set(base.depots) == set(DEPOTS) == {"trend", "breakout", "meanrev", "ensemble", "buyhold"}
+    )
+    assert set(routed.depots) == set(USDC_DEPOTS)
+    assert routed.status == "ok" and routed.graded, routed.quality
+
+    # Buy & hold runs along as live does, on the same quotes: the same depot as in base.
+    assert routed.depots["buyhold"] == base.depots["buyhold"]
+    # The route is costed, never the BTC-EUR book: its spread for BTC, base's for ETH.
+    assert routed.spread["BTC-EUR"] == pytest.approx(BTC_USDC_SPREAD + USDC_EUR_SPREAD)
+    assert routed.spread["ETH-EUR"] == base.spread["ETH-EUR"]
+    assert routed.daily_mid == base.daily_mid
+    # Same candles, same snapshots: the same bars were due.
+    for market in ("BTC-EUR", "ETH-EUR"):
+        assert routed.quality[market].due == base.quality[market].due
+        assert routed.quality[market].no_decision == base.quality[market].no_decision
+
+    # The benchmark bought BTC over the route: both legs' fees, both books' asks.
+    bh_eur = {t.market: t for t in base.depots["buyhold"].trades}
+    bh_usdc = {t.market: t for t in routed.depots[usdc.BUYHOLD_USDC].trades}
+    assert set(bh_usdc) == {"BTC-EUR", "ETH-EUR"}  # booked under the decided market
+    btc = bh_usdc["BTC-EUR"]
+    assert btc.fee == pytest.approx(btc.notional * usdc.ROUTE_FEE, rel=1e-12)
+    eth = bh_usdc["ETH-EUR"]
+    # ETH as in base: the same ETH-EUR ask and fee rate (the amount follows the BTC leg).
+    assert (eth.ts, eth.fill) == (bh_eur["ETH-EUR"].ts, bh_eur["ETH-EUR"].fill)
+    assert eth.fee == pytest.approx(eth.notional * BASE.fee_rate, rel=1e-12)
+    half = DEFAULT_SPREAD["BTC-EUR"] / 2
+    mid = bh_eur["BTC-EUR"].fill / ((1 + half) * (1 + BASE.slippage))
+    quotes = UsdcRoute().quotes(mid)
+    want = usdc.buy(btc.notional, quotes)
+    assert btc.fill == pytest.approx(want.fill, rel=1e-9)
+    assert btc.qty == pytest.approx(want.qty, rel=1e-9)
+    # Cheaper than BTC-EUR: 0.15 % fee per side instead of 0.25 %.
+    assert btc.fee < bh_eur["BTC-EUR"].fee
+
+    # Sold at the end over the route as well.
+    depot = routed.depots[usdc.BUYHOLD_USDC]
+    last = depot.days[-1]
+    end_mid = {m: routed.daily_mid[m][-1][1] for m in ("BTC-EUR", "ETH-EUR")}
+    sell = usdc.sell(btc.qty, UsdcRoute().quotes(end_mid["BTC-EUR"]))
+    eth_gross = eth.qty * end_mid["ETH-EUR"] * (1 - DEFAULT_SPREAD["ETH-EUR"] / 2)
+    eth_gross *= 1 - BASE.slippage
+    sold = last.cash + sell.notional - sell.fee + eth_gross * (1 - BASE.fee_rate)
+    assert depot.end_liquidated == pytest.approx(sold, rel=1e-9)
+    assert depot.end_mid == last.value
+
+    # The strategies decided on the same snapshots as their v0.3.1 twins.
+    decided = sum(sum(routed.depots[a].actions.values()) for a in USDC_DEPOTS[:4])
+    assert decided == sum(sum(base.depots[a].actions.values()) for a in DEPOTS[:4])
+    for a in USDC_DEPOTS[:4]:
+        assert routed.depots[a].actions == base.depots[usdc.strategy_of(a)].actions, a
+    # (The smooth test market gives the strategies no BTC trade in 8 hours; the route's trade,
+    # valuation and sale are proven on buy & hold over USDC above.)
+    for t in (t for a in USDC_DEPOTS[:4] for t in routed.depots[a].trades):
+        rate = usdc.ROUTE_FEE if t.market == "BTC-EUR" else BASE.fee_rate
+        assert t.fee == pytest.approx(t.notional * rate, rel=1e-9), t
+
+    # Metrics read the route's costs for BTC and the variant's for ETH.
+    m = metrics.summarize([routed], draws=50)
+    rows = {d.agent: d for d in m.depots}
+    assert set(rows) == set(USDC_DEPOTS)
+    route_trip = 2 * (usdc.ROUTE_FEE + usdc.ROUTE_SLIPPAGE)
+    for agent, even in m.break_even.items():
+        assert route_trip - 1e-12 <= even.model_cost <= BASE.roundtrip + 1e-12, agent
+    bench = metrics.benchmark(routed, usdc.BUYHOLD_USDC)
+    assert bench.cost_per_side["BTC-EUR"] == pytest.approx(
+        usdc.ROUTE_FEE + usdc.ROUTE_SLIPPAGE + (BTC_USDC_SPREAD + USDC_EUR_SPREAD) / 2
+    )
+    assert bench.cost_per_side["ETH-EUR"] == pytest.approx(
+        BASE.fee_rate + BASE.slippage + DEFAULT_SPREAD["ETH-EUR"] / 2
+    )
+
+
+def test_usdc_route_quotes_fail_closed_without_btc() -> None:
+    """Without a BTC-EUR mid the route has no quotes either (fail closed); without ``route``
+    the book has exactly the v0.3.1 markets."""
+    from llm_trading_bot.lab.history import ConstantSpreads, HistoricalClient, MemorySource
+
+    src = MemorySource()
+    src.add("ETH-EUR", 1, [[(T0 - 120) * 1000, "1", "1", "1", "1", "1"]])
+    clock = lambda: float(T0)  # noqa: E731
+    routed = HistoricalClient(
+        src, ConstantSpreads(), clock, start=T0 - 3600, end=T0 + 60, route=UsdcRoute()
+    ).quotes()
+    assert set(routed) == {Symbol.ETHEUR}
+    assert routed.codes[Symbol.BTCUSDC] == routed.codes[Symbol.USDCEUR] == "quote_missing"
+    src.add("BTC-EUR", 1, [[(T0 - 120) * 1000, "30000", "30000", "30000", "30000", "1"]])
+    routed = HistoricalClient(
+        src, ConstantSpreads(), clock, start=T0 - 3600, end=T0 + 60, route=UsdcRoute()
+    ).quotes()
+    assert set(routed) == set(Symbol)
+    assert routed[Symbol.BTCUSDC].mid == pytest.approx(30_000.0)
+    assert routed[Symbol.BTCUSDC].spread_bps == pytest.approx(BTC_USDC_SPREAD * 10_000)
+    assert routed[Symbol.USDCEUR].mid == pytest.approx(1.0)
+    assert routed[Symbol.USDCEUR].spread_bps == pytest.approx(USDC_EUR_SPREAD * 10_000)
+    assert usdc.btc_mid(routed) == pytest.approx(30_000.0)
+    plain = HistoricalClient(src, ConstantSpreads(), clock, start=T0 - 3600, end=T0 + 60).quotes()
+    assert set(plain) == {Symbol.BTCEUR, Symbol.ETHEUR} and not plain.errors
 
 
 # ---------------------------------------------------------------- CLI

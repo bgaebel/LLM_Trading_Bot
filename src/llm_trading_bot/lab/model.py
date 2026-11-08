@@ -11,6 +11,7 @@ import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.execution import BUYHOLD
 from llm_trading_bot.strategy.payload import ARENA_SLIPPAGE, ARENA_TAKER_FEE
 
@@ -21,11 +22,27 @@ FIRST_GRADED = "2021Q2"
 MARKETS = ("BTC-EUR", "ETH-EUR")
 CLASSIC = ("trend", "breakout", "meanrev", "ensemble")
 DEPOTS = (*CLASSIC, BUYHOLD)
+USDC_AGENTS = tuple(f"{name}{usdc.USDC_SUFFIX}" for name in CLASSIC)
+"""Spec 020: the classic rules with BTC executed over BTC-USDC (``llm.agents.USDC_AGENTS``)."""
+USDC_DEPOTS = (*USDC_AGENTS, BUYHOLD, usdc.BUYHOLD_USDC)
+"""Depots of the ``usdc`` variant (Spec 016 AK14): the live cycle runs buy & hold whenever it
+runs, so it is there too - on the same quotes as in ``base``, hence the same numbers."""
 LEAD_ROWS = 500
 """Rows per market and interval that must lie before a quarter's first round (AK4)."""
 ELIGIBLE_SHARE = 0.90
 """A quarter is graded if each market got at least this share of its due decisions (AK4)."""
 STRATEGY_VERSION = "v0.3.1"
+
+# Spec 016 AK14 (from Spec 020 AK8): BTC-USDC exists only from 2024-07-01, so the usdc variant
+# synthesises both route quotes from the BTC-EUR quote mid (research 2026-11-08, 5 order-book
+# samples). Assumptions, shown in the report:
+USDC_EUR_RATE = 1.0
+"""USDC-EUR mid. The rate cancels out in euro (BTC-USDC mid = BTC-EUR mid / rate, valued at
+BTC-USDC mid x USDC-EUR mid); only the spreads below cost money."""
+USDC_EUR_SPREAD = 0.00011
+"""Full USDC-EUR spread as a fraction of mid: measured 1.11 bps."""
+BTC_USDC_SPREAD = 0.0003
+"""Full BTC-USDC spread: measured 1.45-4.22 bps (median 1.98); conservatively 3 bps."""
 
 _QUARTER = re.compile(r"(\d{4})Q([1-4])")
 
@@ -77,11 +94,44 @@ class Variant:
     """Diagnostic only (AK9): another gap tolerance in higher intervals; None = live code."""
     diagnostic: bool = False
     """Never a strategy version; reported only as a diagnosis (AK9)."""
+    usdc: bool = False
+    """AK14: the USDC depots (``USDC_DEPOTS``) instead of v0.3.1, BTC over the USDC route with
+    the costs of ``paper.usdc``; ``fee_rate``/``slippage`` stay the costs of ETH-EUR. Added after
+    the first runs: ``register.config_hash`` leaves it out while it is False, so the hashes of
+    earlier runs stay valid."""
 
     @property
     def roundtrip(self) -> float:
-        """Model cost of a buy plus a sell without spread, as a fraction."""
+        """Model cost of a buy plus a sell without spread, as a fraction (on EUR markets)."""
         return 2 * (self.fee_rate + self.slippage)
+
+    @property
+    def depots(self) -> tuple[str, ...]:
+        """The depots a run of this variant has (``DEPOTS`` or ``USDC_DEPOTS``)."""
+        return USDC_DEPOTS if self.usdc else DEPOTS
+
+    @property
+    def strategies(self) -> tuple[str, ...]:
+        """The depots that decide on candles (without the benchmarks)."""
+        return USDC_AGENTS if self.usdc else CLASSIC
+
+    @property
+    def strategy_version(self) -> str:
+        return usdc.USDC_VERSION if self.usdc else STRATEGY_VERSION
+
+    def routed(self, market: str) -> bool:
+        """True if this variant trades ``market`` over the USDC route (only BTC-EUR)."""
+        return self.usdc and market == "BTC-EUR"
+
+    def side_cost(self, market: str) -> float:
+        """Fee plus slippage of one side of a trade in ``market`` (without spread)."""
+        if self.routed(market):
+            return usdc.ROUTE_FEE + usdc.ROUTE_SLIPPAGE
+        return self.fee_rate + self.slippage
+
+    def side_slippage(self, market: str) -> float:
+        """Slippage of one side in ``market``; over the route that of both legs."""
+        return usdc.ROUTE_SLIPPAGE if self.routed(market) else self.slippage
 
 
 @dataclass(frozen=True)
@@ -168,7 +218,9 @@ class QuarterResult:
     (e.g. ``2021-03-31`` for 2021Q2), never a benchmark day itself; without it day 1 has no
     return and ``metrics`` flags it as a data issue."""
     spread: dict[str, float] = field(default_factory=dict)
-    """Assumed full spread per market as a fraction of mid (AK6)."""
+    """Assumed full spread per market as a fraction of mid (AK6): the spread a trade in that
+    market pays. In the usdc variant BTC-EUR holds the route's spread (BTC-USDC plus USDC-EUR),
+    because its BTC trades never touch the BTC-EUR book."""
     rounds: int = 0
     seconds: float = 0.0
     dataset_sha256: str = ""

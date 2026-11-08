@@ -259,11 +259,26 @@ def config_hash(
             {
                 "strategy_version": strategy_version,
                 "depots": sorted(depots),
-                "variant": dataclasses.asdict(variant),
+                "variant": variant_identity(variant),
                 "commit": commit,
             }
         )
     )
+
+
+_LATER_FIELDS: Mapping[str, object] = {"usdc": False}
+"""Variant fields added after runs were recorded, with the value every earlier run had."""
+
+
+def variant_identity(variant: Variant) -> dict[str, Any]:
+    """The variant's fields for the config hash, without a later field at its old value: the
+    hash of a run recorded before that field existed is recomputed from its stored result, which
+    then reads the field's default, and must still match (``verify``)."""
+    data = dataclasses.asdict(variant)
+    for name, old in _LATER_FIELDS.items():
+        if data.get(name) == old:
+            del data[name]
+    return data
 
 
 def trial_key(config: str, quarter: Quarter, variant: Variant) -> str:
@@ -733,14 +748,20 @@ class Register:
 
     # --- writing -------------------------------------------------------------------------
 
-    def record(self, result: QuarterResult, *, depots: Collection[str] = DEPOTS) -> Recorded:
+    def record(self, result: QuarterResult, *, depots: Collection[str] | None = None) -> Recorded:
         """Register one finished, refused or aborted quarter. Identical repeats are merged.
 
-        ``depots`` is the configured depot set (an aborted result may carry none). Raises
-        RegisterError, with nothing written, for a result ``check_result`` refuses.
+        ``depots`` is the configured depot set (an aborted result may carry none); by default
+        the variant's own (``Variant.depots``). Raises RegisterError, with nothing written, for
+        a result ``check_result`` refuses.
         """
         check_result(result)
-        config = config_hash(result.variant, self.code.commit, depots=depots)
+        if depots is None:
+            depots = result.variant.depots
+        version = result.variant.strategy_version
+        config = config_hash(
+            result.variant, self.code.commit, depots=depots, strategy_version=version
+        )
         key = trial_key(config, result.quarter, result.variant)
         outcome = outcome_sha256(result)
         result_json = result.to_json()
@@ -813,7 +834,7 @@ class Register:
         error: str,
         *,
         dataset_sha256: str = "",
-        depots: Collection[str] = DEPOTS,
+        depots: Collection[str] | None = None,
     ) -> Recorded:
         """A quarter that crashed is a trial too: recorded with status ``aborted`` and the error,
         so a rerun that happens to work cannot hide it. A sealed quarter is refused like in
@@ -848,7 +869,7 @@ class Register:
                 created,
                 key,
                 config,
-                STRATEGY_VERSION,
+                v.strategy_version,
                 canonical(sorted(depots)),
                 q.label,
                 q.start,
