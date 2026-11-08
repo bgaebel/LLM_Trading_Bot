@@ -1,6 +1,6 @@
 # ADR-0026: Strategie-Labor auf dem PC – unveränderter Live-Code, Prüfregister, versiegelter Prüfzeitraum, GPT nur live
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0029](0029-strategie-labor-ausfuehrungsvarianten.md)
 - **Löst ab:** –
 - **Datum:** 2026-11-07
 - **Bereich:** #strategie #auswertung #betrieb
