@@ -13,7 +13,11 @@ with tests/test_core.py and tests/test_cli.py as group "cli"). The temporary cop
 tools/, deploy/, scripts/ and uv.lock, which the broker guards read - without them every broker
 mutant would be "killed" by a missing file instead of by a test.
 
-Usage: uv run python tools/golden/mutation_check.py [--only strategy|paper|llm|service|broker|cli]
+Spec 016 adds the lab's historical client (lab/history.py, tests/lab): its window, closed-bar
+filter, forming bar and quote time are checked against frozen live responses (AK3).
+
+Usage: uv run python tools/golden/mutation_check.py [[--only] GROUP]
+GROUP: strategy, paper, llm, service, broker, cli or lab.
 """
 
 import os
@@ -722,6 +726,59 @@ M += [
         "OPEN = frozenset({S.PLANNED, S.SENT})",
         "broker may_plan unknown",
     ),
+    # Spec 016 AK3: the named mutants of the historical client.
+    (
+        "lab/history.py",
+        "lo = max(0, hi - CANDLE_LIMIT)",
+        "lo = max(0, hi - CANDLE_LIMIT + 1)",
+        "lab window 500->499",
+    ),
+    (
+        # bisect over open <= now - step is the live filter open + step <= now; one second less
+        # is open + step < now.
+        "lab/history.py",
+        "closed = bisect_right(series.ts, now_epoch - step, lo, hi)",
+        "closed = bisect_right(series.ts, now_epoch - step - 1, lo, hi)",
+        "lab closed filter <= -> <",
+    ),
+    (
+        "lab/history.py",
+        "hi = bisect_right(series.ts, now_epoch)",
+        "hi = bisect_right(series.ts, now_epoch - step)",
+        "lab forming bar not counted",
+    ),
+    (
+        "lab/history.py",
+        "last = bisect_right(series.ts, now - MINUTE) - 1",
+        "last = bisect_right(series.ts, now) - 1",
+        "lab quote from the next minute",
+    ),
+    ("lab/history.py", "received=hi - lo,", "received=closed - lo,", "lab received count"),
+    ("lab/history.py", "forming=closed < hi,", "forming=False,", "lab forming flag"),
+    (
+        "lab/history.py",
+        "first_open=series.ts[lo] if hi > lo else None,",
+        "first_open=series.ts[0] if hi > lo else None,",
+        "lab first open",
+    ),
+    (
+        "lab/history.py",
+        "quote = Quote(mid * (1 - half), mid * (1 + half))",
+        "quote = Quote(mid * (1 - half), mid * (1 + 2 * half))",
+        "lab quote spread",
+    ),
+    (
+        "lab/history.py",
+        "table[_open_time(row)] = row",
+        "table.setdefault(_open_time(row), row)",
+        "lab later capture wins",
+    ),
+    (
+        "lab/history.py",
+        "if not self._start <= epoch < self._end:",
+        "if not self._start <= epoch <= self._end:",
+        "lab preload end exclusive",
+    ),
     (
         "core.py",
         '        raise NotImplementedError("live trading is not enabled in this version")',
@@ -754,6 +811,8 @@ def main() -> int:
         env = {**os.environ, "PYTHONPATH": str(root / "src")}
         failures = []
         only = sys.argv[sys.argv.index("--only") + 1] if "--only" in sys.argv else None
+        if only is None and len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+            only = sys.argv[1]  # Spec 016 AK3 names the group as a plain argument
 
         def group_of(fname: str) -> str:
             if fname in TOP_LEVEL:

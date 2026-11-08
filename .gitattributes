@@ -40,3 +40,4 @@
 # GitHub language stats
 docs/** linguist-documentation
 
+*.xz   binary
