@@ -202,7 +202,6 @@ def _page(
         f'<div class="ticker" aria-hidden="true"><div class="ticker-track{phase}">'
         f"{items}{items}</div></div></div><main{view}>{body}</main>"
         "<footer><span>Paper-Modus · kein Echtgeld (ADR-0004)</span>"
-        "<span>App nur auf 127.0.0.1 · von außen per HTTPS oder SSH-Tunnel (ADR-0028)</span>"
         + files
         # Spec 014: on every page, also before login - a public site has to name its operator.
         + '<nav class="legal-links" aria-label="Rechtliches"><a href="/impressum">Impressum</a>'
