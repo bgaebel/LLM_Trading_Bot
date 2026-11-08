@@ -13,9 +13,10 @@ from decimal import Decimal
 
 from llm_trading_bot.llm.budget import FREE_STATUSES, charged_today, day_bounds
 from llm_trading_bot.llm.due import iso
-from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.market.models import QUOTE_MARKETS, SYMBOLS, Symbol
 from llm_trading_bot.paper.db import START_CASH
-from llm_trading_bot.paper.execution import BUYHOLD
+from llm_trading_bot.paper.execution import BENCHMARKS, BUYHOLD
+from llm_trading_bot.paper.usdc import is_usdc
 from llm_trading_bot.service.status import ServiceStatus
 
 MAX_POINTS = 240
@@ -64,7 +65,13 @@ class DepotRow:
 
     @property
     def reference(self) -> bool:
-        return self.agent == BUYHOLD
+        """Buy & hold and its USDC twin (Spec 020): never stopped, not ranked as traders."""
+        return self.agent in BENCHMARKS
+
+    @property
+    def usdc(self) -> bool:
+        """Trades its BTC over BTC-USDC (Spec 020); shown with a "USDC" badge."""
+        return is_usdc(self.agent)
 
 
 def depots(con: sqlite3.Connection) -> list[DepotRow]:
@@ -280,7 +287,10 @@ def liveness(con: sqlite3.Connection, now: float) -> list[Pulse]:
     last = con.execute("SELECT MAX(ts) FROM equity").fetchone()[0]
     pulses = [Pulse(CYCLE_LABEL, last, None if last is None else max(0.0, now - epoch(last)))]
     stored = {r["symbol"]: r["ts"] for r in con.execute("SELECT symbol, ts FROM market")}
-    for symbol in Symbol:
+    # Spec 020: a quote-only market only once the bot stored it (a USDC depot runs), so a bot
+    # without USDC depots shows no market it never asked for.
+    shown = (*SYMBOLS, *(s for s in QUOTE_MARKETS if s.name in stored))
+    for symbol in shown:
         ts = stored.get(symbol.name)
         age = None if ts is None else max(0.0, now - epoch(ts))
         pulses.append(Pulse(f"Kurs {symbol.market}", ts, age))

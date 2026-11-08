@@ -524,6 +524,10 @@ def _trading_panel(t: Trading, hidden: str) -> str:
     )
 
 
+_BADGE_CLASS = {"LLM": " llm", "USDC": " usdc"}
+"""Depot kinds with their own badge colour; the classic ones keep the plain badge."""
+
+
 def settings_page(
     values: Mapping[str, str],
     *,
@@ -542,13 +546,18 @@ def settings_page(
         "breakout": ("Ausbruch", "KLASSISCH"),
         "meanrev": ("Mean Reversion", "KLASSISCH"),
         "ensemble": ("Mehrheitsentscheid", "KLASSISCH"),
+        # Spec 020: the same rules, BTC bought and sold over BTC-USDC, cash in euro.
+        "trend-usdc": ("Trendfolge · BTC über USDC", "USDC"),
+        "breakout-usdc": ("Ausbruch · BTC über USDC", "USDC"),
+        "meanrev-usdc": ("Mean Reversion · BTC über USDC", "USDC"),
+        "ensemble-usdc": ("Mehrheitsentscheid · BTC über USDC", "USDC"),
     }
     depots = "".join(
         f'<label class="tile"><input type="checkbox" name="agents" value="{escape(a)}"'
         f"{' checked' if a in selected else ''}>"
         f'<span class="tile-name">{escape(a)}</span>'
         f'<span class="tile-sub">{escape(labels[a][0])}</span>'
-        f'<span class="badge{" llm" if labels[a][1] == "LLM" else ""}">'
+        f'<span class="badge{_BADGE_CLASS.get(labels[a][1], "")}">'
         f"{escape(labels[a][1])}</span></label>"
         for a in AGENT_CHOICES
     )
@@ -610,7 +619,10 @@ def settings_page(
         '<section class="panel span-12">'
         + _head("03", "Depots", "warm")
         + f'<div class="tiles">{depots}</div>'
-        '<p class="hint">Buy &amp; Hold läuft immer als Referenz mit.</p></section>'
+        '<p class="hint">Buy &amp; Hold läuft immer als Referenz mit, Buy &amp; Hold USDC '
+        "dazu, sobald ein USDC-Depot läuft. USDC-Depots handeln BTC über BTC-USDC "
+        "(0,05 % statt 0,25 % Gebühr) und tauschen je Trade Euro in USDC und zurück.</p>"
+        "</section>"
         '<section class="panel span-12">'
         + _head("04", "Budget € / Tag")
         + _gauge(total, luna, sol)
