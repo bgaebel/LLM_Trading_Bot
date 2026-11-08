@@ -40,7 +40,7 @@ from llm_trading_bot.strategy.indicators import indicators
 from llm_trading_bot.strategy.payload import cost_roundtrip, feature_payload
 from llm_trading_bot.strategy.signals import run_strategy
 
-ENV = {"OPENAI_API_KEY": KEY}
+ENV = {"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": ""}
 REFERENCE = ("trend", "breakout", "meanrev")
 
 

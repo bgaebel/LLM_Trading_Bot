@@ -25,9 +25,11 @@ Depots laufen unverändert weiter – so zeigt der Vergleich, was die günstiger
 - [x] AK4: **Depots:** `trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc` und `buyhold-usdc` mit je
   10.000 € Start; in den Einstellungen wählbar, standardmäßig an. Die v0.3.1-Depots und ihre Historie bleiben
   byte-gleich (bestehende Golden-Tests unverändert grün). — Nachweis: `tests/paper/test_usdc_depots.py`,
-  Golden-Tests v0.3.1. *Umsetzung „standardmäßig an“:* in der Auswahl angeboten, auf dem Server nach dem Deploy
-  einmal anzukreuzen (`docs/betrieb/server.md`), weil `BOT_AGENTS` dort eine ausdrückliche Liste ist, die der Bot
-  nie selbst ändert.
+  Golden-Tests v0.3.1. *Umsetzung „standardmäßig an“:* eigenes Feld `BOT_USDC_AGENTS` – fehlt es, laufen alle vier
+  (auch neben dem ausdrücklichen `BOT_AGENTS` auf dem Server, also gleich nach dem Deploy); leer = keins, abgewählt
+  wird in den Einstellungen. Nie in `BOT_AGENTS`, damit ein Rollback auf ein Release vor 020 mit derselben
+  `secrets.env` startet. — Nachweis: `tests/paper/test_usdc_depots.py::test_usdc_depots_are_on_by_default_also_beside_an_explicit_depot_list`,
+  `::test_usdc_choice_never_reaches_bot_agents_so_a_rollback_still_starts`.
 - [x] AK5: **Bewertung und Risiko in Euro:** BTC eines USDC-Depots = Menge · BTC-USDC-Mitte · USDC-EUR-Mitte;
   Drawdown-Stopp 10 % wie ADR-0021. Fehlt oder veraltet ein nötiger Kurs (BTC-USDC oder USDC-EUR), entscheidet und
   bewertet das Depot nicht (fail closed); andere Depots sind nicht betroffen. — Nachweis:
@@ -98,6 +100,12 @@ Depots laufen unverändert weiter – so zeigt der Vergleich, was die günstiger
   Euro-Betrag, nur die Summe ist beobachtbar; jede falsche Einzelgebühr wird erkannt) und „Buy & Hold USDC kauft
   nach Neustart nur einmal“ (die Entscheidung mit Bar −1 ist eindeutig). Muster der Mutationen dürfen in der
   Gruppe nur einmal vorkommen (ein Docstring hatte drei Mutanten verschluckt). AK8 als Folgearbeit zurückgestellt.
+- 2026-11-08: Prüfung (Workflow): Die erste Umsetzung machte die Depots opt-in (Ankreuzen nach dem Deploy) und
+  schrieb sie in `BOT_AGENTS` – gegen AK4 „standardmäßig an“, AK10 wäre nach dem Deploy ausgeblieben, und ein
+  Rollback auf ein Release vor 020 hätte `BOT_AGENTS` als unbekannt abgelehnt und alle Depots gestoppt. Jetzt:
+  eigenes Feld `BOT_USDC_AGENTS` (fehlt = alle an, leer = keins), AK4-Text wieder wie freigegeben. Außerdem zeigt
+  die Übersicht BTC-USDC/USDC-EUR nach dem Abschalten nicht mehr als stehende Kurse: nur solange ein USDC-Depot in
+  der neuesten Runde bewertet wurde oder der Kurs jünger als 1 h ist (`tests/web/test_usdc_overview.py`).
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

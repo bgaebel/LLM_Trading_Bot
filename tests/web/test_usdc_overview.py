@@ -2,6 +2,7 @@
 new quotes in the ticker; settings offer the depots. Without USDC depots nothing changes."""
 
 import re
+import sqlite3
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
@@ -10,7 +11,7 @@ import pytest
 
 from fakes import ScenarioClient, UsdcScenarioClient
 from golden_scenarios import NOW
-from llm_trading_bot.llm.agents import USDC_AGENTS, load_config
+from llm_trading_bot.llm.agents import USDC_AGENTS, USDC_FIELD, load_config
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
@@ -24,11 +25,12 @@ from llm_trading_bot.web.readonly import reading
 SHARES: dict[str, Decimal] = {}
 
 
-def write(path: Path, agents: str, client: ScenarioClient) -> None:
-    config = load_config({"BOT_AGENTS": agents})
+def write(path: Path, usdc: str, client: ScenarioClient, at: float = NOW) -> None:
+    """One round of trend and the USDC depots ``usdc`` (BOT_USDC_AGENTS) at ``at``."""
+    config = load_config({"BOT_AGENTS": "trend", USDC_FIELD: usdc})
     con = open_db(path, agents=config.depots)
     try:
-        paper_cycle(con, client, config, costs=Costs(), clock=lambda: NOW)
+        paper_cycle(con, client, config, costs=Costs(), clock=lambda: at)
     finally:
         con.close()
 
@@ -36,7 +38,7 @@ def write(path: Path, agents: str, client: ScenarioClient) -> None:
 @pytest.fixture
 def view(tmp_path: Path) -> Iterator[overview.Overview]:
     path = tmp_path / "bot.db"
-    write(path, "trend,trend-usdc", UsdcScenarioClient())
+    write(path, "trend-usdc", UsdcScenarioClient())
     with reading(path) as con:
         yield overview.load(con, NOW + 5, SHARES)
 
@@ -85,7 +87,7 @@ def test_public_view_shows_the_same_depots_read_only(view: overview.Overview) ->
 def test_without_usdc_depots_the_overview_is_unchanged(tmp_path: Path) -> None:
     path = tmp_path / "bot.db"
     # The book holds the USDC markets, but no USDC depot asked for them.
-    write(path, "trend", UsdcScenarioClient())
+    write(path, "", UsdcScenarioClient())
     with reading(path) as con:
         view = overview.load(con, NOW + 5, SHARES)
     assert [p.label for p in view.pulses][-2:] == ["Kurs BTC-EUR", "Kurs ETH-EUR"]
@@ -95,7 +97,7 @@ def test_without_usdc_depots_the_overview_is_unchanged(tmp_path: Path) -> None:
 
 def test_settings_offer_the_usdc_depots(tmp_path: Path) -> None:
     assert AGENT_CHOICES[-4:] == USDC_AGENTS
-    html = settings_page({"BOT_AGENTS": "gpt-luna,trend-usdc"}, csrf="x")
+    html = settings_page({"BOT_AGENTS": "gpt-luna", USDC_FIELD: "trend-usdc"}, csrf="x")
     for agent in USDC_AGENTS:
         tile = re.search(rf'value="{agent}"(?: checked)?>.*?</label>', html)
         assert tile and '<span class="badge usdc">USDC</span>' in tile.group(0), agent
@@ -103,8 +105,59 @@ def test_settings_offer_the_usdc_depots(tmp_path: Path) -> None:
     assert "2 / 10" in html
     secrets = SecretsFile(tmp_path / "secrets.env")
     stored = secrets.update({}, agents=["ensemble-usdc", "trend", "trend-usdc"])
-    assert stored["BOT_AGENTS"] == "trend,trend-usdc,ensemble-usdc"
+    assert (stored["BOT_AGENTS"], stored[USDC_FIELD]) == ("trend", "trend-usdc,ensemble-usdc")
     secrets.request_resume("trend-usdc", "2026-11-08T12:00:00+00:00")
     assert "trend-usdc@" in secrets.read()["BOT_RESUME"]
     with pytest.raises(ValueError, match="unknown depot"):
         secrets.request_resume(BUYHOLD_USDC, "2026-11-08T12:00:00+00:00")
+
+
+def test_settings_tick_the_usdc_depots_while_no_choice_is_stored() -> None:
+    """AK4: the bot runs them when nothing is stored, so the tiles must say so."""
+    html = settings_page({"BOT_AGENTS": "gpt-luna"}, csrf="x")
+    assert all(f'value="{agent}" checked>' in html for agent in USDC_AGENTS)
+    off = settings_page({"BOT_AGENTS": "gpt-luna", USDC_FIELD: ""}, csrf="x")
+    assert not any(f'value="{agent}" checked>' in off for agent in USDC_AGENTS)
+
+
+LATER = NOW + 120
+"""A second round two minutes after the first."""
+
+
+def usdc_markets(con: sqlite3.Connection, now: float) -> tuple[list[str], list[str], list[str]]:
+    view = overview.load(con, now, SHARES)
+    pulses = [p for p in view.pulses if "USDC" in p.label]
+    return (
+        [p.label for p in pulses],
+        [p.level for p in pulses],
+        [q.market for q in view.quotes if "USDC" in q.market],
+    )
+
+
+def test_switched_off_usdc_quotes_leave_pulses_and_ticker(tmp_path: Path) -> None:
+    """The bot stops storing BTC-USDC/USDC-EUR once no USDC depot runs; their last rows must not
+    read as a market-data failure, also on the public view (ADR-0028)."""
+    path = tmp_path / "bot.db"
+    write(path, "trend-usdc", UsdcScenarioClient())
+    write(path, "", UsdcScenarioClient(), at=LATER)
+    labels = ["Kurs BTC-USDC", "Kurs USDC-EUR"]
+    with reading(path) as con:
+        # Shortly after: still the age rule, so a real outage stays visible for a while.
+        assert usdc_markets(con, LATER + 5)[0] == labels
+        late = LATER + overview.DELAYED_SECONDS + 1
+        assert usdc_markets(con, late) == ([], [], [])
+        view = overview.load(con, late, SHARES)
+        assert "BTC-USDC" not in dict(ticker(view))
+        assert [p.label for p in view.pulses][-2:] == ["Kurs BTC-EUR", "Kurs ETH-EUR"]
+
+
+def test_usdc_quotes_in_use_stay_visible_when_stale(tmp_path: Path) -> None:
+    """While a USDC depot still gets equity points, an old USDC quote is a real problem."""
+    path = tmp_path / "bot.db"
+    write(path, "trend-usdc", UsdcScenarioClient())
+    with reading(path) as con:
+        late = NOW + overview.DELAYED_SECONDS + 1
+        labels, levels, markets = usdc_markets(con, late)
+    assert labels == ["Kurs BTC-USDC", "Kurs USDC-EUR"]
+    assert levels == [overview.STOPPED, overview.STOPPED]
+    assert markets == ["BTC-USDC", "USDC-EUR"]

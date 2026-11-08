@@ -8,7 +8,13 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from html import escape
 
-from llm_trading_bot.llm.agents import LLM_DEFAULTS, MAX_OUTPUT_TOKENS, MODEL_PRICES
+from llm_trading_bot.llm.agents import (
+    LLM_DEFAULTS,
+    MAX_OUTPUT_TOKENS,
+    MODEL_PRICES,
+    USDC_AGENTS,
+    USDC_FIELD,
+)
 from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.web import chart
 from llm_trading_bot.web.credentials import AGENT_CHOICES, PUBLIC_OVERVIEW_FIELD, mask
@@ -539,6 +545,8 @@ def settings_page(
     key = values.get("OPENAI_API_KEY")
     key_state = f"gespeichert ({escape(mask(key))})" if key else "nicht gesetzt"
     selected = values.get("BOT_AGENTS", ",".join(LLM_DEFAULTS)).split(",")
+    # The bot's default (Spec 020 AK4): a missing USDC choice runs all of them.
+    selected += values.get(USDC_FIELD, ",".join(USDC_AGENTS)).split(",")
     labels = {
         "gpt-luna": ("gpt-6-luna · Haupt-Trader", "LLM"),
         "gpt-sol": ("gpt-6.1-sol · Gegenprobe", "LLM"),

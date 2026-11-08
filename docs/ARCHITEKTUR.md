@@ -13,7 +13,7 @@ GPT-Depots (`llm`, Spec 005): `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprob
 eine OpenAI-Anfrage für beide Märkte nur bei Bedarf, hartes EUR-Budget, Provenienz je Versuch (ADR-0013).
 USDC-Depots (`paper.usdc`, Spec 020, ADR-0030): `trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc` plus
 `buyhold-usdc` – Regeln und Signale wie v0.3.1 aus den BTC-EUR-/ETH-EUR-Kerzen, BTC aber ausgeführt und bewertet
-über BTC-USDC und USDC-EUR (Bargeld bleibt Euro), Version `v0.3.1-usdc`; nur aktiv, wenn in den Einstellungen gewählt.
+über BTC-USDC und USDC-EUR (Bargeld bleibt Euro), Version `v0.3.1-usdc`; standardmäßig an, abwählbar in den Einstellungen (`BOT_USDC_AGENTS`).
 Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`. Weboberfläche (`web`, Spec 006/007): Login, Übersicht
 (Depots, Equity-Verlauf, Lebenszeichen, Entscheidungen, GPT-Kosten, Trades; liest die Bot-DB nur lesend, ADR-0016)
 und Eingabe von OpenAI-Key und Einstellungen per `uv run trading-bot web --data-dir <dir> [--db <pfad>]`, nur auf
@@ -294,12 +294,13 @@ Rundenergebnis, nur die Zähler `observations_*` in der Statusdatei.
 
 ## Build, Konfiguration & Deployment
 Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariablen: `TRADING_MODE`; `BOT_AGENTS`
-(Standard `gpt-luna,gpt-sol`, klassische wählbar); `TAKER_FEE` 0,0025 und `SLIPPAGE` 0,0005 je Seite, erlaubt
+(Standard `gpt-luna,gpt-sol`, klassische wählbar); `BOT_USDC_AGENTS` (Spec 020: fehlt = alle vier USDC-Depots,
+leer = keins; nie in `BOT_AGENTS`, damit ein Release vor 020 nach einem Rollback dieselbe Datei liest); `TAKER_FEE` 0,0025 und `SLIPPAGE` 0,0005 je Seite, erlaubt
 [0, 0,05]; `OPENAI_API_KEY`; `LLM_EFFORT` (`low`); `LLM_DAILY_BUDGET_EUR` (3) und `LLM_DAILY_BUDGET_EUR_GPT_LUNA`/
 `_GPT_SOL` (0,50/2,50); `LLM_MIN_INTERVAL_SECONDS` (3600), `LLM_EVENT_COOLDOWN_SECONDS` (600),
 `LLM_EVENT_MOVE_THRESHOLD` (0,018), `LLM_MAX_CALLS_PER_HOUR` (4); optional `OPENAI_MODEL_<DEPOT>` mit
 `LLM_PRICE_IN_EUR_<DEPOT>`/`LLM_PRICE_OUT_EUR_<DEPOT>`. In `__DATA_DIR__/secrets.env` (600, Dienstbenutzer,
-geschrieben von der Weboberfläche, ADR-0015) stehen nur `OPENAI_API_KEY`, `BOT_AGENTS`, `LLM_EFFORT` und die drei
+geschrieben von der Weboberfläche, ADR-0015) stehen nur `OPENAI_API_KEY`, `BOT_AGENTS`, `BOT_USDC_AGENTS`, `LLM_EFFORT` und die drei
 Budgets (`web/credentials.FIELDS`); andere Zeilen dort werden ignoriert und beim nächsten Speichern entfernt. Alle
 übrigen Variablen kommen nur aus der Umgebung des Prozesses (auf dem Server: systemd-Drop-in, das ein Update nie ändert). Der Dienst
 liest Umgebung und `secrets.env` jede Runde neu, Umgebungswerte gewinnen (ADR-0017). Ziel: Hetzner Cloud CX23, Ubuntu 24.04, systemd-Unit.

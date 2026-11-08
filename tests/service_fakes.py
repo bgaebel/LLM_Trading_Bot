@@ -12,6 +12,7 @@ from typing import Any, NoReturn
 from fakes import ScenarioClient
 from golden_scenarios import NOW
 from llm_fakes import FakeModel
+from llm_trading_bot.llm.agents import USDC_FIELD
 from llm_trading_bot.market.models import Candle, Symbol
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.report import CycleReport
@@ -148,7 +149,11 @@ def harness(
     client: Any = None,
     model: Any = None,
     secrets_text: str = "BOT_AGENTS=trend\n",
+    usdc: str | None = "",
 ) -> Harness:
+    """``usdc``: BOT_USDC_AGENTS in the environment. These tests predate Spec 020 and run
+    without the USDC depots (on by default) unless a test chooses them; None leaves the field
+    unset, so the bot's default applies."""
     timer = FakeTimer(start, grace=grace)
     stop = threading.Event()
     notifier = RecordingNotifier()
@@ -167,7 +172,7 @@ def harness(
     service = Service(
         db,
         client or MovingClient(),
-        env=dict(env or {}),
+        env={**({} if usdc is None else {USDC_FIELD: usdc}), **(env or {})},
         secrets=secrets,
         stop=stop,
         log=log,

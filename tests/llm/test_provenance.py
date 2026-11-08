@@ -22,7 +22,7 @@ def run(db: Path, model: FakeModel) -> tuple[int, str]:
     code = run_paper_cycle(
         db,
         ScenarioClient(),
-        env={"OPENAI_API_KEY": KEY},
+        env={"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": ""},
         out=out,
         clock=lambda: NOW,
         model_factory=lambda key: model,

@@ -761,7 +761,7 @@ U, UB, UO, UW = (
     "paper/observations.py",
     "web/overview_page.py",
 )
-UA, UC = "llm/agents.py", "web/credentials.py"
+UA, UC, UP, UV = "llm/agents.py", "web/credentials.py", "web/pages.py", "web/overview.py"
 USDC = [
     (
         U,
@@ -1092,9 +1092,16 @@ USDC = [
     ),
     (
         UA,
-        "usdc = tuple(n for n in names if n in USDC_AGENTS)",
-        "usdc = tuple(n for n in names if n in USDC_AGENTS[:1])",
+        '",".join(USDC_AGENTS), USDC_AGENTS))',
+        '",".join(USDC_AGENTS), USDC_AGENTS[:1]))',
         "usdc every depot selectable",
+    ),
+    (UA, '",".join(USDC_AGENTS), USDC_AGENTS))', '"", USDC_AGENTS))', "usdc on by default"),
+    (
+        UA,
+        '"BOT_AGENTS", DEFAULT_AGENTS, (*CLASSIC_AGENTS, *LLM_DEFAULTS))',
+        '"BOT_AGENTS", DEFAULT_AGENTS, (*CLASSIC_AGENTS, *USDC_AGENTS, *LLM_DEFAULTS))',
+        "usdc depots refused in BOT_AGENTS",
     ),
     (
         UC,
@@ -1102,6 +1109,37 @@ USDC = [
         "AGENT_CHOICES = (*LLM_DEFAULTS, *CLASSIC_AGENTS)",
         "usdc depots offered in the settings",
     ),
+    (
+        UC,
+        'values["BOT_AGENTS"] = ",".join(a for a in chosen if a not in USDC_AGENTS)',
+        'values["BOT_AGENTS"] = ",".join(chosen)',
+        "usdc choice kept out of BOT_AGENTS (rollback)",
+    ),
+    (
+        UC,
+        'values[USDC_FIELD] = ",".join(a for a in chosen if a in USDC_AGENTS)',
+        "pass",
+        "usdc choice none stored",
+    ),
+    (
+        UP,
+        'selected += values.get(USDC_FIELD, ",".join(USDC_AGENTS)).split(",")',
+        'selected += values.get(USDC_FIELD, "").split(",")',
+        "usdc tiles ticked by default",
+    ),
+    (
+        UV,
+        "and (in_use or now - epoch(ts) <= DELAYED_SECONDS)",
+        "",
+        "usdc unused quotes hidden",
+    ),
+    (
+        UV,
+        "(in_use or now - epoch(ts) <= DELAYED_SECONDS)",
+        "(now - epoch(ts) <= DELAYED_SECONDS)",
+        "usdc quotes in use stay visible",
+    ),
+    (UV, "if s.name in shown and ", "if ", "usdc unused quotes left out of the ticker"),
 ]
 M += USDC
 USDC_LABELS = {label for *_, label in USDC}

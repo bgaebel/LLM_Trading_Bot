@@ -78,7 +78,7 @@ def _cycles(path: Path, *at: float) -> None:
             paper_cycle(
                 con,
                 ScenarioClient(),
-                load_config({"OPENAI_API_KEY": KEY}),
+                load_config({"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": ""}),
                 costs=Costs(),
                 model=FakeModel(),
                 clock=Clock(t),

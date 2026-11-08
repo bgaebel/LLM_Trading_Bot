@@ -9,7 +9,9 @@ from llm_trading_bot.llm.agents import load_config
 from llm_trading_bot.llm.budget import Pricing
 from llm_trading_bot.llm.due import Cadence
 
-KEY = {"OPENAI_API_KEY": "sk-test-not-a-real-key-0000"}
+OFF = {"BOT_USDC_AGENTS": ""}
+"""Spec 020: without the USDC depots, which run by default."""
+KEY = {"OPENAI_API_KEY": "sk-test-not-a-real-key-0000", **OFF}
 
 
 def test_defaults_are_luna_trading_and_sol_cross_checking() -> None:
@@ -33,7 +35,7 @@ def test_key_never_appears_in_the_settings_repr() -> None:
 
 
 def test_classic_only_needs_no_key() -> None:
-    config = load_config({"BOT_AGENTS": "trend, meanrev"})
+    config = load_config({**OFF, "BOT_AGENTS": "trend, meanrev"})
     assert (config.classic, config.llm, config.agents) == (
         ("trend", "meanrev"),
         None,

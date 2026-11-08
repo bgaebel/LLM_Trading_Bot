@@ -10,7 +10,15 @@ import pytest
 
 from fakes import FakeClock, ScenarioClient, UsdcScenarioClient
 from golden_scenarios import NOW
-from llm_trading_bot.llm.agents import USDC_AGENTS, BotConfig, load_config
+from llm_fakes import KEY
+from llm_trading_bot.llm.agents import (
+    CLASSIC_AGENTS,
+    LLM_DEFAULTS,
+    USDC_AGENTS,
+    USDC_FIELD,
+    BotConfig,
+    load_config,
+)
 from llm_trading_bot.market.models import QUOTED, MarketDataError, Quote, Symbol
 from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.cycle import paper_cycle, quote_problem
@@ -23,6 +31,7 @@ from llm_trading_bot.paper.execution import (
     initialize_buyhold_usdc,
 )
 from llm_trading_bot.paper.risk import Controls
+from llm_trading_bot.web.credentials import SecretsFile, load_env_file
 
 CLASSIC = ("trend", "breakout", "meanrev", "ensemble")
 ALL_USDC = BotConfig(CLASSIC, None, USDC_AGENTS)
@@ -30,15 +39,52 @@ ALL_USDC = BotConfig(CLASSIC, None, USDC_AGENTS)
 
 def test_config_knows_the_usdc_depots_and_adds_their_benchmark() -> None:
     assert USDC_AGENTS == ("trend-usdc", "breakout-usdc", "meanrev-usdc", "ensemble-usdc")
-    config = load_config({"BOT_AGENTS": "trend,meanrev-usdc,trend-usdc"})
+    config = load_config({"BOT_AGENTS": "trend", USDC_FIELD: "meanrev-usdc,trend-usdc"})
     assert (config.classic, config.usdc) == (("trend",), ("meanrev-usdc", "trend-usdc"))
     assert config.agents == ("trend", "meanrev-usdc", "trend-usdc")
     assert config.depots == (*config.agents, BUYHOLD, usdc.BUYHOLD_USDC)
-    plain = load_config({"BOT_AGENTS": "trend"})
+    plain = load_config({"BOT_AGENTS": "trend", USDC_FIELD: ""})
     assert plain.usdc == () and plain.depots == ("trend", BUYHOLD)
-    # The benchmark runs by itself and cannot be chosen.
-    with pytest.raises(ValueError, match="unknown depots"):
-        load_config({"BOT_AGENTS": "buyhold-usdc"})
+    # The benchmark runs by itself and cannot be chosen; nor can a depot of the other list.
+    for wrong, message in (
+        ("buyhold-usdc", "unknown depots"),
+        ("trend", "unknown depots"),
+        ("trend-usdc,trend-usdc", "twice"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            load_config({"BOT_AGENTS": "trend", USDC_FIELD: wrong})
+
+
+def test_usdc_depots_are_on_by_default_also_beside_an_explicit_depot_list() -> None:
+    """AK4 "standardmäßig an": the server's secrets.env holds an explicit BOT_AGENTS from before
+    Spec 020, so the deploy alone must start them (AK10); only a stored choice turns them off."""
+    for env in ({"BOT_AGENTS": "trend,gpt-sol", "OPENAI_API_KEY": KEY}, {"OPENAI_API_KEY": KEY}):
+        config = load_config(env)
+        assert config.usdc == USDC_AGENTS and usdc.BUYHOLD_USDC in config.depots
+    assert load_config({"BOT_AGENTS": "trend", USDC_FIELD: " "}).usdc == ()
+
+
+PRE_020_DEPOTS = ("trend", "breakout", "meanrev", "ensemble", "gpt-luna", "gpt-sol")
+"""What load_config of a release from before Spec 020 (e85a8d5) accepts in BOT_AGENTS."""
+
+
+def test_usdc_choice_never_reaches_bot_agents_so_a_rollback_still_starts(tmp_path: Path) -> None:
+    """A rollback (deploy.sh ... rollback) to a release from before Spec 020 reads the same
+    secrets.env: an unknown name in BOT_AGENTS would stop every depot, GPT included."""
+    assert set(PRE_020_DEPOTS) == {*CLASSIC_AGENTS, *LLM_DEFAULTS}
+    secrets = SecretsFile(tmp_path / "secrets.env")
+    stored = secrets.update({}, agents=["ensemble-usdc", "trend", "trend-usdc"])
+    assert (stored["BOT_AGENTS"], stored[USDC_FIELD]) == ("trend", "trend-usdc,ensemble-usdc")
+    assert set(load_env_file(secrets.path)["BOT_AGENTS"].split(",")) <= set(PRE_020_DEPOTS)
+    assert load_config(secrets.read()).usdc == ("trend-usdc", "ensemble-usdc")
+    # Switched off, "none" is stored, so the default does not turn them on again.
+    assert secrets.update({}, agents=["trend"])[USDC_FIELD] == ""
+    assert load_config(secrets.read()).usdc == ()
+    # Only USDC depots would leave BOT_AGENTS empty, which the old release refuses too.
+    with pytest.raises(ValueError, match="besides the USDC depots"):
+        secrets.update({}, agents=["trend-usdc"])
+    with pytest.raises(ValueError, match=f"belong in {USDC_FIELD}"):
+        load_config({"BOT_AGENTS": "trend,trend-usdc"})
 
 
 def db(path: Path, config: BotConfig) -> sqlite3.Connection:
