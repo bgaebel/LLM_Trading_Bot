@@ -19,12 +19,21 @@ Two stores, each append-only:
   because appending to a broken chain would hide the break.
 
 A repeat whose outcome differs (e.g. from a dirty work tree on the same commit) is kept as its
-own run under the same trial key: nothing is lost and the trial count does not grow.
+own run under the same trial key, and it counts as one more trial (see ``Register.trial_count``):
+a rerun that produced something else ran other code or is not deterministic, and counting it
+under the old trial would shrink N for the multiple-testing corrections - the dangerous direction.
+
+Because nothing can ever be removed, ``record`` refuses what the register must never hold: any
+quarter reaching into the sealed period (ADR-0026) unless it is a number-free ``sealed`` entry,
+day points or trades outside the quarter, and values whose daily return is undefined.
 """
 
+import calendar
 import dataclasses
+import datetime
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -55,7 +64,13 @@ GENESIS = "0" * 64
 BUSY_TIMEOUT_MS = 10_000
 _COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _STATUS = re.compile(r"[a-z][a-z_]*")
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+_DAY_SECONDS = 86_400
+SEALED_STATUS = "sealed"
+"""The only status a quarter reaching into the sealed period may be recorded with."""
 _LINE_KEYS = frozenset({"seq", "prev_sha256", "event", "sha256"})
+CEILING_ENV = "GIT_CEILING_DIRECTORIES"
+"""Honoured by ``head_from_files`` as git does: the search for ``.git`` never enters these."""
 
 _TABLES = ("runs", "repeats", "daily_returns", "events")
 _SCHEMA = """
@@ -148,10 +163,19 @@ def _package_dir() -> Path:
 def head_from_files(start: Path) -> str:
     """HEAD of the git checkout containing ``start``, read from the ``.git`` files without
     running git: plain checkouts, linked worktrees (``.git`` file + ``commondir``), detached
-    HEAD, loose and packed refs. ``unknown`` if any of it cannot be read."""
+    HEAD, loose and packed refs. ``unknown`` if any of it cannot be read.
+
+    Like git, the upward search stops before any folder in ``GIT_CEILING_DIRECTORIES``, so a
+    caller (or a test) can rule out a checkout further up, e.g. a dotfiles repo in the home."""
     try:
         gitdir = None
+        start = start.resolve()
+        ceilings = {
+            Path(p).resolve() for p in os.environ.get(CEILING_ENV, "").split(os.pathsep) if p
+        }
         for folder in (start, *start.parents):
+            if folder != start and folder in ceilings:
+                break
             dot = folder / ".git"
             if dot.is_dir():
                 gitdir = dot
@@ -254,12 +278,90 @@ def outcome_sha256(result: QuarterResult) -> str:
 
 def daily_returns(depot: DepotResult, start_cash: float = START_CASH) -> list[tuple[str, float]]:
     """Simple return per UTC day from the end-of-day values; the first day against the fresh
-    quarter capital (AK4), so the returns compound to the quarter's net return."""
+    quarter capital (AK4), so the returns compound to the quarter's net return.
+
+    A depot at 0 that stays at 0 has a return of 0. Coming back from 0 has no defined return;
+    writing 0.0 would hide the jump, so it raises RegisterError (a bug in the run, not data).
+    """
     out, prev = [], start_cash
     for point in depot.days:
-        out.append((point.day, point.value / prev - 1 if prev else 0.0))
+        if prev:
+            ret = point.value / prev - 1
+        elif point.value == 0:
+            ret = 0.0
+        else:
+            raise RegisterError(
+                f"{depot.agent} {point.day}: value {point.value} after a value of 0 "
+                "has no daily return"
+            )
+        out.append((point.day, ret))
         prev = point.value
     return out
+
+
+def _day_start(day: str) -> int:
+    if not _DAY.fullmatch(day):
+        raise RegisterError(f"day {day!r} is not YYYY-MM-DD")
+    try:
+        date = datetime.date.fromisoformat(day)
+    except ValueError as exc:
+        raise RegisterError(f"day {day!r} is no calendar date") from exc
+    return calendar.timegm(date.timetuple())
+
+
+def check_result(result: QuarterResult) -> None:
+    """Raise RegisterError for anything the append-only register must never hold.
+
+    Runs before anything is written: a wrong row could never be removed again.
+
+    - a quarter reaching into the sealed period (ADR-0026) only with status ``sealed``, and then
+      without numbers (no day points, trades or daily mids) - the sealed data stays unseen;
+      ``sealed`` is likewise refused for a quarter outside the sealed period;
+    - every day point (depot days, daily mids) must be a UTC day overlapping the quarter
+      ``[start, end)``, depot days strictly increasing, values finite;
+    - every trade must lie in ``[start, end)``;
+    - the daily returns must be defined (see ``daily_returns``).
+    """
+    if not _STATUS.fullmatch(result.status):
+        raise RegisterError(f"invalid status {result.status!r}")
+    q = result.quarter
+    if q.sealed and result.status != SEALED_STATUS:
+        raise RegisterError(
+            f"{q.label} reaches into the sealed period (ADR-0026): only status "
+            f"{SEALED_STATUS!r} may be recorded, not {result.status!r}"
+        )
+    if result.status == SEALED_STATUS:
+        if not q.sealed:
+            raise RegisterError(f"{q.label} lies before the sealed period: status 'sealed' wrong")
+        numbers = any(d.days or d.trades for d in result.depots.values()) or any(
+            result.daily_mid.values()
+        )
+        if numbers:
+            raise RegisterError(
+                f"{q.label}: a sealed entry carries no day points, trades or daily mids"
+            )
+
+    def check_day(where: str, day: str) -> None:
+        start = _day_start(day)
+        if not (start < q.end and start + _DAY_SECONDS > q.start):
+            raise RegisterError(f"{where}: day {day} outside {q.label} [{q.start}, {q.end})")
+
+    for name, depot in sorted(result.depots.items()):
+        prev_day = ""
+        for point in depot.days:
+            check_day(f"depot {name}", point.day)
+            if point.day <= prev_day:
+                raise RegisterError(f"depot {name}: day {point.day} not after {prev_day}")
+            if not math.isfinite(point.value):
+                raise RegisterError(f"depot {name} {point.day}: value {point.value} not finite")
+            prev_day = point.day
+        for trade in depot.trades:
+            if not q.start <= trade.ts < q.end:
+                raise RegisterError(f"depot {name}: trade at {trade.ts} outside {q.label}")
+        daily_returns(depot)
+    for market, rows in sorted(result.daily_mid.items()):
+        for day, _ in rows:
+            check_day(f"mid {market}", day)
 
 
 @dataclass(frozen=True)
@@ -377,6 +479,76 @@ def _tx(con: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     con.execute("COMMIT")
 
 
+def _check_run(
+    run: sqlite3.Row,
+    first: tuple[int, dict[str, Any]] | None,
+    returns: list[tuple[str, str, float, float]],
+) -> list[str]:
+    """One ``runs`` row against its first chain event, its own result JSON and the
+    ``daily_returns`` rows stored for it."""
+    run_id = run["id"]
+    problems: list[str] = []
+    if sha256_text(run["result_json"]) != run["result_sha256"]:
+        problems.append(f"run {run_id}: stored result does not match its hash")
+    if first is not None:
+        n, event = first
+        expected = {
+            "repeat": 1,
+            "created_at": run["created_at"],
+            "trial_key": run["trial_key"],
+            "config_hash": run["config_hash"],
+            "quarter": run["quarter"],
+            "variant": run["variant"],
+            "diagnostic": bool(run["diagnostic"]),
+            "status": run["status"],
+            "error": run["error"],
+            "graded": bool(run["graded"]),
+            "commit": run["code_commit"],
+            "clean": bool(run["clean"]),
+            "dataset_sha256": run["dataset_sha256"],
+            "outcome_sha256": run["outcome_sha256"],
+            "result_sha256": run["result_sha256"],
+        }
+        if differing := sorted(k for k, v in expected.items() if event.get(k) != v):
+            problems.append(f"run {run_id}: differs from event {n} in {', '.join(differing)}")
+    try:
+        result = QuarterResult.from_json(run["result_json"])
+        depots = json.loads(run["depots"])
+        config = config_hash(
+            result.variant,
+            run["code_commit"],
+            depots=depots,
+            strategy_version=run["strategy_version"],
+        )
+        q = result.quarter
+        derived = {
+            "config_hash": config,
+            "trial_key": trial_key(config, q, result.variant),
+            "outcome_sha256": outcome_sha256(result),
+            "quarter": q.label,
+            "window_start": q.start,
+            "window_end": q.end,
+            "variant": result.variant.name,
+            "diagnostic": int(result.variant.diagnostic),
+            "status": result.status,
+            "error": result.error,
+            "graded": int(result.graded),
+            "dataset_sha256": result.dataset_sha256,
+        }
+        expected_returns = [
+            (name, day, {p.day: p.value for p in depot.days}[day], ret)
+            for name, depot in sorted(result.depots.items())
+            for day, ret in daily_returns(depot)
+        ]
+    except (ValueError, KeyError, TypeError, RegisterError) as exc:
+        return [*problems, f"run {run_id}: stored result unreadable ({exc})"]
+    if differing := sorted(k for k, v in derived.items() if run[k] != v):
+        problems.append(f"run {run_id}: columns differ from its result in {', '.join(differing)}")
+    if returns != expected_returns:
+        problems.append(f"run {run_id}: daily returns differ from its result")
+    return problems
+
+
 def check_register_schema(con: sqlite3.Connection) -> None:
     """Raise SchemaError unless ``con`` is a register of exactly this version and shape,
     including the append-only triggers. Never migrated: the register is the evidence."""
@@ -464,10 +636,10 @@ class Register:
     def record(self, result: QuarterResult, *, depots: Collection[str] = DEPOTS) -> Recorded:
         """Register one finished, refused or aborted quarter. Identical repeats are merged.
 
-        ``depots`` is the configured depot set (an aborted result may carry none).
+        ``depots`` is the configured depot set (an aborted result may carry none). Raises
+        RegisterError, with nothing written, for a result ``check_result`` refuses.
         """
-        if not _STATUS.fullmatch(result.status):
-            raise RegisterError(f"invalid status {result.status!r}")
+        check_result(result)
         config = config_hash(result.variant, self.code.commit, depots=depots)
         key = trial_key(config, result.quarter, result.variant)
         outcome = outcome_sha256(result)
@@ -544,7 +716,8 @@ class Register:
         depots: Collection[str] = DEPOTS,
     ) -> Recorded:
         """A quarter that crashed is a trial too: recorded with status ``aborted`` and the error,
-        so a rerun that happens to work cannot hide it."""
+        so a rerun that happens to work cannot hide it. A sealed quarter is refused like in
+        ``record``: it is never run, so it cannot abort."""
         result = QuarterResult(
             quarter,
             variant,
@@ -627,7 +800,14 @@ class Register:
     # --- reading -------------------------------------------------------------------------
 
     def verify(self) -> ChainCheck:
-        """Chain file against the ``events`` table, plus each stored result against its hash."""
+        """Chain file against the ``events`` table, and every table row against the chain.
+
+        The triggers stop UPDATE and DELETE, but INSERT stays possible; a row added by hand
+        would change trial counts, repeats or returns without breaking the chain. So: every run
+        and every repeat has exactly one event with the same result checksum, the run's columns
+        match its event and its stored result, and ``daily_returns`` equals what its
+        ``result_json`` gives when recomputed.
+        """
         seq, head = self._head()
         check = verify_chain(self.chain_path, expected_lines=seq, expected_head=head)
         problems = list(check.problems)
@@ -636,10 +816,80 @@ class Register:
             n = int(row["seq"])
             if n <= len(lines) and lines[n - 1] != row["line"]:
                 problems.append(f"line {n}: differs from runs.db")
-        for row in self.con.execute("SELECT id, result_sha256, result_json FROM runs"):
-            if sha256_text(row["result_json"]) != row["result_sha256"]:
-                problems.append(f"run {row['id']}: stored result does not match its hash")
+        problems.extend(self._check_tables())
         return ChainCheck(check.lines, check.head, problems)
+
+    def _events_by_run(self, problems: list[str]) -> dict[Any, list[tuple[int, dict[str, Any]]]]:
+        by_run: dict[Any, list[tuple[int, dict[str, Any]]]] = {}
+        for row in self.con.execute("SELECT seq, kind, run_id, sha256, line FROM events"):
+            n = int(row["seq"])
+            try:
+                obj = json.loads(row["line"])
+                event = obj["event"]
+            except (ValueError, KeyError, TypeError):
+                problems.append(f"event {n}: stored line unreadable")
+                continue
+            if not isinstance(event, dict):
+                problems.append(f"event {n}: stored line unreadable")
+                continue
+            if (obj.get("sha256"), event.get("kind"), event.get("run_id")) != (
+                row["sha256"],
+                row["kind"],
+                row["run_id"],
+            ):
+                problems.append(f"event {n}: columns differ from its line")
+            if event.get("kind") not in ("run", "repeat"):
+                problems.append(f"event {n}: unknown kind {event.get('kind')!r}")
+            by_run.setdefault(event.get("run_id"), []).append((n, event))
+        for events in by_run.values():
+            events.sort(key=lambda e: e[0])
+        return by_run
+
+    def _check_tables(self) -> list[str]:
+        problems: list[str] = []
+        by_run = self._events_by_run(problems)
+        repeats: dict[int, list[sqlite3.Row]] = {}
+        for row in self.con.execute("SELECT * FROM repeats ORDER BY id"):
+            repeats.setdefault(int(row["run_id"]), []).append(row)
+        stored: dict[int, list[tuple[str, str, float, float]]] = {}
+        for row in self.con.execute(
+            "SELECT run_id, depot, day, value, ret FROM daily_returns ORDER BY run_id, depot, day"
+        ):
+            stored.setdefault(int(row["run_id"]), []).append(
+                (row["depot"], row["day"], row["value"], row["ret"])
+            )
+        run_ids: set[int] = set()
+        for run in self.con.execute("SELECT * FROM runs ORDER BY id"):
+            run_id = int(run["id"])
+            run_ids.add(run_id)
+            events = by_run.pop(run_id, [])
+            firsts = [(n, e) for n, e in events if e.get("kind") == "run"]
+            later = [(n, e) for n, e in events if e.get("kind") == "repeat"]
+            if len(firsts) != 1:
+                problems.append(f"run {run_id}: {len(firsts)} run events, expected exactly 1")
+            first = firsts[0] if len(firsts) == 1 else None
+            problems.extend(_check_run(run, first, stored.pop(run_id, [])))
+            rows = repeats.pop(run_id, [])
+            if len(rows) != len(later):
+                problems.append(
+                    f"run {run_id}: {len(rows)} repeats in runs.db, {len(later)} in the chain"
+                )
+            for i, (row, (n, event)) in enumerate(zip(rows, later, strict=False), start=2):
+                if firsts and n < firsts[0][0]:
+                    problems.append(f"event {n}: repeat of run {run_id} before the run")
+                if (event.get("result_sha256"), event.get("repeat"), event.get("clean")) != (
+                    row["result_sha256"],
+                    i,
+                    bool(row["clean"]),
+                ) or event.get("created_at") != row["created_at"]:
+                    problems.append(f"run {run_id}: repeat {i} differs from event {n}")
+        for run_id in sorted(set(by_run) - run_ids, key=str):
+            problems.append(f"chain events for run {run_id}, which runs.db does not have")
+        for run_id in sorted(repeats):
+            problems.append(f"repeats for run {run_id}, which runs.db does not have")
+        for run_id in sorted(stored):
+            problems.append(f"daily returns for run {run_id}, which runs.db does not have")
+        return problems
 
     def copy_chain(self, dest: Path) -> ChainCheck:
         """Copy the chain for a report after verifying it; never overwrites ``dest``."""
@@ -666,20 +916,50 @@ class Register:
     def trial_count(
         self, *, include_diagnostic: bool = True, statuses: Collection[str] | None = ("ok",)
     ) -> int:
-        """Distinct trials (config x window x variant) for multiple-testing notes.
+        """Number of trials (config x window x variant) for multiple-testing corrections.
 
         Default: every trial that produced a result someone could look at, diagnostics
         included (ADR-0026: evaluations that can lead to candidates are trials). ``statuses=None``
         also counts trials that only ever aborted or were refused.
+
+        Counting rule (never under-count: N too small makes every correction too lenient):
+
+        - Within one trial key and one dataset, every distinct outcome of the same status is a
+          trial of its own. Same key, data and commit with another outcome means other code
+          (dirty tree) or a non-deterministic run; either way it was one more look.
+        - Across datasets of one trial key (the archive grew or was repaired) the outcomes are
+          one trial if the code is proven: known commit and recorded at least once from a clean
+          tree. Then the key counts as its largest number of outcomes on any one dataset.
+        - Without that proof a code change cannot be told from a data change, so the distinct
+          outcomes are summed over the datasets. This over-counts a dirty tree whose only change
+          was new data - the cautious direction.
+        - Statuses are compared separately: an aborted attempt and a later success on the same
+          data are one trial, not two.
         """
         where, args = self._filters(include_diagnostic=include_diagnostic, statuses=statuses)
-        sql = f"SELECT COUNT(DISTINCT trial_key) FROM runs WHERE {where}"
-        return int(self.con.execute(sql, args).fetchone()[0])
+        sql = f"""
+            WITH f AS (
+              SELECT r.trial_key AS k, r.dataset_sha256 AS d, r.status AS s, r.outcome_sha256 AS o,
+                     (r.code_commit <> ? AND (r.clean = 1 OR EXISTS (
+                        SELECT 1 FROM repeats p WHERE p.run_id = r.id AND p.clean = 1))) AS proven
+              FROM runs r WHERE {where}),
+            per_status AS (
+              SELECT k, d, proven, COUNT(DISTINCT o) AS n FROM f GROUP BY k, d, s, proven),
+            per_data AS (
+              SELECT k, d, proven, MAX(n) AS n FROM per_status GROUP BY k, d, proven),
+            per_key AS (
+              SELECT CASE WHEN proven THEN MAX(n) ELSE SUM(n) END AS n
+              FROM per_data GROUP BY k, proven)
+            SELECT COALESCE(SUM(n), 0) FROM per_key"""
+        return int(self.con.execute(sql, [UNKNOWN_COMMIT, *args]).fetchone()[0])
 
     def config_count(
         self, *, include_diagnostic: bool = True, statuses: Collection[str] | None = ("ok",)
     ) -> int:
-        """Distinct configurations across all data windows (same filters as trial_count)."""
+        """Distinct configuration hashes across all data windows (same filters as trial_count).
+
+        Only a lower bound for runs from a dirty tree: uncommitted changes on one commit share
+        a hash. For N in corrections use ``trial_count``, which counts their outcomes."""
         where, args = self._filters(include_diagnostic=include_diagnostic, statuses=statuses)
         sql = f"SELECT COUNT(DISTINCT config_hash) FROM runs WHERE {where}"
         return int(self.con.execute(sql, args).fetchone()[0])

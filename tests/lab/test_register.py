@@ -1,8 +1,12 @@
 """Spec 016 AK8: trial register - dedup of repeats, append-only stores, checksum chain."""
 
+import dataclasses
 import json
+import math
+import os
 import sqlite3
 import subprocess
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -14,10 +18,12 @@ from llm_trading_bot.lab.model import (
     MarketQuality,
     Quarter,
     QuarterResult,
+    Trade,
     Variant,
 )
 from llm_trading_bot.lab.paths import CHAIN_FILE, LAB_DIR_ENV, RUNS_FILE
 from llm_trading_bot.lab.register import (
+    CEILING_ENV,
     GENESIS,
     UNKNOWN_COMMIT,
     ChainError,
@@ -39,13 +45,19 @@ OTHER = "b" * 40
 DATA = "d" * 64
 
 
+def day_of(epoch: int) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(epoch))
+
+
 def result(label: str = "2022Q1", variant: Variant | None = None, **kw: object) -> QuarterResult:
     q = Quarter.parse(label)
+    # The quarter's first two UTC days: the register refuses day points outside the quarter.
+    day1, day2 = (day_of(q.start + n * 86_400) for n in (0, 1))
     depot = DepotResult(
         "trend",
         [
-            DayPoint("2022-01-01", 10_100.0, 5_000.0, {"BTC-EUR": 0.5}),
-            DayPoint("2022-01-02", 9_999.0, 5_000.0, {"BTC-EUR": 0.5}),
+            DayPoint(day1, 10_100.0, 5_000.0, {"BTC-EUR": 0.5}),
+            DayPoint(day2, 9_999.0, 5_000.0, {"BTC-EUR": 0.5}),
         ],
         end_mid=9_999.0,
         end_liquidated=9_980.0,
@@ -100,7 +112,49 @@ def test_differing_repeat_kept_as_own_run(tmp_path: Path) -> None:
         reg.record(result())
         changed = reg.record(result(rounds=1439))
         assert not changed.merged and changed.repeat == 1
-        assert len(reg.list_runs()) == 2 and reg.trial_count() == 1
+        assert changed.trial_key == reg.list_runs()[0].trial_key
+        # Same key, data and commit, other outcome: other code was run - one more trial.
+        assert len(reg.list_runs()) == 2 and reg.trial_count() == 2
+        assert reg.verify().ok
+
+
+def test_differing_outcomes_never_under_counted(tmp_path: Path) -> None:
+    # Dirty tree: three uncommitted strategy edits on one commit are three trials.
+    with open_reg(tmp_path / "dirty", clean=False) as reg:
+        for n in (1, 2, 3):
+            reg.record(result("2023Q1", rounds=1000 + n))
+        assert reg.trial_count() == 3 and reg.config_count() == 1
+        # The identical outcome again is a repeat, not a trial.
+        assert reg.record(result("2023Q1", rounds=1001)).merged
+        assert reg.trial_count() == 3
+        # New data on a dirty tree cannot be told from a code change: counted (cautious).
+        reg.record(result("2023Q1", rounds=1001, dataset_sha256="e" * 64))
+        assert reg.trial_count() == 4
+    # Clean tree: a data change is the same trial, a non-deterministic rerun is not.
+    with open_reg(tmp_path / "clean") as reg:
+        reg.record(result())
+        reg.record(result(dataset_sha256="e" * 64))
+        assert reg.trial_count() == 1
+        reg.record(result(rounds=1439))
+        assert reg.trial_count() == 2
+    # Unknown commit proves nothing, even if the tree is said to be clean.
+    with open_reg(tmp_path / "unknown", commit=UNKNOWN_COMMIT) as reg:
+        reg.record(result())
+        reg.record(result(dataset_sha256="e" * 64))
+        assert reg.trial_count() == 2
+    # A dirty outcome later reproduced from a clean tree is proven: data growth merges again.
+    with open_reg(tmp_path / "proven", clean=False) as reg:
+        reg.record(result())
+    with open_reg(tmp_path / "proven", clean=True) as reg:
+        reg.record(result(dataset_sha256="e" * 64))
+        assert reg.trial_count() == 2  # the dirty outcome may stem from other code
+        assert reg.record(result()).merged
+        assert reg.trial_count() == 1 and reg.trial_count(statuses=None) == 1
+    # An abort and a later success on the same data are one trial.
+    with open_reg(tmp_path / "abort") as reg:
+        reg.record_aborted(Quarter.parse("2022Q1"), Variant(), "boom", dataset_sha256=DATA)
+        reg.record(result())
+        assert reg.trial_count(statuses=None) == 1 and reg.trial_count() == 1
 
 
 def test_chain_detects_loss(tmp_path: Path) -> None:
@@ -222,6 +276,166 @@ def test_invalid_status_refused(tmp_path: Path) -> None:
         reg.record(result(status="OK; DROP"))
 
 
+def assert_nothing_written(reg: Register) -> None:
+    assert reg.list_runs() == [] and reg.verify().ok and reg.verify().lines == 0
+
+
+def test_sealed_period_refused(tmp_path: Path) -> None:
+    sealed_q = Quarter.parse("2025Q4")
+    with open_reg(tmp_path) as reg:
+        # A bug in the backtest would otherwise leave sealed numbers in runs.db for good.
+        with pytest.raises(RegisterError, match="sealed period"):
+            reg.record(result("2025Q4"))
+        with pytest.raises(RegisterError, match="sealed period"):
+            reg.record_aborted(sealed_q, Variant(), "boom")
+        with pytest.raises(RegisterError, match="no day points"):
+            reg.record(result("2025Q4", status="sealed"))
+        with pytest.raises(RegisterError, match="no day points"):
+            reg.record(
+                QuarterResult(sealed_q, Variant(), "sealed", daily_mid={"BTC-EUR": [("x", 1.0)]})
+            )
+        with pytest.raises(RegisterError, match="before the sealed period"):
+            reg.record(QuarterResult(Quarter.parse("2025Q3"), Variant(), "sealed"))
+        assert_nothing_written(reg)
+        # The refusal itself is a number-free entry and may be recorded.
+        empty = DepotResult("trend")
+        rec = reg.record(QuarterResult(sealed_q, Variant(), "sealed", depots={"trend": empty}))
+        assert (
+            reg.returns(rec.run_id) == {} and reg.list_runs(status="sealed")[0].quarter == "2025Q4"
+        )
+        assert reg.verify().ok
+
+
+def test_day_points_outside_quarter_refused(tmp_path: Path) -> None:
+    q3 = Quarter.parse("2025Q3")
+
+    def with_day(day: str) -> QuarterResult:
+        res = result("2025Q3")
+        res.depots["trend"].days[-1] = dataclasses.replace(res.depots["trend"].days[-1], day=day)
+        return res
+
+    with open_reg(tmp_path) as reg:
+        for bad in ("2025-10-01", "2025-06-30", "2025-7-02", "2025-02-30", "2025-07-01"):
+            # the exclusive end (also sealed), the day before, malformed, no date, repeated
+            with pytest.raises(RegisterError):
+                reg.record(with_day(bad))
+        mid = result("2025Q3", daily_mid={"BTC-EUR": [("2025-07-01", 1.0), ("2025-10-01", 1.0)]})
+        with pytest.raises(RegisterError, match="outside"):
+            reg.record(mid)
+        late = result("2025Q3")
+        late.depots["trend"].trades.append(Trade(q3.end, "trend", "BTC-EUR", "BUY", 1, 1, 1, 0))
+        with pytest.raises(RegisterError, match="trade"):
+            reg.record(late)
+        nan = with_day("2025-07-02")
+        nan.depots["trend"].days[-1] = dataclasses.replace(
+            nan.depots["trend"].days[-1], value=math.nan
+        )
+        with pytest.raises(RegisterError, match="finite"):
+            reg.record(nan)
+        assert_nothing_written(reg)
+        # The last day of the quarter and a trade one second before its end are inside.
+        ok = with_day("2025-09-30")
+        ok.depots["trend"].trades.append(Trade(q3.end - 1, "trend", "BTC-EUR", "BUY", 1, 1, 1, 0))
+        ok.daily_mid = {"BTC-EUR": [("2025-07-01", 1.0), ("2025-09-30", 1.0)]}
+        reg.record(ok)
+        assert reg.verify().ok
+
+
+def test_daily_returns_after_zero(tmp_path: Path) -> None:
+    def depot(*values: float) -> DepotResult:
+        return DepotResult(
+            "trend", [DayPoint(f"2022-01-0{i}", v, v, {}) for i, v in enumerate(values, 1)]
+        )
+
+    assert daily_returns(depot(5_000.0, 0.0, 0.0)) == [
+        ("2022-01-01", -0.5),
+        ("2022-01-02", -1.0),
+        ("2022-01-03", 0.0),
+    ]
+    # Coming back from 0 has no return; 0.0 would hide the jump.
+    with pytest.raises(RegisterError, match="after a value of 0"):
+        daily_returns(depot(5_000.0, 0.0, 10.0))
+    with pytest.raises(RegisterError):
+        daily_returns(depot(1.0), start_cash=0.0)
+    with open_reg(tmp_path) as reg:
+        with pytest.raises(RegisterError, match="after a value of 0"):
+            reg.record(result(depots={"trend": depot(5_000.0, 0.0, 10.0)}))
+        assert_nothing_written(reg)
+
+
+RUN_COLUMNS = (
+    "created_at,trial_key,config_hash,strategy_version,depots,quarter,window_start,window_end,"
+    "variant,diagnostic,code_commit,clean,dataset_sha256,status,error,graded,outcome_sha256,"
+    "result_sha256,result_json"
+)
+
+
+def tampered(tmp_path: Path, name: str, *sql: str) -> list[str]:
+    """Problems verify() reports after inserting rows by hand into a fresh register."""
+    with open_reg(tmp_path / name) as reg:
+        reg.record(result("2022Q1"))
+        reg.record(result("2022Q1"))  # one repeat
+        reg.record(result("2022Q2"))
+        assert reg.verify().ok
+        for statement in sql:
+            reg.con.execute(statement)
+        return reg.verify().problems
+
+
+def has(problems: list[str], text: str) -> bool:
+    return any(text in p for p in problems)
+
+
+def test_verify_ties_tables_to_chain(tmp_path: Path) -> None:
+    # Triggers stop UPDATE/DELETE, INSERT stays possible: every forged row must show.
+    forged_run = tampered(
+        tmp_path,
+        "run",
+        f"INSERT INTO runs({RUN_COLUMNS}) "
+        f"SELECT {RUN_COLUMNS.replace('trial_key', "'fake'")} FROM runs WHERE id=1",
+    )
+    assert has(forged_run, "run 3: 0 run events, expected exactly 1")
+    assert has(forged_run, "run 3: columns differ from its result in trial_key")
+    extra_day = "INSERT INTO daily_returns VALUES (1,'trend','2022-01-03',1.0,0.5)"
+    assert has(tampered(tmp_path, "day", extra_day), "run 1: daily returns differ")
+    other_depot = "INSERT INTO daily_returns VALUES (2,'buyhold','2022-04-01',1.0,0.0)"
+    assert has(tampered(tmp_path, "depot", other_depot), "run 2: daily returns differ")
+    fake_repeat = (
+        "INSERT INTO repeats(run_id,created_at,clean,seconds,result_sha256) VALUES (2,'x',1,0,'y')"
+    )
+    assert has(tampered(tmp_path, "repeat", fake_repeat), "run 2: 1 repeats in runs.db, 0 in")
+    # Event row and run row inserted together, but no chain line: the chain is short.
+    forged_event = tampered(
+        tmp_path,
+        "event",
+        "INSERT INTO events(seq,created_at,kind,run_id,sha256,line) "
+        "SELECT 4,created_at,kind,run_id,'f',line FROM events WHERE seq=3",
+    )
+    assert has(forged_event, "chain has 3 lines, register has 4")
+    assert has(forged_event, "event 4: columns differ from its line")
+    assert has(forged_event, "run 2: 2 run events, expected exactly 1")
+
+
+def test_verify_checks_repeat_against_its_event(tmp_path: Path) -> None:
+    with open_reg(tmp_path) as reg:
+        reg.record(result())
+        reg.record(result(seconds=7.0))
+        assert reg.verify().ok
+    # A repeat row whose checksum differs from the chain's, written with the triggers bypassed
+    # (a copy edited outside the register): verify() compares row by row, not only counts.
+    con = sqlite3.connect(tmp_path / RUNS_FILE)
+    con.execute("DROP TRIGGER repeats_no_update")
+    con.execute("UPDATE repeats SET result_sha256='y'")
+    con.execute(
+        "CREATE TRIGGER repeats_no_update BEFORE UPDATE ON repeats "
+        "BEGIN SELECT RAISE(ABORT,'trial register is append-only'); END"
+    )
+    con.commit()
+    con.close()
+    with open_reg(tmp_path) as reg:
+        assert has(reg.verify().problems, "run 1: repeat 2 differs from event 2")
+
+
 def test_copy_chain_never_overwrites(tmp_path: Path) -> None:
     with open_reg(tmp_path) as reg:
         reg.record(result())
@@ -275,12 +489,20 @@ def test_code_state_from_git() -> None:
 
 
 def real_git(repo: Path) -> GitRunner:
-    """A runner that starts git, as a caller outside src may supply (src never starts processes)."""
+    """A runner that starts git, as a caller outside src may supply (src never starts processes).
+
+    Without the caller's GIT_* variables: a git hook sets GIT_DIR/GIT_WORK_TREE, which would point
+    git at the hook's repository instead of ``repo``. GIT_CEILING_DIRECTORIES is the exception, as
+    tests set it on purpose."""
 
     def run(args: Sequence[str]) -> str:
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+        if CEILING_ENV in os.environ:
+            env[CEILING_ENV] = os.environ[CEILING_ENV]
         done = subprocess.run(
             ["git", *args],
             cwd=repo,
+            env=env,
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -292,10 +514,25 @@ def real_git(repo: Path) -> GitRunner:
     return run
 
 
-def test_outside_git_checkout_is_unknown_and_dirty(tmp_path: Path) -> None:
+def test_outside_git_checkout_is_unknown_and_dirty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Independent of the environment: a checkout above the folder (here built on purpose, like a
+    # dotfiles repo in the home) is ruled out by a ceiling, and GIT_DIR/GIT_WORK_TREE from a git
+    # hook are neither passed to git nor read by head_from_files.
+    outer = tmp_path / "outer"
+    git_dir(outer, "ref: refs/heads/main", {"refs/heads/main": COMMIT})
+    plain = outer / "plain"
+    plain.mkdir()
+    monkeypatch.setenv("GIT_DIR", str(outer / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(outer))
+    monkeypatch.setenv(CEILING_ENV, str(outer))
     # A real git in a folder that is no checkout (or no git installed at all).
-    assert code_state(real_git(tmp_path)) == CodeState(UNKNOWN_COMMIT, False)
-    assert code_state(repo=tmp_path) == CodeState(UNKNOWN_COMMIT, False)
+    assert code_state(real_git(plain)) == CodeState(UNKNOWN_COMMIT, False)
+    assert code_state(repo=plain) == CodeState(UNKNOWN_COMMIT, False)
+    # Without the ceiling the outer checkout is found: the ceiling, not luck, made it unknown.
+    monkeypatch.delenv(CEILING_ENV)
+    assert code_state(repo=plain) == CodeState(COMMIT, False)
 
 
 def git_dir(root: Path, head: str, refs: dict[str, str], packed: str = "") -> Path:
@@ -309,7 +546,8 @@ def git_dir(root: Path, head: str, refs: dict[str, str], packed: str = "") -> Pa
     return git
 
 
-def test_head_from_files(tmp_path: Path) -> None:
+def test_head_from_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(CEILING_ENV, raising=False)
     loose = tmp_path / "loose"
     git_dir(loose, "ref: refs/heads/main", {"refs/heads/main": COMMIT})
     (loose / "src" / "pkg").mkdir(parents=True)
@@ -341,7 +579,8 @@ def test_head_from_files(tmp_path: Path) -> None:
     assert head_from_files(tmp_path / "nowhere") == UNKNOWN_COMMIT
 
 
-def test_head_from_files_matches_git() -> None:
+def test_head_from_files_matches_git(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(CEILING_ENV, raising=False)
     repo = Path(__file__).resolve().parent
     try:
         expected = real_git(repo)(["rev-parse", "HEAD"]).strip()
