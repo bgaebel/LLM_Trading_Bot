@@ -87,6 +87,10 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
     });
   }
 
+  function toLogin() {
+    location.assign("/login");
+  }
+
   class ServerError extends Error {}
 
   // One fetch at a time: a tab that becomes visible again must not start a second chain.
@@ -103,17 +107,26 @@ JS = r"""// Live overview (Spec 010, ADR-0019) from llm_trading_bot.web.script -
       const response = await fetch("/", {
         credentials: "same-origin",
         cache: "no-store",
+        // The server leaves out the backdrop this page already has (Spec 019).
+        headers: { "X-Live-Update": "1" },
         signal: controller.signal,
       });
       const path = new URL(response.url).pathname;
       if (path === "/login" || path === "/setup") {
-        location.assign("/login"); // the session ended: log in again
+        toLogin(); // the session ended: log in again
         return;
       }
       if (!response.ok) throw new ServerError("HTTP " + response.status);
       const fresh = new DOMParser().parseFromString(await response.text(), "text/html");
       const main = fresh.querySelector("main");
       if (!main) throw new Error("no overview in the answer");
+      // ADR-0028: without a session "/" answers with the view without login. An owner page that
+      // gets it has lost its session - like a redirect to the login (Spec 010).
+      const owner = document.querySelector("main").dataset.view === "owner";
+      if (owner && main.dataset.view !== "owner") {
+        toLogin();
+        return;
+      }
       readServerTime(fresh);
       notice("");
       swap(document.querySelector("main"), document.adoptNode(main));

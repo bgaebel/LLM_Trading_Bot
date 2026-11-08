@@ -96,7 +96,8 @@ brauchen, benenne ich ausdrücklich als **offen – manuell prüfen** und behaup
 - Handelshistorie nie still zurücksetzen oder migrieren; nie zwei schreibende Prozesse auf derselben DB
   (weitere Prozesse nur lesend mit `mode=ro`, ADR-0016).
 - Gebühren, Slippage, Strategieregeln und Prompts nur mit Tests und neuer Strategieversion ändern.
-- HTTP bindet nur an `127.0.0.1`; von außen nur über Caddy per HTTPS mit Login oder per SSH-Tunnel (ADR-0024).
+- HTTP bindet nur an `127.0.0.1`; von außen nur über Caddy per HTTPS oder per SSH-Tunnel. Ohne Login nur die
+  Übersicht lesend (abschaltbar, nur im Paper-Modus); alles, was etwas ändert, nur mit Login (ADR-0028).
   Die Domain steht nie im Repo (Platzhalter `<domain>`).
 - Befehle auf dem Hetzner-Server (SSH, Deploy, Neustart) nur mit Zustimmung des Nutzers.
 - Aus der Arena übernommener Code bekommt den Herkunftsvermerk aus ADR-0003; das Arena-Repo wird von hier nicht geändert.

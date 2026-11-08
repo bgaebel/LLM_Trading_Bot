@@ -215,7 +215,9 @@ Bitvavo REST ──> [market]  Quotes + abgeschlossene Kerzen
     `/settings/pause`, `/settings/resume`, `/settings/password`, `/settings/public`, `/app.css`, `/app.js`,
     `/robots.txt`, `/impressum`, `/datenschutz` (ohne Login, auch vor der Einrichtung; Spec 014, ADR-0025)
   - Lese-Ansicht ohne Login (ADR-0028): ohne Formular, Token, Reiter und Cookie, ohne Fehlerdetails und
-    Datei-Hinweise; DB-Teile (`OverviewParts`) 10 s im Speicher, gerendert je Abruf; abschaltbar per
+    Datei-Hinweise; DB-Teile (`OverviewParts`) 10 s im Speicher, gerendert je Abruf (Alter laufen weiter);
+    `<main data-view="owner|public">`, damit `/app.js` eine abgelaufene Sitzung erkennt; Aktualisierungen mit
+    `X-Live-Update: 1` ohne Hintergrundgrafik; Signale über `SignalCache` (neu nur bei neuer Entscheidung); abschaltbar per
     `WEB_PUBLIC_OVERVIEW=0` in `secrets.env` (unlesbar → Login); `X-Robots-Tag: noindex, nofollow` auf jeder Antwort
   - `legal`: `render(text)` (kleine Auszeichnung, alles maskiert, nur `mailto:`-Links), `read_impressum(path)`
     (reguläre Datei, ≤ 16 KB, UTF-8, sonst `None` → 503); `datenschutz`: Text der Datenschutzerklärung, durch

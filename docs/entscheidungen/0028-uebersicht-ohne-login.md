@@ -19,10 +19,15 @@ nicht (ADR-0004); die Einstellungen enthalten den OpenAI-Key, den Pausenschalter
 - **Neu: `GET /` ohne Sitzung zeigt eine Lese-Ansicht der Übersicht** (beide Zugangswege): ohne Formular,
   CSRF-Token, Reiter und Cookie, mit einem Link „Anmelden“. Alles andere (Einstellungen, jede POST-Aktion,
   Abmelden) verlangt weiter den Login. Wer angemeldet ist, sieht die volle Übersicht wie bisher.
-- **Ohne Login ausgeblendet:** Fehlertexte von OpenAI und der Datenbank (nur „nicht lesbar“) und Hinweise auf
-  Konfigurationsdateien – sie beschreiben Interna und helfen Besuchern nicht.
+- **Ohne Login ausgeblendet:** Fehlertexte von OpenAI, der Datenbank und der Statusdatei (nur „nicht lesbar“) und
+  Hinweise auf Konfigurationsdateien – sie beschreiben Interna und helfen Besuchern nicht.
+- **Sitzungsende bleibt sichtbar:** Die Seite des Besitzers ist markiert; bekommt `/app.js` dort die Ansicht ohne
+  Login zurück, ist die Sitzung abgelaufen und der Browser wechselt zum Login (wie Spec 010).
 - **Last:** Die Lese-Ansicht liest die Datenbank höchstens alle 10 s (ein Zwischenspeicher im Web-Prozess für
-  alle Besucher); gerendert wird je Abruf, damit Alter und Uhrzeit stimmen.
+  alle Besucher); gerendert wird je Abruf, Uhrzeit und Alter laufen weiter (die Stufe „läuft/verzögert“ hinkt
+  an einer Schwelle höchstens 10 s nach). Die Aktualisierungen von `/app.js` kommen ohne die 121 KB
+  Hintergrundgrafik (Kopfzeile `X-Live-Update: 1`). Die Signale-Tabelle wird nur neu gelesen, wenn eine neue
+  Entscheidung dazukam.
 - **Nicht in Suchmaschinen:** `X-Robots-Tag: noindex, nofollow` auf jeder Antwort und `/robots.txt` mit
   `Disallow: /`.
 - **Abschaltbar:** Schalter „Übersicht ohne Login“ in den Einstellungen, gespeichert als
@@ -48,5 +53,6 @@ nicht (ADR-0004); die Einstellungen enthalten den OpenAI-Key, den Pausenschalter
   auffällt.
 
 ## Code-Anker
-- `src/llm_trading_bot/web/app.py` (`_anonymous_overview`, Zwischenspeicher, Schalter), `web/overview_page.py`
-  (`public`), `web/pages.py`, `web/credentials.py` (`WEB_PUBLIC_OVERVIEW`), `web/datenschutz.py` – Spec 019
+- `src/llm_trading_bot/web/app.py` (`_anonymous_overview`, Zwischenspeicher, Schalter, `LIVE_HEADER`),
+  `web/overview_page.py` (`public`, `live`), `web/pages.py` (`data-view`), `web/script.py`, `web/overview.py`
+  (`SignalCache`), `web/credentials.py` (`WEB_PUBLIC_OVERVIEW`), `web/datenschutz.py` – Spec 019

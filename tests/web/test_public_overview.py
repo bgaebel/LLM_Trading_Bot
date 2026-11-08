@@ -1,6 +1,8 @@
 """Spec 019 (ADR-0028): the overview is readable without login - read only, nothing else is."""
 
 import http.client
+import re
+import sqlite3
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -16,6 +18,7 @@ from llm_trading_bot.llm.agents import load_config
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.db import open_db
 from llm_trading_bot.paper.execution import BUYHOLD, Costs
+from llm_trading_bot.service.status import status_path
 from llm_trading_bot.web import overview
 from llm_trading_bot.web.app import (
     COOKIE,
@@ -28,6 +31,7 @@ from llm_trading_bot.web.app import (
     make_server,
 )
 from llm_trading_bot.web.credentials import PUBLIC_OVERVIEW_FIELD
+from llm_trading_bot.web.readonly import reading
 
 DOMAIN = "bot.example.test"
 PASSWORD = "ein-langes-Passwort-2026"
@@ -357,3 +361,105 @@ def test_public_view_needs_a_new_adr_before_live() -> None:
     # (ADR-0004) must come with a new ADR on what stays public - this test is the reminder.
     with pytest.raises(NotImplementedError):
         parse_mode("live")
+
+
+# ------------------------------------------------------------------ review of Spec 019
+
+
+def test_hidden_status_file_details(bot: Bot) -> None:
+    status_path(bot.data / "bot.db").write_text("{not json", encoding="utf-8")
+    public = bot.get("/", OUTSIDE).body
+    assert "Status nicht lesbar" in public
+    assert "Statusdatei" not in public and "JSONDecodeError" not in public
+    cookies, _ = bot.owner()
+    assert "Statusdatei unlesbar (JSONDecodeError)" in bot.get("/", cookies=cookies).body
+
+
+def test_owner_page_and_anonymous_page_are_marked_for_the_script(bot: Bot) -> None:
+    # Spec 010: a session that ends while the page is open leads to the login; without the
+    # marks /app.js would quietly swap the view without login into the owner's page.
+    cookies, _ = bot.owner()
+    assert '<main data-view="owner">' in bot.get("/", cookies=cookies).body
+    assert '<main data-view="public">' in bot.get("/", OUTSIDE).body
+    assert "data-view" not in bot.get("/login").body  # no script there
+
+
+@pytest.mark.parametrize("owner", [False, True])
+def test_live_updates_leave_out_the_backdrop(bot: Bot, owner: bool) -> None:
+    cookies = bot.owner()[0] if owner else {}
+    full = bot.app.handle("GET", "/", cookies, {}, TUNNEL)
+    live = bot.app.handle("GET", "/", cookies, {}, TUNNEL, live=True)
+    assert isinstance(full, Response) and isinstance(live, Response)
+    assert 'class="backdrop"' in full.body and 'class="backdrop"' not in live.body
+    assert len(live.body) < len(full.body) - 100_000
+    for part in ("<main", "ticker-track", "data-now"):
+        assert part in live.body, part
+
+
+def test_live_header_reaches_the_app(served: int) -> None:
+    sizes = []
+    for headers in ({}, {"X-Live-Update": "1"}):
+        conn = http.client.HTTPConnection("127.0.0.1", served, timeout=30)
+        conn.request(
+            "GET", "/", headers={"Host": DOMAIN, "X-Forwarded-For": "203.0.113.10", **headers}
+        )
+        sizes.append(len(conn.getresponse().read()))
+        conn.close()
+    assert sizes[1] < sizes[0] - 100_000
+
+
+def test_cache_moves_the_ages_on(bot: Bot) -> None:
+    first = bot.get("/", OUTSIDE).body
+    bot.wall.at += 9
+    bot.clock.at += 9
+    later = bot.get("/", OUTSIDE).body
+    cookies, _ = bot.owner()
+    owner = bot.get("/", cookies=cookies).body
+    ages = re.findall(r'data-at="\d+">vor (\d+) s<', first)
+    assert ages and [int(a) + 9 for a in ages] == [
+        int(a) for a in re.findall(r'data-at="\d+">vor (\d+) s<', later)
+    ]
+    assert re.findall(r'data-at="\d+">(vor \d+ s)<', later) == re.findall(
+        r'data-at="\d+">(vor \d+ s)<', owner
+    )
+
+
+def test_signals_are_read_again_only_when_decisions_change(tmp_path: Path) -> None:
+    path = tmp_path / "bot.db"
+    _cycles(path, NOW)
+    cache = overview.SignalCache()
+    statements: list[str] = []
+    with reading(path) as con:
+        first = cache.get(con)
+        con.set_trace_callback(statements.append)
+        assert cache.get(con) == first
+        con.set_trace_callback(None)
+    assert first and not any("MATERIALIZED" in s for s in statements)
+    con = sqlite3.connect(path)  # the next closed bar: one new decision
+    with con:
+        con.execute(
+            "INSERT INTO decisions(ts,agent,symbol,bar_ts,model,action,target,confidence,reason,"
+            "inputs,status) VALUES ('2030-01-01T00:00:00+00:00','gpt-sol','BTCEUR',9,'m',"
+            "'SELL',0,0.5,'neu','{}','OK')"
+        )
+    con.close()
+    with reading(path) as con:
+        statements.clear()
+        con.set_trace_callback(statements.append)
+        rows = cache.get(con)
+        con.set_trace_callback(None)
+    assert any("MATERIALIZED" in s for s in statements)
+    assert ("gpt-sol", "SELL", "neu") in {(d.agent, d.action, d.reason) for d in rows}
+
+
+def test_signals_of_a_replaced_database_are_read_again(tmp_path: Path) -> None:
+    cache = overview.SignalCache()
+    first, second = tmp_path / "a.db", tmp_path / "b.db"
+    _cycles(first, NOW)
+    _cycles(second, NOW + 7 * 86400)  # same ids, other times
+    with reading(first) as con:
+        before = cache.get(con)
+    with reading(second) as con:
+        after = cache.get(con)
+        assert after == overview.latest_decisions(con)
+    assert {d.ts for d in before}.isdisjoint({d.ts for d in after})

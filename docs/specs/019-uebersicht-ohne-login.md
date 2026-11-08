@@ -13,13 +13,17 @@ Verkaufssignale, keine Halte-Entscheidungen (Wunsch des Nutzers 2026-11-08).
 - [ ] AK1: **Lese-Ansicht:** `GET /` ohne gültige Sitzung liefert (Tunnel und öffentlich) 200 mit der Übersicht:
   kein `<form>`, kein CSRF-Token, keine Reiter, kein `Set-Cookie`, ein Link „Anmelden“ auf `/login`; das Live-Skript
   läuft weiter. — Nachweis: `tests/web/test_public_overview.py::test_anonymous_*`
-- [ ] AK2: **Ausgeblendet ohne Login:** GPT-Fehlertexte, Datenbank-Fehlerdetails, Hinweise auf `secrets.env` und
-  Kommandos; angemeldet bleibt die Übersicht wie bisher. — Nachweis: `::test_hidden_*`, `::test_owner_*`
+- [ ] AK2: **Ausgeblendet ohne Login:** GPT-Fehlertexte, Datenbank- und Statusdatei-Fehlerdetails, Hinweise auf
+  `secrets.env` und Kommandos; angemeldet bleibt die Übersicht wie bisher; endet die Sitzung bei offener Seite,
+  wechselt der Browser zum Login (Spec 010). — Nachweis: `::test_hidden_*`, `::test_owner_*`,
+  `tests/web/test_app_js.py::test_the_script_marks_its_updates_and_leaves_a_lost_session`
 - [ ] AK3: **Alles andere verlangt den Login:** jede andere Route und jede POST-Aktion ohne Sitzung wie bisher
   (Umleitung auf `/login`, Login-Sperre unverändert); vor der Einrichtung bleibt es bei Einrichtung bzw. 503.
   — Nachweis: `::test_every_other_route_*`, `::test_before_setup_*`
 - [ ] AK4: **Last:** Ohne Login liest die Ansicht die Datenbank höchstens einmal je 10 s, egal wie viele Abrufe;
-  die Serverzeit der Seite ist je Abruf aktuell. — Nachweis: `::test_cache_*`
+  Serverzeit und Alter sind je Abruf aktuell; Aktualisierungen von `/app.js` kommen ohne Hintergrundgrafik; die
+  Signale werden nur bei neuen Entscheidungen neu gelesen. — Nachweis: `::test_cache_*`, `::test_live_*`,
+  `::test_signals_*`
 - [ ] AK5: **Keine Suchmaschinen:** jede Antwort trägt `X-Robots-Tag: noindex, nofollow`; `/robots.txt` liefert
   `Disallow: /` ohne Sitzung und ohne Cookie. — Nachweis: `::test_robots_*`
 - [ ] AK6: **Schalter:** In den Einstellungen „Übersicht ohne Login“ an/aus (POST mit CSRF), gespeichert als
@@ -33,7 +37,8 @@ Verkaufssignale, keine Halte-Entscheidungen (Wunsch des Nutzers 2026-11-08).
 - [ ] AK9: **Signale:** Die Tabelle zeigt je Depot und Markt das letzte BUY/SELL der neuesten 50 000 Entscheidungen,
   keine HOLD; die Abfrage liest einen rowid-Bereich, nie die ganze Tabelle. — Nachweis:
   `tests/web/test_overview.py::test_decisions_*`
-- [ ] AK10: Doku: ADR-0028 (löst 0024 ab), INDEX, ARCHITEKTUR, `docs/betrieb/server.md` (Prüfung nach Deploy).
+- [ ] AK10: Doku: ADR-0028 (löst 0024 ab), INDEX, ARCHITEKTUR, `docs/betrieb/server.md` (Prüfung nach Deploy),
+  CLAUDE.md-Regel und Nicht-Ziel in PROJEKT.md.
   — Nachweis: `scripts/docs-check.sh`
 - [ ] AK11: [manuell] Mit Zustimmung: Deploy; `https://<domain>/` zeigt ohne Login die Übersicht, `/settings`
   leitet auf `/login`, die Antwort-Header zeigen `X-Robots-Tag` und kein `Set-Cookie`.
@@ -62,7 +67,7 @@ Verworfen: eigener Pfad, fertiges HTML im Speicher, Caddy-Ratenbegrenzung (siehe
 - [x] 2. Lese-Ansicht, Ausblendungen, Zwischenspeicher, robots (AK1–AK5, AK7)
 - [x] 3. Schalter in den Einstellungen und `secrets.env` (AK6)
 - [x] 4. Datenschutz und Bindungstests (AK8)
-- [ ] 5. Doku, Prüfung (Workflow), PR (AK10)
+- [x] 5. Doku, Prüfung (Workflow), PR (AK10)
 - [ ] 6. Mit Zustimmung: Deploy, Prüfung von außen (AK11)
 
 ## Risiken & offene Fragen
@@ -75,6 +80,14 @@ Verworfen: eigener Pfad, fertiges HTML im Speicher, Caddy-Ratenbegrenzung (siehe
 ## Verlauf
 - 2026-11-08: Nutzer: „machst du auch gleich die Übersichtsseite ohne Login erreichbar?“ – Freigabe des Vorschlags
   (Lese-Ansicht, Ausblendungen, Zwischenspeicher, noindex, Schalter standardmäßig an, nur Paper).
+
+- 2026-11-08: Review-Workflow (4 Blickwinkel + Gegenprüfung + Vollständigkeit; 8 bestätigt, 3 widerlegt, dedupliziert
+  6), behoben: Statusdatei-Fehlertyp ohne Login neutral; abgelaufene Sitzung bei offener Seite → Login
+  (`data-view`-Marke, sonst Rückfall auf die Ansicht ohne Login); Signale-Abfrage ~0,1 s bei 50 000 Zeilen →
+  `SignalCache` bis zur nächsten Entscheidung; Alter im Zwischenspeicher laufen weiter; CLAUDE.md und Nicht-Ziel
+  in PROJEKT.md an ADR-0028 angepasst; jede Aktualisierung trug 121 KB Hintergrundgrafik (≈ 2 GB/Tag je offenem
+  Tab) → `X-Live-Update` lässt sie weg. Widerlegt: Caddy-Fehlerseiten ohne `X-Robots-Tag` (kein Inhalt),
+  Datenschutz „immer lesbar“ trotz Schalter.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->

@@ -179,3 +179,11 @@ def test_a_server_error_is_named_as_such_not_as_a_lost_connection() -> None:
 
 def test_a_text_selection_holds_the_update_back_at_most_a_minute() -> None:
     assert "const HOLD = 60000;" in JS and "Date.now() - heldSince < HOLD" in JS
+
+
+def test_the_script_marks_its_updates_and_leaves_a_lost_session() -> None:
+    # Spec 019: the update request names itself (server drops the backdrop); an owner page that
+    # gets the view without login back goes to the login like after a redirect (Spec 010).
+    assert 'headers: { "X-Live-Update": "1" }' in JS
+    assert 'document.querySelector("main").dataset.view === "owner"' in JS
+    assert 'if (owner && main.dataset.view !== "owner") {\n        toLogin();' in JS

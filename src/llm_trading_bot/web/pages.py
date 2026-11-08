@@ -135,11 +135,13 @@ def _page(
     now: float | None = None,
     script: bool = False,
     login: bool = False,
+    backdrop: bool = True,
 ) -> str:
     """``ticker``: (label, value) pairs for the strip under the header. ``now`` (wall clock) lets
     a reloading page continue the strip where the last load left it. ``script`` loads /app.js
     (ADR-0019); the meta refresh then only works as a fallback without scripts. ``login``: the
-    overview without a session (ADR-0028) links to the login instead of offering a logout."""
+    overview without a session (ADR-0028) links to the login instead of offering a logout.
+    ``backdrop`` False: an update request of /app.js, which keeps the backdrop it has."""
     if csrf:
         logout = (
             '<form method="post" action="/logout">'
@@ -163,7 +165,9 @@ def _page(
         else ""
     )
     reload = f'<meta http-equiv="refresh" content="{int(refresh)}">' if refresh else ""
-    # ADR-0028: the overview without login names no files.
+    # ADR-0028: the overview without login names no files. /app.js compares the views: an owner
+    # page that gets the view without login back has lost its session -> to the login.
+    view = "" if not script else ' data-view="owner"' if csrf else ' data-view="public"'
     files = "" if login else "<span>Zugangsdaten in secrets.env (600)</span>"
     if script:
         # ADR-0019: our own file only - the CSP allows no inline script. Without scripts the
@@ -179,7 +183,7 @@ def _page(
         + f"<title>{escape(title)} · LLM Trading Bot</title>"
         '<link rel="stylesheet" href="/app.css"></head>'
         + ('<body class="live">' if refresh else "<body>")
-        + BACKDROP
+        + (BACKDROP if backdrop else "")
         + f'<header><a class="brand" href="/">{LOGO}<div><p class="brand-name">LLM '
         '<span>Trading</span> Bot</p><div class="brand-sub">Paper-Terminal · BTC/EUR · ETH/EUR'
         f"</div></div></a>{tabs}"
@@ -188,7 +192,7 @@ def _page(
         f'<span class="chip net">127.0.0.1</span>{logout}</div></header>'
         # The track holds the items twice so the loop has no visible seam.
         f'<div class="ticker" aria-hidden="true"><div class="ticker-track{phase}">'
-        f"{items}{items}</div></div><main>{body}</main>"
+        f"{items}{items}</div></div><main{view}>{body}</main>"
         "<footer><span>Paper-Modus · kein Echtgeld (ADR-0004)</span>"
         "<span>App nur auf 127.0.0.1 · von außen per HTTPS oder SSH-Tunnel (ADR-0028)</span>"
         + files

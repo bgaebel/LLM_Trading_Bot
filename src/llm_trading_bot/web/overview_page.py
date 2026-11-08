@@ -356,11 +356,13 @@ def overview_page(
     now: float | None = None,
     trading: str = "",
     public: bool = False,
+    live: bool = False,
 ) -> str:
     """``view`` is None when the database cannot be shown; ``problem`` then says why. ``now``
     keeps the ticker running across reloads. ``trading`` is the pause note (Spec 011 AK6).
     ``public``: the read-only view without a session (ADR-0028) - no error details, no hints to
-    files or commands, a login link instead of tabs; ``csrf`` is then None."""
+    files or commands, a login link instead of tabs; ``csrf`` is then None. ``live``: the
+    update request of /app.js - the same page without the backdrop it never swaps."""
     # The pause comes from the status file and secrets.env, not from the DB: show it always.
     banner = f'<div class="msg bad" role="status">{escape(trading)}</div>' if trading else ""
     if view is None:
@@ -422,4 +424,5 @@ def overview_page(
         now=now,
         script=True,
         login=public,
+        backdrop=not live,
     )
