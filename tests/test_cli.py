@@ -487,3 +487,33 @@ def test_web_serve_hands_the_impressum_to_the_app(
         app_module.serve(tmp_path, port=0, out=io.StringIO(), impressum=impressum)
     (app,) = apps
     assert isinstance(app, app_module.WebApp) and app.impressum == impressum
+
+
+# ---------------------------------------------------------------- purge-euro-depots (Spec 022)
+
+
+def test_purge_euro_depots_command(tmp_path: Path) -> None:
+    """AK8: a dry run by default, refused while the lock is held, then the deleted counts."""
+    from llm_trading_bot.cli import run_purge
+    from llm_trading_bot.paper.lock import WriterLock
+
+    db = tmp_path / "bot.db"
+    assert run_cycle(db, ScenarioClient())[0] == EXIT_OK  # trend and buyhold, euro depots
+    before = db.read_bytes()
+    out = io.StringIO()
+    assert run_purge(db, execute_it=False, out=out) == EXIT_OK
+    assert "dry run, nothing changed" in out.getvalue() and "--execute" in out.getvalue()
+    assert db.read_bytes() == before
+    with WriterLock(db):
+        locked = io.StringIO()
+        assert run_purge(db, execute_it=True, out=locked) == EXIT_LOCKED
+        assert "stop the service first" in locked.getvalue()
+    out = io.StringIO()
+    assert run_purge(db, execute_it=True, out=out) == EXIT_OK
+    lines = out.getvalue().splitlines()
+    assert lines[0] == "deleted rows of the euro depots:"
+    assert lines[-1].split() == ["total", str(sum(int(x.split()[-1]) for x in lines[1:-1]))]
+    assert "portfolios" in out.getvalue() and int(lines[-1].split()[-1]) > 0
+    missing = io.StringIO()
+    assert run_purge(tmp_path / "none.db", execute_it=False, out=missing) == EXIT_INVALID
+    assert not (tmp_path / "none.db").exists()

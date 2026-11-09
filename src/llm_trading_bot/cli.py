@@ -24,6 +24,7 @@ from llm_trading_bot.market.snapshot import (
     MarketSnapshot,
     build_snapshots,
 )
+from llm_trading_bot.ops import purge
 from llm_trading_bot.ops.backup import (
     BOT,
     KEEP,
@@ -377,6 +378,27 @@ def run_restore(backup: Path, db: Path, *, out: TextIO, profile: Profile = BOT) 
     return EXIT_OK
 
 
+def run_purge(db: Path, *, execute_it: bool, out: TextIO) -> int:
+    """Spec 022 (ADR-0032): delete the euro depots' history once; a dry run unless asked."""
+    try:
+        found = purge.execute(db) if execute_it else purge.dry_run(db)
+    except WriterLockBusy as exc:
+        print(f"purge refused: {exc} - stop the service first", file=out)
+        return EXIT_LOCKED
+    except (purge.PurgeRefused, sqlite3.Error) as exc:
+        print(f"purge refused: {type(exc).__name__}: {exc}", file=out)
+        return EXIT_INVALID
+    if execute_it:
+        print("deleted rows of the euro depots:", file=out)
+    else:
+        print("dry run, nothing changed - rows of the euro depots that would be deleted:", file=out)
+    for line in purge.report(found):
+        print(line, file=out)
+    if not execute_it:
+        print("run again with --execute (service stopped, backup taken) to delete", file=out)
+    return EXIT_OK
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="trading-bot")
     commands = parser.add_subparsers(dest="command")
@@ -420,6 +442,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             default=BOT.prefix,
             help="kind of database: schema, file names (default bot)",
         )
+    purger = commands.add_parser(
+        "purge-euro-depots",
+        help="one-off: delete the euro depots' rows from bot.db (Spec 022; dry run by default)",
+    )
+    purger.add_argument("--db", type=Path, required=True, help="the bot database")
+    purger.add_argument(
+        "--execute", action="store_true", help="really delete (needs the stopped service)"
+    )
     web = commands.add_parser("web", help="local web UI: overview and credentials (127.0.0.1 only)")
     web.add_argument("--data-dir", type=Path, required=True, help="where secrets.env is kept")
     web.add_argument(
@@ -477,6 +507,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_verify_db(args.db, out=sys.stdout, profile=PROFILES[args.profile])
     if args.command == "restore":
         return run_restore(args.backup, args.db, out=sys.stdout, profile=PROFILES[args.profile])
+    if args.command == "purge-euro-depots":
+        return run_purge(args.db, execute_it=args.execute, out=sys.stdout)
     if args.command == "web":
         try:
             serve(
