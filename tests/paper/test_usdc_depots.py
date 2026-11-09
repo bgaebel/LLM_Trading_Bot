@@ -37,17 +37,19 @@ CLASSIC = ("trend", "breakout", "meanrev", "ensemble")
 # Written before Spec 021: with the euro buy & hold depot beside them (off by default since).
 ALL_USDC = BotConfig(CLASSIC, None, USDC_AGENTS, buyhold=True)
 BUYHOLD_ON = {"BOT_BUYHOLD": "1"}
+EURO_ON = {"BOT_EURO_DEPOTS": "1"}
+"""Written before Spec 022: with the euro depots of BOT_AGENTS (off by default since)."""
 
 
 def test_config_knows_the_usdc_depots_and_adds_their_benchmark() -> None:
     assert USDC_AGENTS == ("trend-usdc", "breakout-usdc", "meanrev-usdc", "ensemble-usdc")
     config = load_config(
-        {**BUYHOLD_ON, "BOT_AGENTS": "trend", USDC_FIELD: "meanrev-usdc,trend-usdc"}
+        {**BUYHOLD_ON, **EURO_ON, "BOT_AGENTS": "trend", USDC_FIELD: "meanrev-usdc,trend-usdc"}
     )
     assert (config.classic, config.usdc) == (("trend",), ("meanrev-usdc", "trend-usdc"))
     assert config.agents == ("trend", "meanrev-usdc", "trend-usdc")
     assert config.depots == (*config.agents, BUYHOLD, usdc.BUYHOLD_USDC)
-    plain = load_config({**BUYHOLD_ON, "BOT_AGENTS": "trend", USDC_FIELD: ""})
+    plain = load_config({**BUYHOLD_ON, **EURO_ON, "BOT_AGENTS": "trend", USDC_FIELD: ""})
     assert plain.usdc == () and plain.depots == ("trend", BUYHOLD)
     # The benchmark runs by itself and cannot be chosen; nor can a depot of the other list.
     for wrong, message in (
@@ -65,7 +67,7 @@ def test_usdc_depots_are_on_by_default_also_beside_an_explicit_depot_list() -> N
     for env in ({"BOT_AGENTS": "trend,gpt-sol", "OPENAI_API_KEY": KEY}, {"OPENAI_API_KEY": KEY}):
         config = load_config(env)
         assert config.usdc == USDC_AGENTS and usdc.BUYHOLD_USDC in config.depots
-    assert load_config({"BOT_AGENTS": "trend", USDC_FIELD: " "}).usdc == ()
+    assert load_config({**EURO_ON, "BOT_AGENTS": "trend", USDC_FIELD: " "}).usdc == ()
 
 
 PRE_020_DEPOTS = ("trend", "breakout", "meanrev", "ensemble", "gpt-luna", "gpt-sol")
@@ -77,16 +79,21 @@ def test_usdc_choice_never_reaches_bot_agents_so_a_rollback_still_starts(tmp_pat
     secrets.env: an unknown name in BOT_AGENTS would stop every depot, GPT included."""
     assert set(PRE_020_DEPOTS) == {*CLASSIC_AGENTS, *LLM_DEFAULTS}
     secrets = SecretsFile(tmp_path / "secrets.env")
-    stored = secrets.update({}, agents=["ensemble-usdc", "trend", "trend-usdc"])
-    assert (stored["BOT_AGENTS"], stored[USDC_FIELD]) == ("trend", "trend-usdc,ensemble-usdc")
+    # Spec 022: the settings offer only USDC depots; BOT_AGENTS gets their euro twins.
+    stored = secrets.update({}, agents=["ensemble-usdc", "trend-usdc"])
+    assert (stored["BOT_AGENTS"], stored[USDC_FIELD]) == (
+        "trend,ensemble",
+        "trend-usdc,ensemble-usdc",
+    )
     assert set(load_env_file(secrets.path)["BOT_AGENTS"].split(",")) <= set(PRE_020_DEPOTS)
     assert load_config(secrets.read()).usdc == ("trend-usdc", "ensemble-usdc")
     # Switched off, "none" is stored, so the default does not turn them on again.
-    assert secrets.update({}, agents=["trend"])[USDC_FIELD] == ""
-    assert load_config(secrets.read()).usdc == ()
-    # Only USDC depots would leave BOT_AGENTS empty, which the old release refuses too.
-    with pytest.raises(ValueError, match="besides the USDC depots"):
-        secrets.update({}, agents=["trend-usdc"])
+    secrets.update({"OPENAI_API_KEY": "sk-test-not-a-real-key-0000abcd"}, agents=["gpt-luna-usdc"])
+    assert secrets.read()[USDC_FIELD] == "" and load_config(secrets.read()).usdc == ()
+    # BOT_AGENTS is never left empty, which the old release would refuse.
+    assert secrets.read()["BOT_AGENTS"] == "gpt-luna"
+    with pytest.raises(ValueError, match="at least one"):
+        secrets.update({}, agents=[])
     with pytest.raises(ValueError, match=f"belong in {USDC_FIELD}"):
         load_config({"BOT_AGENTS": "trend,trend-usdc"})
 

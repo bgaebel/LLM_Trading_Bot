@@ -9,8 +9,9 @@ from llm_trading_bot.llm.agents import load_config
 from llm_trading_bot.llm.budget import Pricing
 from llm_trading_bot.llm.due import Cadence
 
-OFF = {"BOT_USDC_AGENTS": ""}
-"""Spec 020: without the USDC depots, which run by default."""
+OFF = {"BOT_USDC_AGENTS": "", "BOT_EURO_DEPOTS": "1"}
+"""Spec 020: without the USDC depots, which run by default. Spec 022: with the euro depots
+of BOT_AGENTS, which these tests (written before) configure and which are off by default."""
 KEY = {"OPENAI_API_KEY": "sk-test-not-a-real-key-0000", **OFF}
 
 

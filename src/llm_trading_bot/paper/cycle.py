@@ -8,6 +8,7 @@ All depots of a cycle see the same snapshot.
 
 Spec 020 (ADR-0030): the optional USDC depots decide like their classic twins on the same
 snapshots; only their BTC costs, quotes and execution follow the USDC route (``paper.usdc``).
+Spec 022 (ADR-0032): so do the GPT USDC depots; by default only USDC depots run.
 """
 
 import sqlite3
@@ -233,7 +234,7 @@ def paper_cycle(
     note(obs, lambda b: b.begin(at))
     controls = controls or Controls()
     report = CycleReport(at, config.agents, paused=controls.paused, buyhold=config.buyhold)
-    feed = _Feed(con, client, clock, obs, markets=QUOTED if config.usdc else SYMBOLS)
+    feed = _Feed(con, client, clock, obs, markets=QUOTED if config.routed else SYMBOLS)
     # Also depots switched off meanwhile: the web offers the release for every stopped depot,
     # and a refusal must be reported, not skipped (Spec 011 AK5).
     for agent, requested_at in controls.resumes.items():
@@ -255,7 +256,7 @@ def paper_cycle(
     if config.buyhold and set(qs) == set(SYMBOLS) and not controls.paused:
         # Arena: the benchmark buys only on fresh quotes of both markets.
         report.buyhold_bought = initialize_buyhold(con, qs, costs, when=now)
-    if config.usdc and not controls.paused:
+    if config.routed and not controls.paused:
         # Spec 020: the USDC benchmark buys once as well, on fresh quotes of its own markets.
         start_qs = fresh_quotes(con, now_epoch=start, markets=QUOTED)
         if all(m in start_qs for m in BUYHOLD_USDC_MARKETS):
@@ -332,9 +333,10 @@ def paper_cycle(
                 # stored before the request would compare two prices from the same moment in the
                 # drift check and trade at a price from before the answer (Spec 005 AK6).
                 stored = feed.fetch("after_llm")
-                return {
-                    s: q for s, q in fresh_quotes(con, now_epoch=clock()).items() if s in stored
-                }
+                # Spec 022: every market of the feed; a euro depot sees only BTC-EUR and ETH-EUR
+                # of it (llm.cycle.own_quotes), a GPT USDC depot also its route's books.
+                fresh = fresh_quotes(con, now_epoch=clock(), markets=feed.markets)
+                return {s: q for s, q in fresh.items() if s in stored}
 
             for outcome, results in run_llm_depots(
                 con,

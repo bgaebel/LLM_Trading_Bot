@@ -30,13 +30,15 @@ NO_SERVICE = "kein Dienst"
 SERVICE_RUNNING_SECONDS = 3 * 60
 """The service runs a round every minute (ADR-0017): three missed rounds are a delay."""
 SERVICE_DELAYED_SECONDS = 15 * 60
-ACTIVE_SECONDS = DELAYED_SECONDS
+ACTIVE_SECONDS = 5 * 60
 """Spec 021 (ADR-0031): a depot is shown while its newest equity point is at most this much
 older than the newest round in which it could have been valued: the newest equity point of the
 database, or the latest stored quote of a market it holds if that is older. The web cannot see
 which depots the bot runs (ADR-0016); a running depot gets a point in every round that has fresh
 quotes for all it holds, so a quote outage of one market never hides the depots holding it,
-however long it lasts, while a switched-off depot leaves within an hour."""
+however long it lasts. Spec 022 (ADR-0032): a switched-off depot leaves after five rounds
+(one a minute, ADR-0017) instead of an hour - a few missed rounds of a running depot (a slow
+round, a restart) stay inside it."""
 REFERENCES = (BUYHOLD_USDC, BUYHOLD)
 """Spec 021: the reference of the "vs." column, preferred first, among the shown depots."""
 
@@ -646,7 +648,9 @@ def load(
         equity_series(con, agents=sorted(shown)),
         ([service] if service else []) + liveness(con, now),
         [d for d in decisions if d.agent in shown],
-        llm_today(con, now, shares),
+        # Spec 022: also the GPT costs - a switched-off GPT depot would add its share to the
+        # day's budget shown at the top.
+        [r for r in llm_today(con, now, shares) if r.agent in shown],
         recent_trades(con, agents=shown),
         quotes(con, now),
         ref,

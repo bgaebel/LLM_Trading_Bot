@@ -197,9 +197,31 @@ Seit Spec 021 läuft das Euro-Depot `buyhold` nicht mehr; Referenz der Übersich
 - Rollback auf ein Release vor Spec 021 braucht keine Vorbereitung: Es betreibt Buy & Hold immer und bewertet es
   einfach weiter (kein zweiter Kauf).
 
+### Nur noch USDC-Depots (Spec 022, ADR-0032)
+Der Deploy allein schaltet um, `secrets.env` bleibt wie es ist: Danach laufen nur `trend-usdc` … `ensemble-usdc`
+(Auswahl `BOT_USDC_AGENTS`), `gpt-luna-usdc`/`gpt-sol-usdc` (zu `gpt-luna`/`gpt-sol` in `BOT_AGENTS`) und
+`buyhold-usdc`. Die klassischen Euro-Namen in `BOT_AGENTS` werden ignoriert; das Feld bleibt für einen Rollback
+lesbar. In der ersten Runde legt der Bot die GPT-USDC-Depots mit je 10.000 € an. Die Übersicht zeigt die Euro-Depots
+spätestens 5 min nach ihrem letzten Equity-Punkt nicht mehr.
+- **Rückweg ohne Rollback:** Drop-in `Environment=BOT_EURO_DEPOTS=1` (genau `0`/`1`, sonst Konfigurationsfehler) stellt
+  den Depotsatz von vor Spec 022 her (Euro-Depots aus `BOT_AGENTS`, GPT in Euro).
+
+**Historie der Euro-Depots einmalig löschen – unumkehrbar außer aus dem Backup, nur mit Zustimmung des Nutzers:**
+1. `sudo systemctl stop llm-trading-bot` (der Befehl braucht den WriterLock und bricht sonst ab).
+2. Backup: `sudo systemctl start llm-trading-bot-backup`, dann prüfen, dass in `daily/` eine neue Datei liegt.
+3. Probelauf (ändert nichts, liest nur): `sudo runuser -u <dienst> -- /opt/llm-trading-bot/current/.venv/bin/trading-bot
+   purge-euro-depots --db /var/lib/llm-trading-bot/bot.db` – nennt je Tabelle die Zeilen von `trend`, `breakout`,
+   `meanrev`, `ensemble`, `gpt-luna`, `gpt-sol`, `buyhold`.
+4. Ausführen: derselbe Befehl mit `--execute`. Er löscht in einer Transaktion aus `trades`, `decisions`, `equity`,
+   `llm_calls`, `portfolios`, prüft danach Integrität, Schema und dass alle anderen Zeilen unverändert sind (sonst
+   Rücknahme) und nennt die gelöschten Zahlen. `market` und `observations.db` bleiben unberührt.
+5. `sudo systemctl start llm-trading-bot`, dann `deploy.sh … status`.
+Danach legt ein Rollback auf ein Release vor 022 (oder `BOT_EURO_DEPOTS=1`) die Euro-Depots neu mit 10.000 € an; die
+alte Historie kommt nur per `restore` aus dem Backup zurück.
+
 ### Variablen außerhalb von `secrets.env`
 In `secrets.env` stehen nur Key, Depots, Effort, Budgets sowie Handelspause und Freigaben (Weboberfläche). Gebühren, Takt-Parameter,
-`BOT_BUYHOLD` oder `LOG_LEVEL` setzt man per Drop-in; ein Update ändert Drop-ins nie (es prüft das sogar):
+`BOT_BUYHOLD`, `BOT_EURO_DEPOTS` oder `LOG_LEVEL` setzt man per Drop-in; ein Update ändert Drop-ins nie (es prüft das sogar):
 ```bash
 ssh -t <alias> 'sudo systemctl edit llm-trading-bot'
 ```

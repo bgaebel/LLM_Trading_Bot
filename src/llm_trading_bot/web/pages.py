@@ -9,6 +9,7 @@ from decimal import Decimal, InvalidOperation
 from html import escape
 
 from llm_trading_bot.llm.agents import (
+    GPT_USDC,
     LLM_DEFAULTS,
     MAX_OUTPUT_TOKENS,
     MODEL_PRICES,
@@ -33,8 +34,8 @@ TICKER = (
     ("BTC/EUR", "ETH/EUR"),
     ("Modus", "Paper – kein Echtgeld"),
     ("Kerzen", "nur abgeschlossene"),
-    ("gpt-luna", "Haupt-Trader"),
-    ("gpt-sol", "Gegenprobe"),
+    ("gpt-luna-usdc", "Haupt-Trader"),
+    ("gpt-sol-usdc", "Gegenprobe"),
     ("Buy & Hold USDC", "Referenz"),
     ("GPT", "nur bei Bedarf · max. 4/h"),
     ("Budget", "hartes EUR-Tageslimit"),
@@ -368,7 +369,9 @@ def _reasoning_costs(effort: str, shares: Mapping[str, Decimal]) -> str:
     The budget per depot caps the day in any case."""
     million = Decimal(1_000_000)
     cols = []
-    for depot, (model, _share) in LLM_DEFAULTS.items():
+    # Spec 022: the GPT USDC depots run on the fields (model, share) of their euro twin.
+    for depot, twin in GPT_USDC.items():
+        model, _share = LLM_DEFAULTS[twin]
         price = MODEL_PRICES[model]
         tokens_in, tokens_out, reasoning = MEASURED[model]
         measured = (
@@ -378,7 +381,7 @@ def _reasoning_costs(effort: str, shares: Mapping[str, Decimal]) -> str:
             tokens_in * price.input_per_million + MAX_OUTPUT_TOKENS * price.output_per_million
         ) / million
         day = worst * MAX_REQUESTS_PER_DAY
-        share = shares[depot]
+        share = shares[twin]
         cols.append(
             (
                 depot,
@@ -545,16 +548,15 @@ def settings_page(
 ) -> str:
     key = values.get("OPENAI_API_KEY")
     key_state = f"gespeichert ({escape(mask(key))})" if key else "nicht gesetzt"
-    selected = values.get("BOT_AGENTS", ",".join(LLM_DEFAULTS)).split(",")
+    # Spec 022: a GPT USDC depot runs while its euro twin is named in BOT_AGENTS (missing:
+    # both, the bot's default).
+    gpt = values.get("BOT_AGENTS", ",".join(LLM_DEFAULTS)).split(",")
+    selected = [depot for depot, twin in GPT_USDC.items() if twin in gpt]
     # The bot's default (Spec 020 AK4): a missing USDC choice runs all of them.
     selected += values.get(USDC_FIELD, ",".join(USDC_AGENTS)).split(",")
     labels = {
-        "gpt-luna": ("gpt-6-luna · Haupt-Trader", "LLM"),
-        "gpt-sol": ("gpt-6.1-sol · Gegenprobe", "LLM"),
-        "trend": ("Trendfolge", "KLASSISCH"),
-        "breakout": ("Ausbruch", "KLASSISCH"),
-        "meanrev": ("Mean Reversion", "KLASSISCH"),
-        "ensemble": ("Mehrheitsentscheid", "KLASSISCH"),
+        "gpt-luna-usdc": ("gpt-6-luna · Haupt-Trader · BTC über USDC", "LLM"),
+        "gpt-sol-usdc": ("gpt-6.1-sol · Gegenprobe · BTC über USDC", "LLM"),
         # Spec 020: the same rules, BTC bought and sold over BTC-USDC, cash in euro.
         "trend-usdc": ("Trendfolge · BTC über USDC", "USDC"),
         "breakout-usdc": ("Ausbruch · BTC über USDC", "USDC"),
@@ -628,22 +630,22 @@ def settings_page(
         '<section class="panel span-12">'
         + _head("03", "Depots", "warm")
         + f'<div class="tiles">{depots}</div>'
-        '<p class="hint">Buy &amp; Hold USDC läuft als Referenz mit, sobald ein USDC-Depot '
-        "läuft; das Euro-Buy-&amp;-Hold-Depot ist abgeschaltet, seine Historie bleibt "
-        "(ADR-0031). USDC-Depots handeln BTC über BTC-USDC "
-        "(0,05 % statt 0,25 % Gebühr) und tauschen je Trade Euro in USDC und zurück.</p>"
+        '<p class="hint">Es laufen nur USDC-Depots: Sie handeln BTC über BTC-USDC '
+        "(0,05 % statt 0,25 % Gebühr) und tauschen je Trade Euro in USDC und zurück; ETH läuft "
+        "über ETH-EUR. Buy &amp; Hold USDC läuft als Referenz mit, sobald ein USDC-Depot läuft. "
+        "Die Euro-Depots sind abgeschaltet (ADR-0032).</p>"
         "</section>"
         '<section class="panel span-12">'
         + _head("04", "Budget € / Tag")
         + _gauge(total, luna, sol)
         + '<div class="legend">'
-        f'<span class="l-luna">gpt-luna {escape(f"{luna:.2f}")} €</span>'
-        f'<span class="l-sol">gpt-sol {escape(f"{sol:.2f}")} €</span>'
+        f'<span class="l-luna">gpt-luna-usdc {escape(f"{luna:.2f}")} €</span>'
+        f'<span class="l-sol">gpt-sol-usdc {escape(f"{sol:.2f}")} €</span>'
         f'<span class="l-free">Gesamtlimit {escape(f"{total:.2f}")} €</span></div>'
         '<div class="fields">'
         + amount("LLM_DAILY_BUDGET_EUR", "Gesamt € / Tag", "3")
-        + amount("LLM_DAILY_BUDGET_EUR_GPT_LUNA", "gpt-luna € / Tag", "0.50")
-        + amount("LLM_DAILY_BUDGET_EUR_GPT_SOL", "gpt-sol € / Tag", "2.50")
+        + amount("LLM_DAILY_BUDGET_EUR_GPT_LUNA", "gpt-luna-usdc € / Tag", "0.50")
+        + amount("LLM_DAILY_BUDGET_EUR_GPT_SOL", "gpt-sol-usdc € / Tag", "2.50")
         + "</div>"
         '<div class="actions"><p class="hint">Leere Felder nutzen die Standardwerte. Gespeichert '
         "wird nur, was die Prüfung des Bots besteht.</p>"

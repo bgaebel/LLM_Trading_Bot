@@ -1,6 +1,6 @@
 # ADR-0031: Wie ADR-0012, aber das Euro-Buy-&-Hold-Depot läuft nicht mehr – Referenz ist Buy & Hold USDC
 
-- **Status:** angenommen
+- **Status:** abgelöst durch [ADR-0032](0032-nur-usdc-depots.md)
 - **Löst ab:** [ADR-0012](0012-luna-haupt-sol-gegenprobe.md)
 - **Datum:** 2026-11-08
 - **Bereich:** #paper #web #referenz

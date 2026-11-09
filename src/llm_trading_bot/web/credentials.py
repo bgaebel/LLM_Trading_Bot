@@ -10,6 +10,7 @@ from pathlib import Path
 
 from llm_trading_bot.llm.agents import (
     CLASSIC_AGENTS,
+    GPT_USDC,
     LLM_DEFAULTS,
     USDC_AGENTS,
     USDC_FIELD,
@@ -35,7 +36,11 @@ PUBLIC_OVERVIEW_FIELD = "WEB_PUBLIC_OVERVIEW"
 WEB_FIELDS = (PUBLIC_OVERVIEW_FIELD,)
 """Read by the web UI only; the bot ignores them."""
 FIELDS = SECRET_FIELDS + SETTING_FIELDS + CONTROL_FIELDS + WEB_FIELDS
-AGENT_CHOICES = (*LLM_DEFAULTS, *CLASSIC_AGENTS, *USDC_AGENTS)
+AGENT_CHOICES = (*GPT_USDC, *USDC_AGENTS)
+"""Spec 022 (ADR-0032): only the USDC depots can be chosen; the euro depots no longer run."""
+STOPPABLE = (*LLM_DEFAULTS, *CLASSIC_AGENTS, *AGENT_CHOICES)
+"""Every depot the drawdown stop can halt: also a euro depot stopped before Spec 022, whose
+release the settings still offer (Spec 011 AK5)."""
 _KEY_PATTERN = re.compile(r"sk-[A-Za-z0-9_\-]{16,200}")
 _HEADER = "# llm-trading-bot credentials - written by `trading-bot web`; never commit this file\n"
 
@@ -108,11 +113,18 @@ class SecretsFile:
             unknown = [a for a in agents if a not in AGENT_CHOICES]
             if unknown:
                 raise ValueError(f"unknown depots: {unknown}")
-            # Spec 020: USDC depots in their own field, so BOT_AGENTS stays readable for a
-            # release from before 020 (rollback). Stored even when empty: "none" is a choice,
-            # a missing field means all of them.
             chosen = [a for a in AGENT_CHOICES if a in agents]
-            values["BOT_AGENTS"] = ",".join(a for a in chosen if a not in USDC_AGENTS)
+            if not chosen:
+                raise ValueError("choose at least one depot")
+            # Spec 022: BOT_AGENTS holds the euro twins of everything chosen - the GPT choice
+            # for this release (gpt-luna -> gpt-luna-usdc), and for a release from before 022
+            # (rollback) a list it knows and never empty. The bot ignores its classic names.
+            twins = {GPT_USDC.get(a, a.removesuffix("-usdc")) for a in chosen}
+            values["BOT_AGENTS"] = ",".join(
+                a for a in (*LLM_DEFAULTS, *CLASSIC_AGENTS) if a in twins
+            )
+            # Spec 020: USDC depots in their own field. Stored even when empty: "none" is a
+            # choice, a missing field means all of them.
             values[USDC_FIELD] = ",".join(a for a in chosen if a in USDC_AGENTS)
         for name in SETTING_FIELDS:
             if name in ("BOT_AGENTS", USDC_FIELD) or name not in form:
@@ -152,7 +164,7 @@ class SecretsFile:
 
     def request_resume(self, agent: str, at: str) -> None:
         """Ask the service to release ``agent`` from its drawdown stop (once, see paper.risk)."""
-        if agent not in AGENT_CHOICES:
+        if agent not in STOPPABLE:
             raise ValueError(f"unknown depot: {agent!r}")
         values = self.read()
         requests = dict(

@@ -317,7 +317,7 @@ def test_parse_cookies_is_tolerant() -> None:
 def test_posts_without_a_session_change_nothing(running: Running, path: str) -> None:
     setup(running)
     stranger = Browser(running.browser.port)
-    form: FormData = {"csrf": "x", "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
+    form: FormData = {"csrf": "x", "OPENAI_API_KEY": KEY, "agents": ["gpt-luna-usdc"]}
     status, headers, _ = stranger.request("POST", path, form)
     assert (status, headers["location"]) == (303, "/login")
     assert not (running.data / "secrets.env").exists() and running.checked == []
@@ -339,7 +339,7 @@ def test_key_is_saved_masked_and_never_shown_again(running: Running) -> None:
     form: FormData = {
         "csrf": running.browser.csrf(),
         "OPENAI_API_KEY": KEY,
-        "agents": ["gpt-luna", "gpt-sol"],
+        "agents": ["gpt-luna-usdc", "gpt-sol-usdc"],
         "LLM_EFFORT": "low",
         "LLM_DAILY_BUDGET_EUR": "",
     }
@@ -355,7 +355,7 @@ def test_key_is_saved_masked_and_never_shown_again(running: Running) -> None:
 def test_every_valid_effort_survives_a_save(running: Running, effort: str) -> None:
     setup(running)
     csrf = running.browser.csrf()
-    base: FormData = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
+    base: FormData = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna-usdc"]}
     running.browser.request("POST", "/settings", {**base, "LLM_EFFORT": effort})
     _, _, page = running.browser.request("GET", "/settings")
     assert f'<option value="{effort}" selected>' in page
@@ -366,7 +366,7 @@ def test_invalid_settings_are_explained_and_not_written(running: Running) -> Non
     form: FormData = {
         "csrf": running.browser.csrf(),
         "OPENAI_API_KEY": "kein-key",
-        "agents": ["gpt-luna"],
+        "agents": ["gpt-luna-usdc"],
     }
     status, _, page = running.browser.request("POST", "/settings", form)
     assert status == 400 and "Nicht gespeichert" in page and "sk-" in page
@@ -378,7 +378,7 @@ def test_html_in_values_is_escaped(running: Running) -> None:
     form: FormData = {
         "csrf": running.browser.csrf(),
         "OPENAI_API_KEY": KEY,
-        "agents": ["gpt-luna"],
+        "agents": ["gpt-luna-usdc"],
         "LLM_DAILY_BUDGET_EUR": "<script>x</script>",
     }
     _, _, page = running.browser.request("POST", "/settings", form)
@@ -390,7 +390,7 @@ def test_connection_check_uses_the_stored_key_and_shows_no_key(running: Running)
     csrf = running.browser.csrf()
     _, _, page = running.browser.request("POST", "/settings/test", {"csrf": csrf})
     assert "Kein API-Key gespeichert" in page and running.checked == []
-    form: FormData = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
+    form: FormData = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna-usdc"]}
     running.browser.request("POST", "/settings", form)
     _, _, page = running.browser.request("POST", "/settings/test", {"csrf": csrf})
     assert "in Ordnung" in page and KEY not in page and running.checked == [KEY]
@@ -399,7 +399,7 @@ def test_connection_check_uses_the_stored_key_and_shows_no_key(running: Running)
 def test_a_slow_connection_check_does_not_block_the_other_pages(running: Running) -> None:
     setup(running)
     csrf = running.browser.csrf()
-    form: FormData = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna"]}
+    form: FormData = {"csrf": csrf, "OPENAI_API_KEY": KEY, "agents": ["gpt-luna-usdc"]}
     running.browser.request("POST", "/settings", form)
     entered, release = threading.Event(), threading.Event()
 
@@ -432,7 +432,7 @@ def test_clearing_the_key_over_http_and_unknown_fields_are_dropped(running: Runn
     saved: FormData = {
         "csrf": csrf,
         "OPENAI_API_KEY": KEY,
-        "agents": ["trend"],
+        "agents": ["trend-usdc"],
         "EXTRA": "x",
         "OPENAI_MODEL_GPT_LUNA": "gpt-other",
     }
@@ -440,7 +440,7 @@ def test_clearing_the_key_over_http_and_unknown_fields_are_dropped(running: Runn
     stored = load_env_file(running.data / "secrets.env")
     assert stored["OPENAI_API_KEY"] == KEY
     assert "EXTRA" not in stored and "OPENAI_MODEL_GPT_LUNA" not in stored
-    cleared: FormData = {"csrf": csrf, "agents": ["trend"], "clear_key": "1"}
+    cleared: FormData = {"csrf": csrf, "agents": ["trend-usdc"], "clear_key": "1"}
     status, _, page = running.browser.request("POST", "/settings", cleared)
     assert status == 200 and "Gespeichert." in page
     assert "OPENAI_API_KEY" not in load_env_file(running.data / "secrets.env")
@@ -451,7 +451,7 @@ def test_failed_connection_check_names_only_the_error_type(running: Running) -> 
     csrf = running.browser.csrf()
     other = "sk-test-another-fake-key-9999wxyz"
     running.browser.request(
-        "POST", "/settings", {"csrf": csrf, "OPENAI_API_KEY": other, "agents": ["gpt-luna"]}
+        "POST", "/settings", {"csrf": csrf, "OPENAI_API_KEY": other, "agents": ["gpt-luna-usdc"]}
     )
     _, _, page = running.browser.request("POST", "/settings/test", {"csrf": csrf})
     assert "AuthenticationError" in page and other not in page
@@ -600,7 +600,7 @@ def test_overview_takes_the_budget_shares_from_the_saved_settings(running: Runni
     form: FormData = {
         "csrf": running.browser.csrf(),
         "OPENAI_API_KEY": KEY,
-        "agents": ["gpt-luna", "gpt-sol"],
+        "agents": ["gpt-luna-usdc", "gpt-sol-usdc"],
         "LLM_DAILY_BUDGET_EUR_GPT_LUNA": "0.20",
     }
     assert running.browser.request("POST", "/settings", form)[0] == 200
@@ -636,7 +636,11 @@ def test_app_js_is_served_without_a_session_and_holds_no_data(running: Running) 
     assert status == 200 and headers["content-type"] == "text/javascript; charset=utf-8"
     assert headers["cache-control"] == "no-store" and body == JS
     setup(running)
-    form: FormData = {"csrf": running.browser.csrf(), "OPENAI_API_KEY": KEY, "agents": ["trend"]}
+    form: FormData = {
+        "csrf": running.browser.csrf(),
+        "OPENAI_API_KEY": KEY,
+        "agents": ["trend-usdc"],
+    }
     running.browser.request("POST", "/settings", form)
     assert KEY not in running.browser.request("GET", "/app.js")[2]
 

@@ -35,4 +35,5 @@
 | [0028](0028-uebersicht-ohne-login.md) | Weboberfläche wie 0024; Übersicht ohne Login lesbar (ohne Fehlerdetails, 10-s-Zwischenspeicher, noindex, abschaltbar), nur im Paper-Modus (löst 0024 ab) | angenommen |
 | [0029](0029-strategie-labor-ausfuehrungsvarianten.md) | Strategie-Labor wie 0026; Ausführungsvarianten ohne Regeländerung (z. B. USDC) als eigene Paper-Depots ohne Hürden nach Freigabe (löst 0026 ab) | angenommen |
 | [0030](0030-usdc-depots.md) | USDC-Depots v0.3.1-usdc: Signale aus BTC/EUR, BTC über BTC/USDC ausgeführt, Geld in Euro mit Umrechnung je Trade | angenommen |
-| [0031](0031-euro-buyhold-abgeschaltet.md) | Wie 0012; das Euro-Buy-&-Hold-Depot läuft nicht mehr, Referenz ist buyhold-usdc, Historie bleibt, Code bleibt für Labor/Rückweg schaltbar (`BOT_BUYHOLD`) (löst 0012 ab) | angenommen |
+| [0031](0031-euro-buyhold-abgeschaltet.md) | Wie 0012; das Euro-Buy-&-Hold-Depot läuft nicht mehr, Referenz ist buyhold-usdc, Historie bleibt, Code bleibt für Labor/Rückweg schaltbar (`BOT_BUYHOLD`) (löst 0012 ab) | abgelöst durch [0032](0032-nur-usdc-depots.md) |
+| [0032](0032-nur-usdc-depots.md) | Nur noch USDC-Depots: GPT handelt BTC über USDC, Euro-Depots aus (Rückweg `BOT_EURO_DEPOTS=1`), ihre Historie einmalig per Wartungsbefehl gelöscht; Weg aus 0030 bleibt (löst 0031 ab) | angenommen |

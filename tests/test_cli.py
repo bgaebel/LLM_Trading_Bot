@@ -102,7 +102,14 @@ def test_signals_report_exit_2_when_no_market_is_usable() -> None:
 def run_cycle(db: Path, client: ScenarioClient, **env: str) -> tuple[int, str]:
     out = io.StringIO()
     # Written before Spec 021: with the euro buy & hold depot, which is off by default since.
-    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": "", "BOT_BUYHOLD": "1", **env}
+    # Spec 022: with the euro depot trend (BOT_EURO_DEPOTS, off by default since).
+    env = {
+        "BOT_AGENTS": "trend",
+        "BOT_USDC_AGENTS": "",
+        "BOT_EURO_DEPOTS": "1",
+        "BOT_BUYHOLD": "1",
+        **env,
+    }
     code = run_paper_cycle(db, client, env=env, out=out, clock=lambda: GOLDEN_NOW)
     return code, out.getvalue()
 
@@ -130,7 +137,7 @@ def test_paper_cycle_says_buy_and_hold_is_off(tmp_path: Path) -> None:
     """Spec 021 AK2: without BOT_BUYHOLD the euro buy & hold depot neither buys nor is valued;
     any value other than 1 or 0 is a configuration error, nothing is opened."""
     out = io.StringIO()
-    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": ""}
+    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": "", "BOT_EURO_DEPOTS": "1"}
     db = tmp_path / "bot.db"
     code = run_paper_cycle(db, ScenarioClient(), env=env, out=out, clock=lambda: GOLDEN_NOW)
     text = out.getvalue()
@@ -209,6 +216,10 @@ def test_paper_cycle_needs_a_db_path() -> None:
         main(["paper-cycle"])
 
 
+EURO_ON = {"BOT_EURO_DEPOTS": "1"}
+"""Spec 022: the euro depots these tests (written before) configure are off by default."""
+
+
 def test_paper_cycle_reads_values_saved_by_the_web_ui(tmp_path: Path) -> None:
     # The web UI always stores the USDC choice (Spec 020), here: none.
     (tmp_path / "secrets.env").write_text(
@@ -216,7 +227,7 @@ def test_paper_cycle_reads_values_saved_by_the_web_ui(tmp_path: Path) -> None:
     )
     out = io.StringIO()
     code = run_paper_cycle(
-        tmp_path / "bot.db", ScenarioClient(), env={}, out=out, clock=lambda: GOLDEN_NOW
+        tmp_path / "bot.db", ScenarioClient(), env=EURO_ON, out=out, clock=lambda: GOLDEN_NOW
     )
     assert code == EXIT_OK and "depots meanrev" in out.getvalue()
 
@@ -228,7 +239,7 @@ def test_environment_wins_over_saved_values(tmp_path: Path) -> None:
     code = run_paper_cycle(
         tmp_path / "bot.db",
         ScenarioClient(),
-        env={"BOT_AGENTS": "trend"},
+        env={"BOT_AGENTS": "trend", **EURO_ON},
         out=out,
         clock=lambda: GOLDEN_NOW,
         secrets=secrets,
@@ -255,7 +266,7 @@ def test_stored_key_from_an_explicit_secrets_file_reaches_the_model(tmp_path: Pa
     code = run_paper_cycle(
         tmp_path / "bot.db",
         ScenarioClient(),
-        env={},
+        env=EURO_ON,
         out=out,
         clock=lambda: GOLDEN_NOW,
         model_factory=factory,
@@ -476,3 +487,33 @@ def test_web_serve_hands_the_impressum_to_the_app(
         app_module.serve(tmp_path, port=0, out=io.StringIO(), impressum=impressum)
     (app,) = apps
     assert isinstance(app, app_module.WebApp) and app.impressum == impressum
+
+
+# ---------------------------------------------------------------- purge-euro-depots (Spec 022)
+
+
+def test_purge_euro_depots_command(tmp_path: Path) -> None:
+    """AK8: a dry run by default, refused while the lock is held, then the deleted counts."""
+    from llm_trading_bot.cli import run_purge
+    from llm_trading_bot.paper.lock import WriterLock
+
+    db = tmp_path / "bot.db"
+    assert run_cycle(db, ScenarioClient())[0] == EXIT_OK  # trend and buyhold, euro depots
+    before = db.read_bytes()
+    out = io.StringIO()
+    assert run_purge(db, execute_it=False, out=out) == EXIT_OK
+    assert "dry run, nothing changed" in out.getvalue() and "--execute" in out.getvalue()
+    assert db.read_bytes() == before
+    with WriterLock(db):
+        locked = io.StringIO()
+        assert run_purge(db, execute_it=True, out=locked) == EXIT_LOCKED
+        assert "stop the service first" in locked.getvalue()
+    out = io.StringIO()
+    assert run_purge(db, execute_it=True, out=out) == EXIT_OK
+    lines = out.getvalue().splitlines()
+    assert lines[0] == "deleted rows of the euro depots:"
+    assert lines[-1].split() == ["total", str(sum(int(x.split()[-1]) for x in lines[1:-1]))]
+    assert "portfolios" in out.getvalue() and int(lines[-1].split()[-1]) > 0
+    missing = io.StringIO()
+    assert run_purge(tmp_path / "none.db", execute_it=False, out=missing) == EXIT_INVALID
+    assert not (tmp_path / "none.db").exists()

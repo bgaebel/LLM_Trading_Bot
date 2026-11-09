@@ -93,7 +93,9 @@ def play(
     tmp: Path, scenario: tuple[str, str], buffer: Callable[[], ObservationBuffer] | None
 ) -> tuple[dict[str, list[tuple[Any, ...]]], list[CycleReport], list[ObservationBuffer]]:
     tmp.mkdir()
-    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": AGENTS, "BOT_USDC_AGENTS": ""})
+    config = load_config(
+        {"OPENAI_API_KEY": KEY, "BOT_AGENTS": AGENTS, "BOT_USDC_AGENTS": "", "BOT_EURO_DEPOTS": "1"}
+    )
     con = open_db(tmp / "bot.db", agents=(*config.agents, BUYHOLD))
     client = MovingClient(*scenario)
     model = scripted_model()
@@ -283,7 +285,7 @@ def test_paper_cycle_command_writes_no_observations(tmp_path: Path) -> None:
     code = run_paper_cycle(
         db,
         ScenarioClient(),
-        env={"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": ""},
+        env={"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": "", "BOT_EURO_DEPOTS": "1"},
         out=io.StringIO(),
         clock=lambda: NOW,
     )

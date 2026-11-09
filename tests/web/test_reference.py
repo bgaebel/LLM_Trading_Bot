@@ -24,7 +24,8 @@ from llm_trading_bot.web.readonly import reading
 
 SHARES: dict[str, Decimal] = {}
 T0 = int(NOW)
-HOUR = overview.ACTIVE_SECONDS
+WINDOW = overview.ACTIVE_SECONDS
+"""Spec 022: five minutes (an hour in Spec 021); the times below are fractions of it."""
 
 
 def history(path: Path, points: dict[str, list[tuple[int, float]]]) -> None:
@@ -69,19 +70,19 @@ def stopped(tmp_path: Path) -> Path:
     """Buy & hold ran (and bought) until NOW, then the release of Spec 021 took over."""
     path = tmp_path / "bot.db"
     rounds(path, ON, 0)
-    rounds(path, OFF, 60, HOUR + 1)
+    rounds(path, OFF, 60, WINDOW + 1)
     return path
 
 
 def test_stopped_depot_leaves_every_list(stopped: Path) -> None:
-    view = view_of(stopped, NOW + HOUR + 5)
+    view = view_of(stopped, NOW + WINDOW + 5)
     assert [d.agent for d in view.depots] == ["trend", "trend-usdc", BUYHOLD_USDC]
     assert BUYHOLD not in {s.agent for s in view.series}
     assert BUYHOLD not in {d.agent for d in view.decisions} and view.decisions
     assert BUYHOLD not in {t.agent for t in view.trades}
     assert {t.agent for t in view.trades} == {"trend", "trend-usdc", BUYHOLD_USDC}
     assert "Buy & Hold" not in dict(ticker(view)) and "Buy & Hold USDC" in dict(ticker(view))
-    html = overview_page(view, csrf="x", now=NOW + HOUR + 5)
+    html = overview_page(view, csrf="x", now=NOW + WINDOW + 5)
     assert "<b>buyhold</b>" not in html and ">buyhold " not in html
     # Its history stays in the database, untouched.
     with reading(stopped) as con:
@@ -92,9 +93,11 @@ def test_stopped_depot_leaves_every_list(stopped: Path) -> None:
         assert BUYHOLD in {d.agent for d in everything}
 
 
-def test_a_depot_stays_shown_for_an_hour_after_its_last_valuation(tmp_path: Path) -> None:
-    assert HOUR == 3_600
-    trend = [(t, 10_000.0) for t in range(0, HOUR + 1, 60)]
+def test_a_depot_stays_shown_for_the_active_window_after_its_last_valuation(
+    tmp_path: Path,
+) -> None:
+    assert WINDOW == 300  # Spec 022 AK7 (an hour in Spec 021)
+    trend = [(t, 10_000.0) for t in range(0, WINDOW + 1, 60)]
     path = tmp_path / "bot.db"
     history(path, {"trend": trend, "breakout": [(0, 10_000.0)], BUYHOLD: [(0, 10_000.0)]})
     view = view_of(path)
@@ -106,7 +109,7 @@ def test_a_depot_stays_shown_for_an_hour_after_its_last_valuation(tmp_path: Path
     with con:
         con.execute(
             "INSERT INTO equity(ts,agent,value,cash,btc,eth) VALUES (?,'trend',1e4,1e4,0,0)",
-            (iso(T0 + HOUR + 1),),
+            (iso(T0 + WINDOW + 1),),
         )
     con.close()
     view = view_of(path)
@@ -122,14 +125,14 @@ def test_a_long_quote_outage_of_one_market_hides_no_depot(tmp_path: Path) -> Non
     off = BotConfig(("trend", "meanrev"), None, ("trend-usdc",))
     stopped = tmp_path / "bot.db"
     rounds(stopped, on, 0)
-    rounds(stopped, off, 60, HOUR + 1)
+    rounds(stopped, off, 60, WINDOW + 1)
     con = open_db(stopped, agents=off.depots)
     try:
         client = UsdcScenarioClient()
         client.bad_quotes = {Symbol.ETHEUR}
         clock = FakeClock(NOW)
         reports = []
-        for step in (HOUR + 120, 2 * HOUR, 3 * HOUR):
+        for step in (WINDOW + 120, 2 * WINDOW, 3 * WINDOW):
             clock.now = NOW + step
             reports.append(paper_cycle(con, client, off, costs=Costs(), clock=clock))
     finally:
@@ -140,7 +143,7 @@ def test_a_long_quote_outage_of_one_market_hides_no_depot(tmp_path: Path) -> Non
     assert {BUYHOLD_USDC, "trend", "trend-usdc"} <= holders
     valued = {e.agent for r in reports for e in r.equity}
     assert valued == {"meanrev"}
-    view = view_of(stopped, NOW + 3 * HOUR + 5)
+    view = view_of(stopped, NOW + 3 * WINDOW + 5)
     assert [d.agent for d in view.depots] == ["meanrev", "trend", "trend-usdc", BUYHOLD_USDC]
     assert view.reference is not None and view.reference.agent == BUYHOLD_USDC
     rows = {d.agent: d for d in view.depots}
@@ -172,13 +175,14 @@ def holdings(path: Path, held: dict[str, tuple[float, float]], quoted: dict[Symb
 
 def test_the_active_window_ends_at_the_last_quote_of_a_held_market(tmp_path: Path) -> None:
     path = tmp_path / "bot.db"
-    late = 2 * HOUR
-    old = [(0, 10_000.0), (600, 10_000.0)]
+    late = 2 * WINDOW
+    seen = WINDOW // 6  # the last round of the depots that stopped getting points
+    old = [(0, 10_000.0), (seen, 10_000.0)]
     history(
         path,
         {
             "meanrev": [(0, 10_000.0), (late, 10_000.0)],  # holds nothing, valued every round
-            "trend": old,  # holds ETH: no ETH quote since 600 s
+            "trend": old,  # holds ETH: no ETH quote since seen
             "breakout": old,  # holds nothing: no excuse for missing rounds
             "ensemble": old,  # holds BTC only, which is quoted
             "trend-usdc": old,  # its BTC is priced over BTC-USDC, never quoted
@@ -193,15 +197,15 @@ def test_the_active_window_ends_at_the_last_quote_of_a_held_market(tmp_path: Pat
             "trend-usdc": (0.1, 0.0),
             "meanrev-usdc": (0.0, 0.1),
         },
-        {Symbol.BTCEUR: late, Symbol.ETHEUR: 600, Symbol.USDCEUR: late},
+        {Symbol.BTCEUR: late, Symbol.ETHEUR: seen, Symbol.USDCEUR: late},
     )
     view = view_of(path, T0 + late + 5)
     assert [d.agent for d in view.depots] == ["meanrev", "meanrev-usdc", "trend", "trend-usdc"]
-    # The bound is the older of the newest point and the held market's last quote, an hour back.
+    # The bound is the older of the newest point and the held market's last quote, a window back.
     holdings(path, {}, {})
     con = sqlite3.connect(path)
     with con:
-        con.execute("UPDATE market SET ts=? WHERE symbol='ETHEUR'", (iso(T0 + 601 + HOUR),))
+        con.execute("UPDATE market SET ts=? WHERE symbol='ETHEUR'", (iso(T0 + seen + 1 + WINDOW),))
     con.close()
     view = view_of(path, T0 + late + 5)
     assert [d.agent for d in view.depots] == ["meanrev", "trend-usdc"]
@@ -223,7 +227,7 @@ def test_public_view_hides_the_stopped_depot(stopped: Path) -> None:
         public_host="bot.example.test",
         key_check=lambda key: "",
         clock=lambda: 1_000.0,
-        wall_clock=lambda: NOW + HOUR + 5,
+        wall_clock=lambda: NOW + WINDOW + 5,
     )
     app.passwords.set("ein-langes-Passwort-2026")
     app.setup_code = None
@@ -281,7 +285,7 @@ def test_depot_younger_than_the_reference_shows_a_dash(tmp_path: Path) -> None:
 
 
 def test_reference_falls_back_to_buyhold_then_to_none(tmp_path: Path) -> None:
-    late = HOUR + 900
+    late = WINDOW + 900
     both = tmp_path / "both.db"
     history(
         both,
@@ -328,9 +332,12 @@ def test_header_and_footnote_name_the_reference_and_its_start(tmp_path: Path) ->
     path = tmp_path / "bot.db"
     history(
         path,
-        {"trend": [(0, 10_000.0), (1_200, 10_100.0)], BUYHOLD_USDC: [(600, 9_980.0)]},
+        {
+            "trend": [(0, 10_000.0), (WINDOW // 3, 10_100.0)],
+            BUYHOLD_USDC: [(WINDOW // 6, 9_980.0)],
+        },
     )
-    stamp = when(iso(T0 + 600))
+    stamp = when(iso(T0 + WINDOW // 6))
     for public in (False, True):
         html = overview_page(view_of(path), csrf=None if public else "x", public=public)
         assert "<th>vs. Buy &amp; Hold USDC <small>(seit dessen Start)</small></th>" in html

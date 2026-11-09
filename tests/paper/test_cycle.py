@@ -29,6 +29,7 @@ GPT_LUNA = {
     "BOT_AGENTS": "gpt-luna",
     "BOT_USDC_AGENTS": "",
     "BOT_BUYHOLD": "1",
+    "BOT_EURO_DEPOTS": "1",  # Spec 022: the euro GPT depot, off by default
 }
 
 
@@ -196,7 +197,14 @@ def test_stop_request_skips_gpt_but_still_values_the_depots(tmp_path: Path) -> N
     con = open_db(tmp_path / "bot.db", agents=("gpt-luna", "gpt-sol", BUYHOLD))
     try:
         model = FakeModel()
-        config = load_config({"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": "", "BOT_BUYHOLD": "1"})
+        config = load_config(
+            {
+                "OPENAI_API_KEY": KEY,
+                "BOT_USDC_AGENTS": "",
+                "BOT_EURO_DEPOTS": "1",
+                "BOT_BUYHOLD": "1",
+            }
+        )
         report = paper_cycle(
             con,
             ScenarioClient(),

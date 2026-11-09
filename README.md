@@ -29,9 +29,9 @@ Signale der klassischen Strategien (Arena v0.3.1) auf Live-Daten:
 uv run trading-bot signals
 ```
 
-Einen Paper-Zyklus ausführen (virtuelle Orders, Daten in SQLite; die DB liegt außerhalb des Repos). Standard sind
-die GPT-Depots `gpt-luna` (Haupt-Trader) und `gpt-sol` (Gegenprobe) plus die USDC-Depots mit Buy & Hold USDC als
-Referenz (Euro-Buy-&-Hold nur mit `BOT_BUYHOLD=1`, ADR-0031); dafür muss `OPENAI_API_KEY`
+Einen Paper-Zyklus ausführen (virtuelle Orders, Daten in SQLite; die DB liegt außerhalb des Repos). Es laufen nur
+USDC-Depots (ADR-0032): `gpt-luna-usdc` (Haupt-Trader), `gpt-sol-usdc` (Gegenprobe), die vier klassischen
+USDC-Depots und Buy & Hold USDC als Referenz (Euro-Depots nur mit `BOT_EURO_DEPOTS=1`); dafür muss `OPENAI_API_KEY`
 in der Shell gesetzt sein (nie in eine Datei im Repo schreiben):
 
 ```bash

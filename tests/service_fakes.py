@@ -12,7 +12,7 @@ from typing import Any, NoReturn
 from fakes import ScenarioClient
 from golden_scenarios import NOW
 from llm_fakes import FakeModel
-from llm_trading_bot.llm.agents import BUYHOLD_FIELD, USDC_FIELD
+from llm_trading_bot.llm.agents import BUYHOLD_FIELD, EURO_FIELD, USDC_FIELD
 from llm_trading_bot.market.models import Candle, Symbol
 from llm_trading_bot.paper.cycle import paper_cycle
 from llm_trading_bot.paper.report import CycleReport
@@ -151,11 +151,13 @@ def harness(
     secrets_text: str = "BOT_AGENTS=trend\n",
     usdc: str | None = "",
     buyhold: str | None = "1",
+    euro: str | None = "1",
 ) -> Harness:
     """``usdc``: BOT_USDC_AGENTS in the environment. These tests predate Spec 020 and run
     without the USDC depots (on by default) unless a test chooses them; None leaves the field
     unset, so the bot's default applies. ``buyhold``: BOT_BUYHOLD likewise - they predate
-    Spec 021 and run the euro buy & hold depot (off by default)."""
+    Spec 021 and run the euro buy & hold depot (off by default). ``euro``: BOT_EURO_DEPOTS
+    likewise - they predate Spec 022 and run the euro depots of BOT_AGENTS (off by default)."""
     timer = FakeTimer(start, grace=grace)
     stop = threading.Event()
     notifier = RecordingNotifier()
@@ -177,6 +179,7 @@ def harness(
         env={
             **({} if usdc is None else {USDC_FIELD: usdc}),
             **({} if buyhold is None else {BUYHOLD_FIELD: buyhold}),
+            **({} if euro is None else {EURO_FIELD: euro}),
             **(env or {}),
         },
         secrets=secrets,

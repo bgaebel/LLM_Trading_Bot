@@ -27,8 +27,11 @@ SHARES: dict[str, Decimal] = {}
 
 def write(path: Path, usdc: str, client: ScenarioClient, at: float = NOW) -> None:
     """One round of trend and the USDC depots ``usdc`` (BOT_USDC_AGENTS) at ``at``."""
-    # Written before Spec 021: with the euro buy & hold depot (off by default since).
-    config = load_config({"BOT_AGENTS": "trend", USDC_FIELD: usdc, "BOT_BUYHOLD": "1"})
+    # Written before Spec 021/022: with the euro buy & hold depot and the euro depot trend
+    # (both off by default since).
+    config = load_config(
+        {"BOT_AGENTS": "trend", USDC_FIELD: usdc, "BOT_BUYHOLD": "1", "BOT_EURO_DEPOTS": "1"}
+    )
     con = open_db(path, agents=config.depots)
     try:
         paper_cycle(con, client, config, costs=Costs(), clock=lambda: at)
@@ -104,10 +107,14 @@ def test_settings_offer_the_usdc_depots(tmp_path: Path) -> None:
         tile = re.search(rf'value="{agent}"(?: checked)?>.*?</label>', html)
         assert tile and '<span class="badge usdc">USDC</span>' in tile.group(0), agent
     assert 'value="trend-usdc" checked>' in html and 'value="meanrev-usdc">' in html
-    assert "2 / 10" in html
+    # Spec 022: gpt-luna in BOT_AGENTS ticks gpt-luna-usdc; only the six USDC depots are offered.
+    assert 'value="gpt-luna-usdc" checked>' in html and "2 / 6" in html
     secrets = SecretsFile(tmp_path / "secrets.env")
-    stored = secrets.update({}, agents=["ensemble-usdc", "trend", "trend-usdc"])
-    assert (stored["BOT_AGENTS"], stored[USDC_FIELD]) == ("trend", "trend-usdc,ensemble-usdc")
+    stored = secrets.update({}, agents=["ensemble-usdc", "trend-usdc"])
+    assert (stored["BOT_AGENTS"], stored[USDC_FIELD]) == (
+        "trend,ensemble",
+        "trend-usdc,ensemble-usdc",
+    )
     secrets.request_resume("trend-usdc", "2026-11-08T12:00:00+00:00")
     assert "trend-usdc@" in secrets.read()["BOT_RESUME"]
     with pytest.raises(ValueError, match="unknown depot"):

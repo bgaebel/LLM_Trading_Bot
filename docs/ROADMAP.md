@@ -25,6 +25,7 @@ Orders und mit unveränderter Historie, Backups sind wiederhergestellt geprüft,
 | 8 | Echtgeld-Schnittstelle als Entwurf (Interface + ADR-Vorschlag, keine Implementierung) | [012](specs/012-broker-naht.md) | – |
 | 9 | USDC-Depots: BTC über BTC/USDC ausgeführt, Geld in Euro (ADR-0030) | [020](specs/020-usdc-depots.md) | – |
 | 10 | Euro-Buy-&-Hold abschalten, Referenz ist Buy & Hold USDC (ADR-0031) | [021](specs/021-buyhold-aus.md) | – |
+| 11 | Nur noch USDC-Depots: GPT über USDC, Euro-Depots aus und ihre Historie gelöscht (ADR-0032) | [022](specs/022-nur-usdc.md) | – |
 
 ## M2 – Echtgeld-Minimalbetrieb ⬜
 **Ziel:** Echte Orders über die Bitvavo-Trading-API mit Kleinstbetrag, harten Limits (Positionsgröße,

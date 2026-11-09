@@ -37,7 +37,14 @@ def write(path: Path, *cycles_at: float) -> None:
                 con,
                 ScenarioClient(),
                 # Written before Spec 021: with the euro buy & hold depot (off by default since).
-                load_config({"OPENAI_API_KEY": KEY, "BOT_USDC_AGENTS": "", "BOT_BUYHOLD": "1"}),
+                load_config(
+                    {
+                        "OPENAI_API_KEY": KEY,
+                        "BOT_USDC_AGENTS": "",
+                        "BOT_EURO_DEPOTS": "1",
+                        "BOT_BUYHOLD": "1",
+                    }
+                ),
                 costs=Costs(),
                 model=FakeModel(),
                 clock=fixed(at),
