@@ -20,7 +20,7 @@ def secrets_file(tmp_path: Path) -> SecretsFile:
 def test_key_and_settings_are_stored(secrets_file: SecretsFile) -> None:
     values = secrets_file.update(
         {"OPENAI_API_KEY": f"  {KEY}  ", "LLM_EFFORT": "medium", "LLM_DAILY_BUDGET_EUR": "2"},
-        agents=["gpt-sol", "gpt-luna"],
+        agents=["gpt-sol-usdc", "gpt-luna-usdc"],
     )
     assert values == {
         "OPENAI_API_KEY": KEY,
@@ -52,7 +52,7 @@ def test_clearing_the_key_needs_classic_depots(secrets_file: SecretsFile) -> Non
     with pytest.raises(ValueError, match="OPENAI_API_KEY is required"):
         secrets_file.update({}, clear_key=True)
     assert secrets_file.read()["OPENAI_API_KEY"] == KEY  # nothing written on error
-    secrets_file.update({}, agents=["trend"], clear_key=True)
+    secrets_file.update({}, agents=["trend-usdc"], clear_key=True)
     assert "OPENAI_API_KEY" not in secrets_file.read()
 
 
@@ -105,7 +105,7 @@ def test_no_line_break_of_any_kind_can_smuggle_a_second_line(
 ) -> None:
     injected = f"low{separator}OPENAI_API_KEY=sk-injectedinjectedinjected"
     with pytest.raises(ValueError, match="line breaks"):
-        secrets_file.update({"LLM_EFFORT": injected}, agents=["trend"])
+        secrets_file.update({"LLM_EFFORT": injected}, agents=["trend-usdc"])
     assert not secrets_file.path.exists()
 
 
@@ -121,7 +121,7 @@ def test_gpt_settings_are_checked_even_with_classic_depots_only(
     secrets_file: SecretsFile, field: str, value: str
 ) -> None:
     with pytest.raises(ValueError, match=field):
-        secrets_file.update({field: value}, agents=["trend"])
+        secrets_file.update({field: value}, agents=["trend-usdc"])
     assert not secrets_file.path.exists()
 
 

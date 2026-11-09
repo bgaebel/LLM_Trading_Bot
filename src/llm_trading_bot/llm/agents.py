@@ -1,4 +1,7 @@
-"""Which depots run, each GPT depot's model, prices and budget share (ADR-0012, ADR-0013)."""
+"""Which depots run, each GPT depot's model, prices and budget share (ADR-0012, ADR-0013).
+
+ADR-0032 (Spec 022): only the USDC depots run unless ``BOT_EURO_DEPOTS=1`` brings back the
+depot set from before Spec 022."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -8,7 +11,7 @@ from llm_trading_bot.llm.budget import Pricing, amount
 from llm_trading_bot.llm.due import Cadence
 from llm_trading_bot.llm.openai_client import EFFORTS
 from llm_trading_bot.paper.execution import BUYHOLD
-from llm_trading_bot.paper.usdc import BUYHOLD_USDC, USDC_SUFFIX
+from llm_trading_bot.paper.usdc import BUYHOLD_USDC, USDC_SUFFIX, is_usdc
 
 # List prices in USD per 1M tokens taken 1:1 as EUR - rather too high, which is the safe side.
 MODEL_PRICES: Mapping[str, Pricing] = {
@@ -33,6 +36,21 @@ BUYHOLD_FIELD = "BOT_BUYHOLD"
 """Spec 021 (ADR-0031): the euro buy & hold depot runs only with exactly ``1`` here; missing
 means off. Set in the service's environment (drop-in), not in ``secrets.env``, which keeps only
 the fields the web UI knows. A release from before Spec 021 always runs it (rollback)."""
+EURO_FIELD = "BOT_EURO_DEPOTS"
+"""Spec 022 (ADR-0032): exactly ``1`` runs the depot set from before Spec 022 - the euro depots
+of ``BOT_AGENTS``, GPT in euro instead of over USDC - as a way back without a code change.
+Missing means off: only the USDC depots run. Like ``BOT_BUYHOLD`` it belongs in the service's
+environment, not in ``secrets.env``."""
+GPT_USDC: Mapping[str, str] = {f"{name}{USDC_SUFFIX}": name for name in LLM_DEFAULTS}
+"""Spec 022: each GPT USDC depot and its euro twin, whose model, prices and budget share it
+takes (the same environment fields). It runs when its twin is named in ``BOT_AGENTS``: that
+field already holds the GPT choice on the server, and a release from before Spec 022 knows
+only the twin's name there (rollback)."""
+LLM_AGENTS = (*LLM_DEFAULTS, *GPT_USDC)
+"""Every GPT depot the bot knows, euro twins first."""
+EURO_DEPOTS = (*CLASSIC_AGENTS, *LLM_DEFAULTS, BUYHOLD)
+"""The depots from before the USDC route (ADR-0032): off by default; their history in bot.db
+is deleted once by ``trading-bot purge-euro-depots`` (ops.purge)."""
 MAX_OUTPUT_TOKENS = 8000
 
 
@@ -77,12 +95,18 @@ class BotConfig:
         )
 
     @property
+    def routed(self) -> bool:
+        """A depot trades its BTC over the USDC route: a classic USDC depot (Spec 020) or a GPT
+        USDC depot (Spec 022). Then the round stores the route's quotes and runs its benchmark."""
+        return any(is_usdc(a) for a in self.agents)
+
+    @property
     def benchmarks(self) -> tuple[str, ...]:
         """Buy & hold only when switched on (Spec 021); its USDC twin whenever a USDC depot runs
-        (Spec 020). Opening, valuing and creating depots all go through ``depots``, so a depot
-        left out here is not touched by a round at all."""
+        (Spec 020, Spec 022). Opening, valuing and creating depots all go through ``depots``,
+        so a depot left out here is not touched by a round at all."""
         euro = (BUYHOLD,) if self.buyhold else ()
-        return euro + ((BUYHOLD_USDC,) if self.usdc else ())
+        return euro + ((BUYHOLD_USDC,) if self.routed else ())
 
     @property
     def depots(self) -> tuple[str, ...]:
@@ -95,8 +119,11 @@ def _suffix(name: str) -> str:
 
 
 def _llm_agent(env: Mapping[str, str], name: str) -> LlmAgent:
-    default_model, default_share = LLM_DEFAULTS[name]
-    suffix = _suffix(name)
+    """Spec 022: a GPT USDC depot reads the fields of its euro twin - same model, prices and
+    budget share (ADR-0032), and the web UI's budget fields keep their meaning."""
+    twin = GPT_USDC.get(name, name)
+    default_model, default_share = LLM_DEFAULTS[twin]
+    suffix = _suffix(twin)
     model = env.get(f"OPENAI_MODEL_{suffix}", default_model).strip() or default_model
     price_names = (f"LLM_PRICE_IN_EUR_{suffix}", f"LLM_PRICE_OUT_EUR_{suffix}")
     raw = [env.get(n) for n in price_names]
@@ -119,6 +146,8 @@ def _names(env: Mapping[str, str], field: str, default: str, known: tuple[str, .
     unknown = [n for n in names if n not in known]
     if unknown:
         hint = f" (USDC depots belong in {USDC_FIELD})" if set(unknown) & set(USDC_AGENTS) else ""
+        if set(unknown) & set(GPT_USDC):
+            hint = " (GPT USDC depots follow their euro twin in BOT_AGENTS)"
         raise ValueError(f"{field}: unknown depots {unknown}; known: {list(known)}{hint}")
     return names
 
@@ -132,15 +161,26 @@ def _switch(env: Mapping[str, str], field: str) -> bool:
 
 
 def load_config(env: Mapping[str, str]) -> BotConfig:
-    """Raises ValueError for anything unclear; nothing is opened or written before this passes."""
+    """Raises ValueError for anything unclear; nothing is opened or written before this passes.
+
+    Spec 022 (ADR-0032): the euro names of ``BOT_AGENTS`` run only with ``BOT_EURO_DEPOTS=1``;
+    otherwise its GPT names choose the GPT USDC depots and its classic names are ignored.
+    """
     buyhold = _switch(env, BUYHOLD_FIELD)
+    euro = _switch(env, EURO_FIELD)
     names = _names(env, "BOT_AGENTS", DEFAULT_AGENTS, (*CLASSIC_AGENTS, *LLM_DEFAULTS))
     if not names:
         # Also with USDC depots chosen: a release from before Spec 020 needs one here.
         raise ValueError("BOT_AGENTS must name at least one depot besides the USDC depots")
-    classic = tuple(n for n in names if n in CLASSIC_AGENTS)
+    classic = tuple(n for n in names if n in CLASSIC_AGENTS) if euro else ()
     usdc = tuple(_names(env, USDC_FIELD, ",".join(USDC_AGENTS), USDC_AGENTS))
-    llm_names = [n for n in LLM_DEFAULTS if n in names]
+    gpt = [n for n in LLM_DEFAULTS if n in names]
+    llm_names = gpt if euro else [u for u, twin in GPT_USDC.items() if twin in gpt]
+    if not (classic or usdc or llm_names or buyhold):
+        raise ValueError(
+            f"no depot would run: {USDC_FIELD} is empty and BOT_AGENTS names no GPT depot"
+            f" (euro depots run only with {EURO_FIELD}=1)"
+        )
     if not llm_names:
         return BotConfig(classic, None, usdc, buyhold)
     api_key = env.get("OPENAI_API_KEY", "").strip()

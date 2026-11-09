@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TextIO
 from urllib.parse import parse_qs, urlsplit
 
-from llm_trading_bot.llm.agents import LLM_DEFAULTS
+from llm_trading_bot.llm.agents import GPT_USDC, LLM_AGENTS, LLM_DEFAULTS
 from llm_trading_bot.llm.due import iso
 from llm_trading_bot.llm.openai_client import check_key
 from llm_trading_bot.paper.risk import PAUSE_FIELD, RESUME_FIELD, parse_resumes, release_problem
@@ -355,11 +355,15 @@ class WebApp:
         return Response(200, page)
 
     def _overview_parts(self, values: Mapping[str, str], *, public: bool = False) -> OverviewParts:
+        # Spec 022: a GPT USDC depot has the budget share of its euro twin (same field).
+        twins = {agent: GPT_USDC.get(agent, agent) for agent in LLM_AGENTS}
         shares = {
             agent: pages.budget_value(
-                values, f"LLM_DAILY_BUDGET_EUR_{agent.upper().replace('-', '_')}", default
+                values,
+                f"LLM_DAILY_BUDGET_EUR_{twin.upper().replace('-', '_')}",
+                LLM_DEFAULTS[twin][1],
             )
-            for agent, (_model, default) in LLM_DEFAULTS.items()
+            for agent, twin in twins.items()
         }
         now = self.wall_clock()
         trading = self._trading(values, depots=False)

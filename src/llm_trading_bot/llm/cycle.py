@@ -7,6 +7,10 @@
 3. Per depot, in order: settlement -> strict check -> fresh-quote recheck per market -> decision.
 
 Fails closed at every step: nothing is traded on an invalid, refused, incomplete or stale answer.
+
+Spec 022 (ADR-0032): a GPT USDC depot (``gpt-luna-usdc``, ``gpt-sol-usdc``) gets the same prompt;
+its BTC is priced with the costs of the USDC route in the existing cost fields, needs the route's
+quotes and is traded and valued over the route (``paper.usdc``, by the depot's name).
 """
 
 import json
@@ -14,7 +18,7 @@ import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from llm_trading_bot.llm.agents import LlmAgent, LlmSettings
@@ -41,8 +45,9 @@ from llm_trading_bot.llm.contract import (
 )
 from llm_trading_bot.llm.due import Cadence, due_reason, hourly_limit_reached, iso, trigger_state
 from llm_trading_bot.llm.openai_client import API_ERRORS, MAX_RETRIES, ModelReply, SignalModel
-from llm_trading_bot.market.models import Symbol
+from llm_trading_bot.market.models import QUOTED, SYMBOLS, Symbol
 from llm_trading_bot.market.snapshot import MarketSnapshot
+from llm_trading_bot.paper import usdc
 from llm_trading_bot.paper.db import balance
 from llm_trading_bot.paper.execution import (
     Costs,
@@ -67,6 +72,9 @@ MAX_MID_DRIFT = 0.02
 REFERENCE_STRATEGIES = ("trend", "breakout", "meanrev")
 REFUSAL_MARK = "[refusal] "
 """Prefix of ``llm_attempts.raw_text`` when the model refused without output text (Spec 015)."""
+USDC_SIGNAL_VERSION = f"{PROMPT_VERSION}{usdc.USDC_SUFFIX}"
+"""Spec 022: the version of a GPT USDC depot's decisions - the same prompt (``PROMPT_VERSION``,
+same hash), another execution (ADR-0029), like ``v0.3.1-usdc`` for the classic rules."""
 
 
 def _usable(snaps: Mapping[Symbol, MarketSnapshot], now: float) -> dict[Symbol, MarketSnapshot]:
@@ -82,13 +90,49 @@ def market_triggers(
 ) -> dict[Symbol, dict[str, str]]:
     """The reference signals as the cadence sees them: with weight 0, so a depot's own trade
     cannot flip them and trigger another paid request. The payload keeps the real weight."""
+    return _triggers(
+        snaps,
+        {
+            s: indicators(
+                snap, cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage)
+            )
+            for s, snap in snaps.items()
+        },
+    )
+
+
+def _triggers(
+    snaps: Mapping[Symbol, MarketSnapshot], inds: Mapping[Symbol, Indicators]
+) -> dict[Symbol, dict[str, str]]:
+    """``market_triggers`` on given indicators: those of the payload, so a GPT USDC depot's
+    cadence sees its reference signals with the route's costs, as its prompt does (Spec 022)."""
     triggers: dict[Symbol, dict[str, str]] = {}
     for s, snap in snaps.items():
-        ind = indicators(
-            snap, cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage)
-        )
+        ind = inds[s]
         triggers[s] = {n: run_strategy(n, snap, ind, 0.0).action for n in REFERENCE_STRATEGIES}
     return triggers
+
+
+def _costs_of(
+    agent: str, symbol: Symbol, snap: MarketSnapshot, qs: Quotes, costs: Costs
+) -> tuple[float, float, float]:
+    """Roundtrip cost, fee and slippage per side the depot's prompt sees for ``symbol``.
+
+    Spec 022: for the BTC of a GPT USDC depot those of the route (both legs, both spreads), in
+    the same fields the prompt always had - the classic USDC depots decide on exactly these.
+    """
+    if usdc.routed(agent, symbol):
+        return usdc.roundtrip_cost(qs), usdc.ROUTE_FEE, usdc.ROUTE_SLIPPAGE
+    roundtrip = cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage)
+    return roundtrip, costs.fee_rate, costs.slippage
+
+
+def own_quotes(agent: str, qs: Quotes | None) -> Quotes | None:
+    """The quotes ``agent`` trades and values on: a euro depot never sees the quote-only markets
+    (so it runs exactly as before Spec 022); a USDC depot keeps its route's books."""
+    if qs is None or usdc.is_usdc(agent):
+        return qs
+    return {s: q for s, q in qs.items() if s in SYMBOLS}
 
 
 @dataclass
@@ -149,23 +193,29 @@ def _prepare(
     # Arena llm_cycle: no request without fresh quotes, checked per depot. Spec 011 AK7: per
     # market - the request covers the markets with a fresh quote, and a held market without
     # one blocks the request (the depot's value and weights would be unknown).
-    qs = fresh_quotes(con, now_epoch=now_epoch)
-    usable = {s: snap for s, snap in current.items() if s in qs}
+    # Spec 022: the BTC of a GPT USDC depot needs the route's books instead of BTC-EUR's.
+    books = QUOTED if usdc.is_usdc(agent.name) else SYMBOLS
+    qs = fresh_quotes(con, now_epoch=now_epoch, markets=books)
+    usable = {
+        s: snap
+        for s, snap in current.items()
+        if all(m in qs for m in usdc.route_markets(agent.name, s))
+    }
     if not usable or not covers(p, qs):
         return _outcome(agent, "NO_QUOTES", "stored quotes missing or stale")
     payloads: dict[Symbol, dict[str, Any]] = {}
     inds: dict[Symbol, Indicators] = {}
     for s, snap in usable.items():
-        roundtrip = cost_roundtrip(snap.quote.spread_bps, costs.fee_rate, costs.slippage)
+        roundtrip, fee_rate, slippage = _costs_of(agent.name, s, snap, qs, costs)
         inds[s] = indicators(snap, roundtrip)
         payloads[s] = feature_payload(
             snap,
             inds[s],
             current_weight(p, s, qs),
-            costs.fee_rate,
-            costs.slippage,
+            fee_rate,
+            slippage,
         )
-    triggers = market_triggers(usable, costs)
+    triggers = _triggers(usable, inds)
     mids = {s: snap.quote.mid for s, snap in usable.items()}
     trigger, trigger_detail = due_reason(
         con, agent.name, mids, triggers, now_epoch, settings.cadence
@@ -301,13 +351,22 @@ def _finish(
     decided_at = prepared.answered_at or clock()
     bar_ts = int(decided_at) * 10000 + attempt_id
     model_name = reply.model or agent.model
+    fresh = own_quotes(agent.name, fresh)
+    if usdc.is_usdc(agent.name):
+        answers = {
+            s: replace(a, signal=replace(a.signal, version=USDC_SIGNAL_VERSION))
+            for s, a in answers.items()
+        }
     results = []
     for s, answer in answers.items():
         snap = prepared.usable[s]
-        # Spec 011 AK7: a quote lost after the answer costs only its own market.
+        # Spec 011 AK7: a quote lost after the answer costs only its own market. Spec 022: the
+        # drift is measured on the market the signal came from (BTC-EUR); a routed BTC also
+        # needs the route's books.
         stale = (
             fresh is None
             or s not in fresh
+            or any(m not in fresh for m in usdc.route_markets(agent.name, s))
             or decided_at - snap.fetched_at > MAX_SNAPSHOT_AGE
             or abs(fresh[s].mid / snap.quote.mid - 1) > MAX_MID_DRIFT
         )

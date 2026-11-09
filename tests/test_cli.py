@@ -102,7 +102,14 @@ def test_signals_report_exit_2_when_no_market_is_usable() -> None:
 def run_cycle(db: Path, client: ScenarioClient, **env: str) -> tuple[int, str]:
     out = io.StringIO()
     # Written before Spec 021: with the euro buy & hold depot, which is off by default since.
-    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": "", "BOT_BUYHOLD": "1", **env}
+    # Spec 022: with the euro depot trend (BOT_EURO_DEPOTS, off by default since).
+    env = {
+        "BOT_AGENTS": "trend",
+        "BOT_USDC_AGENTS": "",
+        "BOT_EURO_DEPOTS": "1",
+        "BOT_BUYHOLD": "1",
+        **env,
+    }
     code = run_paper_cycle(db, client, env=env, out=out, clock=lambda: GOLDEN_NOW)
     return code, out.getvalue()
 
@@ -130,7 +137,7 @@ def test_paper_cycle_says_buy_and_hold_is_off(tmp_path: Path) -> None:
     """Spec 021 AK2: without BOT_BUYHOLD the euro buy & hold depot neither buys nor is valued;
     any value other than 1 or 0 is a configuration error, nothing is opened."""
     out = io.StringIO()
-    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": ""}
+    env = {"BOT_AGENTS": "trend", "BOT_USDC_AGENTS": "", "BOT_EURO_DEPOTS": "1"}
     db = tmp_path / "bot.db"
     code = run_paper_cycle(db, ScenarioClient(), env=env, out=out, clock=lambda: GOLDEN_NOW)
     text = out.getvalue()
@@ -209,6 +216,10 @@ def test_paper_cycle_needs_a_db_path() -> None:
         main(["paper-cycle"])
 
 
+EURO_ON = {"BOT_EURO_DEPOTS": "1"}
+"""Spec 022: the euro depots these tests (written before) configure are off by default."""
+
+
 def test_paper_cycle_reads_values_saved_by_the_web_ui(tmp_path: Path) -> None:
     # The web UI always stores the USDC choice (Spec 020), here: none.
     (tmp_path / "secrets.env").write_text(
@@ -216,7 +227,7 @@ def test_paper_cycle_reads_values_saved_by_the_web_ui(tmp_path: Path) -> None:
     )
     out = io.StringIO()
     code = run_paper_cycle(
-        tmp_path / "bot.db", ScenarioClient(), env={}, out=out, clock=lambda: GOLDEN_NOW
+        tmp_path / "bot.db", ScenarioClient(), env=EURO_ON, out=out, clock=lambda: GOLDEN_NOW
     )
     assert code == EXIT_OK and "depots meanrev" in out.getvalue()
 
@@ -228,7 +239,7 @@ def test_environment_wins_over_saved_values(tmp_path: Path) -> None:
     code = run_paper_cycle(
         tmp_path / "bot.db",
         ScenarioClient(),
-        env={"BOT_AGENTS": "trend"},
+        env={"BOT_AGENTS": "trend", **EURO_ON},
         out=out,
         clock=lambda: GOLDEN_NOW,
         secrets=secrets,
@@ -255,7 +266,7 @@ def test_stored_key_from_an_explicit_secrets_file_reaches_the_model(tmp_path: Pa
     code = run_paper_cycle(
         tmp_path / "bot.db",
         ScenarioClient(),
-        env={},
+        env=EURO_ON,
         out=out,
         clock=lambda: GOLDEN_NOW,
         model_factory=factory,

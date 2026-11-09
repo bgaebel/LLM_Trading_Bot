@@ -16,6 +16,7 @@ from golden_scenarios import NOW
 from llm_fakes import KEY, FakeModel
 from llm_trading_bot.llm.agents import (
     BUYHOLD_FIELD,
+    EURO_FIELD,
     USDC_AGENTS,
     USDC_FIELD,
     BotConfig,
@@ -38,12 +39,13 @@ STEPS = (0, 7, 31, 45, 61, 120)
 
 
 def test_buyhold_switch_is_off_by_default_and_strict() -> None:
-    base = {"BOT_AGENTS": "trend", USDC_FIELD: ""}
+    # Written before Spec 022: euro depots of BOT_AGENTS switched on (off by default since).
+    base = {"BOT_AGENTS": "trend", USDC_FIELD: "", EURO_FIELD: "1"}
     assert BUYHOLD_FIELD == "BOT_BUYHOLD"
     assert load_config(base).buyhold is False
     assert load_config({**base, BUYHOLD_FIELD: "0"}).buyhold is False
     assert load_config({**base, BUYHOLD_FIELD: "1"}).buyhold is True
-    gpt = {"OPENAI_API_KEY": KEY, USDC_FIELD: ""}
+    gpt = {"OPENAI_API_KEY": KEY, USDC_FIELD: "", EURO_FIELD: "1"}
     assert load_config(gpt).buyhold is False
     assert load_config({**gpt, BUYHOLD_FIELD: "1"}).buyhold is True
     # Fail closed: a value that is not exactly 1 or 0 is refused, never read as on or off.
@@ -120,7 +122,8 @@ def count(con: sqlite3.Connection, table: str, agent: str) -> int:
 
 
 def test_fresh_database_never_gets_a_buyhold_depot(tmp_path: Path) -> None:
-    config = load_config({"BOT_AGENTS": "trend"})  # as on the server: USDC on, buy & hold off
+    # As on the server before Spec 022: USDC on, buy & hold off, euro depots on.
+    config = load_config({"BOT_AGENTS": "trend", EURO_FIELD: "1"})
     con = open_db(tmp_path / "bot.db", agents=config.depots)
     try:
         clock = FakeClock(NOW)
@@ -194,7 +197,12 @@ def test_existing_buyhold_rows_stay_untouched_while_off(tmp_path: Path) -> None:
 
 def gpt(buyhold: bool) -> BotConfig:
     return load_config(
-        {"OPENAI_API_KEY": KEY, USDC_FIELD: "", BUYHOLD_FIELD: "1" if buyhold else "0"}
+        {
+            "OPENAI_API_KEY": KEY,
+            USDC_FIELD: "",
+            EURO_FIELD: "1",
+            BUYHOLD_FIELD: "1" if buyhold else "0",
+        }
     )
 
 

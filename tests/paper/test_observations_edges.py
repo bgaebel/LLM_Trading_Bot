@@ -139,6 +139,7 @@ def test_a_budget_blocked_attempt_is_recorded_with_its_call_id(db: sqlite3.Conne
             "OPENAI_API_KEY": KEY,
             "BOT_AGENTS": "gpt-luna",
             "BOT_USDC_AGENTS": "",
+            "BOT_EURO_DEPOTS": "1",
             "LLM_DAILY_BUDGET_EUR_GPT_LUNA": "0",
         }
     )
@@ -158,7 +159,14 @@ def test_a_refusal_keeps_its_text_marked(db: sqlite3.Connection) -> None:
         usage = valid_reply(markets).usage
         return ModelReply("completed", None, "I cannot help", None, "r", None, usage)
 
-    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna", "BOT_USDC_AGENTS": ""})
+    config = load_config(
+        {
+            "OPENAI_API_KEY": KEY,
+            "BOT_AGENTS": "gpt-luna",
+            "BOT_USDC_AGENTS": "",
+            "BOT_EURO_DEPOTS": "1",
+        }
+    )
     buffer = observed(db, ScenarioClient(), config, FakeModel({"gpt-6-luna": refuses}))
     (attempt,) = buffer.attempts
     assert attempt[6] == f"{REFUSAL_MARK}I cannot help" == "[refusal] I cannot help"
@@ -170,7 +178,14 @@ def test_a_refusal_with_text_keeps_the_text(db: sqlite3.Connection) -> None:
         usage = valid_reply(markets).usage
         return ModelReply("completed", "partial", "no", None, "r", None, usage)
 
-    config = load_config({"OPENAI_API_KEY": KEY, "BOT_AGENTS": "gpt-luna", "BOT_USDC_AGENTS": ""})
+    config = load_config(
+        {
+            "OPENAI_API_KEY": KEY,
+            "BOT_AGENTS": "gpt-luna",
+            "BOT_USDC_AGENTS": "",
+            "BOT_EURO_DEPOTS": "1",
+        }
+    )
     buffer = observed(db, ScenarioClient(), config, FakeModel({"gpt-6-luna": refuses}))
     assert buffer.attempts[0][6] == "partial"
 
