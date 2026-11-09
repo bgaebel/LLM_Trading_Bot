@@ -14,8 +14,12 @@ eine OpenAI-Anfrage für beide Märkte nur bei Bedarf, hartes EUR-Budget, Proven
 USDC-Depots (`paper.usdc`, Spec 020, ADR-0030): `trend-usdc`, `breakout-usdc`, `meanrev-usdc`, `ensemble-usdc` plus
 `buyhold-usdc` – Regeln und Signale wie v0.3.1 aus den BTC-EUR-/ETH-EUR-Kerzen, BTC aber ausgeführt und bewertet
 über BTC-USDC und USDC-EUR (Bargeld bleibt Euro), Version `v0.3.1-usdc`; standardmäßig an, abwählbar in den Einstellungen (`BOT_USDC_AGENTS`).
-`buyhold-usdc` ist die Referenz aller Depots; das Euro-Depot `buyhold` läuft seit Spec 021 (ADR-0031) nur mit
-`BOT_BUYHOLD=1` (Labor, Rückweg), seine Historie bleibt in der DB.
+`buyhold-usdc` ist die Referenz aller Depots. Seit Spec 022 (ADR-0032) laufen nur USDC-Depots: dazu
+`gpt-luna-usdc`/`gpt-sol-usdc` (gleicher Prompt `llm-v1`, BTC mit den Kosten des Wegs in den vorhandenen
+Kostenfeldern, über den Weg gehandelt und bewertet, Version `llm-v1-usdc`; Modell, Preise, Budgetfelder des
+Euro-Zwillings; laufen, wenn der Zwilling in `BOT_AGENTS` steht). Die Euro-Depots (`trend` … `ensemble`,
+`gpt-luna`, `gpt-sol`, `buyhold`) laufen nur mit `BOT_EURO_DEPOTS=1` (Depotsatz von vor 022); ihre Historie
+löscht `trading-bot purge-euro-depots` (`ops/purge.py`) einmalig.
 Ein Zyklus per `uv run trading-bot paper-cycle --db <pfad>`. Weboberfläche (`web`, Spec 006/007): Login, Übersicht
 (Depots, Equity-Verlauf, Lebenszeichen, Entscheidungen, GPT-Kosten, Trades; liest die Bot-DB nur lesend, ADR-0016)
 und Eingabe von OpenAI-Key und Einstellungen per `uv run trading-bot web --data-dir <dir> [--db <pfad>]`, nur auf
@@ -308,7 +312,9 @@ Build/Test lokal mit uv (siehe `CLAUDE.md`). Konfiguration über Umgebungsvariab
 (Standard `gpt-luna,gpt-sol`, klassische wählbar); `BOT_USDC_AGENTS` (Spec 020: fehlt = alle vier USDC-Depots,
 leer = keins; nie in `BOT_AGENTS`, damit ein Release vor 020 nach einem Rollback dieselbe Datei liest);
 `BOT_BUYHOLD` (Spec 021: fehlt = Euro-Buy-&-Hold aus, genau `1` an, `0` aus, sonst Konfigurationsfehler; nur in der
-Umgebung, `secrets.env` kennt das Feld nicht); `TAKER_FEE` 0,0025 und `SLIPPAGE` 0,0005 je Seite, erlaubt
+Umgebung, `secrets.env` kennt das Feld nicht); `BOT_EURO_DEPOTS` (Spec 022, gleiche Regeln: fehlt = nur
+USDC-Depots, die GPT-Namen in `BOT_AGENTS` wählen `gpt-*-usdc`, die klassischen werden ignoriert; `1` = Depotsatz
+von vor 022); `TAKER_FEE` 0,0025 und `SLIPPAGE` 0,0005 je Seite, erlaubt
 [0, 0,05]; `OPENAI_API_KEY`; `LLM_EFFORT` (`low`); `LLM_DAILY_BUDGET_EUR` (3) und `LLM_DAILY_BUDGET_EUR_GPT_LUNA`/
 `_GPT_SOL` (0,50/2,50); `LLM_MIN_INTERVAL_SECONDS` (3600), `LLM_EVENT_COOLDOWN_SECONDS` (600),
 `LLM_EVENT_MOVE_THRESHOLD` (0,018), `LLM_MAX_CALLS_PER_HOUR` (4); optional `OPENAI_MODEL_<DEPOT>` mit

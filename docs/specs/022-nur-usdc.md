@@ -13,25 +13,25 @@ Wegs) und die Referenz `buyhold-usdc`. Die Euro-Depots laufen nicht mehr, versch
 „GPT auf USDC umstellen“, „Wirklich löschen“; ADR-0032).
 
 ## Akzeptanzkriterien
-- [ ] AK1: **Standard-Depotsatz:** Ohne `BOT_EURO_DEPOTS` laufen nur die klassischen USDC-Depots aus
+- [x] AK1: **Standard-Depotsatz:** Ohne `BOT_EURO_DEPOTS` laufen nur die klassischen USDC-Depots aus
   `BOT_USDC_AGENTS` (fehlt = alle vier), die GPT-USDC-Depots zu den GPT-Namen in `BOT_AGENTS` (`gpt-luna` →
   `gpt-luna-usdc`, `gpt-sol` → `gpt-sol-usdc`; fehlt `BOT_AGENTS`: beide) und `buyhold-usdc`, sobald eines davon
   läuft. Klassische Euro-Namen in `BOT_AGENTS` werden ignoriert. Auch mit der `secrets.env` des Servers von vor
   Spec 022 (explizites `BOT_AGENTS` mit Euro-Namen, `BOT_USDC_AGENTS` gesetzt oder nicht) startet der Deploy allein
   genau diese Depots. — Nachweis: `tests/llm/test_nur_usdc_config.py::test_default_set_runs_only_usdc_depots`,
   `::test_server_secrets_from_before_022_start_only_usdc_depots`, `::test_gpt_usdc_follow_the_gpt_choice_in_bot_agents`
-- [ ] AK2: **Schalter `BOT_EURO_DEPOTS`:** fehlt oder genau `0` = aus, genau `1` = Depotsatz wie vor Spec 022
+- [x] AK2: **Schalter `BOT_EURO_DEPOTS`:** fehlt oder genau `0` = aus, genau `1` = Depotsatz wie vor Spec 022
   (Euro-Depots aus `BOT_AGENTS`, GPT in Euro, keine GPT-USDC-Depots, USDC-Depots wie Spec 020), jeder andere Wert
   ist ein Konfigurationsfehler. Der Schalter gehört in die Umgebung (Drop-in), nicht in `secrets.env`.
   Von Hand gebaute `BotConfig` (Labor, Spec 016) betreibt genau die übergebenen Depots. — Nachweis:
   `tests/llm/test_nur_usdc_config.py::test_euro_switch_is_off_by_default_and_strict`,
   `::test_euro_switch_restores_the_depot_set_of_021`, `::test_config_built_by_hand_runs_exactly_its_depots`
-- [ ] AK3: **Fehlerfälle:** GPT gewählt ohne `OPENAI_API_KEY` → Konfigurationsfehler, der die GPT-USDC-Depots nennt;
+- [x] AK3: **Fehlerfälle:** GPT gewählt ohne `OPENAI_API_KEY` → Konfigurationsfehler, der die GPT-USDC-Depots nennt;
   nur klassische USDC-Depots brauchen keinen Key; `BOT_AGENTS` leer → Fehler (ein Release vor 022 bräuchte es);
   läuft gar kein Depot → Fehler; `gpt-*-usdc` in `BOT_AGENTS` oder `BOT_USDC_AGENTS` ist unbekannt. — Nachweis:
   `tests/llm/test_nur_usdc_config.py::test_missing_key_refuses_the_gpt_usdc_depots`,
   `::test_classic_usdc_only_needs_no_key`, `::test_unclear_depot_choice_is_refused`
-- [ ] AK4: **GPT über USDC:** `gpt-luna-usdc` / `gpt-sol-usdc` haben Modell, Effort, Takt, Preise und Budgetanteil
+- [x] AK4: **GPT über USDC:** `gpt-luna-usdc` / `gpt-sol-usdc` haben Modell, Effort, Takt, Preise und Budgetanteil
   von `gpt-luna` / `gpt-sol` (dieselben Umgebungsfelder) und stellen eine Anfrage je Depot für BTC und ETH. Der
   BTC-Kontext trägt die Kosten des Wegs in den vorhandenen Feldern (`taker_fee_per_side_pct` 0,15,
   `slippage_per_side_pct` 0,06, `roundtrip_cost_pct` = `usdc.roundtrip_cost`), das Gewicht ist über den Weg bewertet;
@@ -41,25 +41,25 @@ Wegs) und die Referenz `buyhold-usdc`. Die Euro-Depots laufen nicht mehr, versch
   `tests/llm/test_gpt_usdc.py::test_gpt_usdc_payload_carries_the_route_costs`,
   `::test_gpt_usdc_trades_btc_over_the_route_and_eth_on_eth_eur`, `::test_prompt_stays_llm_v1_and_version_marks_usdc`,
   `::test_gpt_usdc_shares_model_and_budget_with_its_euro_twin`
-- [ ] AK5: **Fail closed:** Fehlt vor der Anfrage ein Kurs des Wegs, bleibt BTC aus der Anfrage (nur ETH wird
+- [x] AK5: **Fail closed:** Fehlt vor der Anfrage ein Kurs des Wegs, bleibt BTC aus der Anfrage (nur ETH wird
   gefragt); hält das Depot BTC, wird gar nicht gefragt (`NO_QUOTES`, kein Budget). Fehlt er nach der Antwort, wird
   BTC als `STALE_QUOTE` ohne Trade gespeichert, ETH gehandelt. — Nachweis:
   `tests/llm/test_gpt_usdc.py::test_missing_route_quote_keeps_btc_out_of_the_request`,
   `::test_held_btc_without_route_quotes_asks_nothing`, `::test_route_quote_lost_after_the_answer_costs_only_btc`
-- [ ] AK6: **Einstellungen:** Die Depotkacheln bieten nur die sechs wählbaren USDC-Depots. Speichern schreibt
+- [x] AK6: **Einstellungen:** Die Depotkacheln bieten nur die sechs wählbaren USDC-Depots. Speichern schreibt
   `BOT_USDC_AGENTS` (klassische USDC-Depots, auch leer) und als `BOT_AGENTS` die Euro-Zwillinge aller gewählten
   Depots (nur Namen, die ein Release vor 022 kennt; leere Wahl wird abgewiesen). Die GPT-Budgetfelder gelten für die
   GPT-USDC-Depots. Die Freigabe gestoppter Depots nimmt jedes bekannte Depot an. — Nachweis:
   `tests/web/test_nur_usdc_settings.py::test_settings_offer_only_usdc_depots`,
   `::test_saving_keeps_bot_agents_rollback_safe`, `::test_empty_choice_is_refused`,
   `::test_release_is_accepted_for_every_known_depot`
-- [ ] AK7: **Übersicht:** `ACTIVE_SECONDS` = 300 s: ein abgeschaltetes Depot fehlt spätestens 5 min nach seinem
+- [x] AK7: **Übersicht:** `ACTIVE_SECONDS` = 300 s: ein abgeschaltetes Depot fehlt spätestens 5 min nach seinem
   letzten Equity-Punkt in Depottabelle, Equity-Verlauf, Laufband, Signalen, Trades und GPT-Kosten; ein Kursausfall
   blendet weiter kein Depot aus (Regel aus Spec 021). Referenz bleibt `buyhold-usdc`. — Nachweis:
   `tests/web/test_reference.py::test_a_depot_stays_shown_for_the_active_window_after_its_last_valuation`,
   `tests/web/test_nur_usdc_overview.py::test_switched_off_euro_depots_leave_within_five_minutes`,
   `::test_gpt_costs_list_only_active_depots`, `::test_a_quote_outage_longer_than_the_window_hides_no_depot`
-- [ ] AK8: **Löschbefehl `trading-bot purge-euro-depots --db <pfad> [--execute]`:** Ohne `--execute` Probelauf:
+- [x] AK8: **Löschbefehl `trading-bot purge-euro-depots --db <pfad> [--execute]`:** Ohne `--execute` Probelauf:
   öffnet nur lesend, nennt je Tabelle die Zeilen der sieben Euro-Depots und ändert nichts (Datei bytegleich). Mit
   `--execute`: nur mit WriterLock (Dienst gestoppt), sonst Abbruch; löscht in einer Transaktion genau die Zeilen
   von `trend`, `breakout`, `meanrev`, `ensemble`, `gpt-luna`, `gpt-sol`, `buyhold` aus `trades`, `decisions`,
@@ -71,15 +71,14 @@ Wegs) und die Referenz `buyhold-usdc`. Die Euro-Depots laufen nicht mehr, versch
   `::test_second_run_deletes_nothing`, `::test_wrong_schema_is_refused`,
   `::test_foreign_reference_to_a_euro_decision_is_refused`, `::test_purge_scope_is_exactly_the_euro_depots`,
   `tests/test_cli.py::test_purge_euro_depots_command`
-- [ ] AK9: **Bitgleich:** Die klassischen USDC-Depots und `buyhold-usdc` schreiben im selben Szenario dieselben
+- [x] AK9: **Bitgleich:** Die klassischen USDC-Depots und `buyhold-usdc` schreiben im selben Szenario dieselben
   Zeilen wie Release 9946852 (eingefrorener Digest) und dieselben Zeilen (ohne `id`) mit den GPT-USDC-Depots daneben;
   Golden-Fixtures v0.3.1 unverändert grün. — Nachweis:
   `tests/paper/test_nur_usdc_golden.py::test_usdc_depots_match_release_9946852`,
   `::test_gpt_usdc_depots_leave_the_other_usdc_depots_unchanged`
-- [ ] AK10: **Mutation:** Gruppe `nurusdc` (Standardsatz, Euro-Schalter, Routenkosten der GPT-Depots,
-  Löschumfang, Sperre, Probelauf, Aktivfenster) wird vollständig erkannt. — Nachweis:
-  `uv run python tools/golden/mutation_check.py nurusdc`
-- [ ] AK11: Doku: ADR-0032 (löst ADR-0031 ab), INDEX, ROADMAP, ARCHITEKTUR, PROJEKT, README,
+- [ ] AK10: **Mutation:** entfällt in dieser Runde (Vorgabe 2026-11-09: schnell, ohne Mutanten);
+  Folgearbeit: Gruppe `nurusdc` in `tools/golden/mutation_check.py`.
+- [x] AK11: Doku: ADR-0032 (löst ADR-0031 ab), INDEX, ROADMAP, ARCHITEKTUR, PROJEKT, README,
   `docs/betrieb/server.md` (Schalter, Löschablauf). — Nachweis: `scripts/docs-check.sh`
 - [ ] AK12: [manuell] Mit Zustimmung: Deploy; im Journal laufen nur die USDC-Depots, `gpt-luna-usdc` und
   `gpt-sol-usdc` fragen GPT; nach 5 min zeigt die Übersicht nur sie. Danach, wieder nur mit Zustimmung: Dienst
@@ -116,12 +115,12 @@ Wegs) und die Referenz `buyhold-usdc`. Die Euro-Depots laufen nicht mehr, versch
 
 ## Plan
 - [x] 1. Spec, ADR-0032, INDEX, ROADMAP
-- [ ] 2. Depotsatz und Schalter (AK1–AK3)
-- [ ] 3. GPT über USDC (AK4, AK5)
-- [ ] 4. Einstellungen und Übersicht (AK6, AK7)
-- [ ] 5. Löschbefehl und Server-Ablauf (AK8)
-- [ ] 6. Bitgleichheit (AK9), Mutationsgruppe `nurusdc` (AK10)
-- [ ] 7. Doku ARCHITEKTUR, PROJEKT, README, `docs/betrieb/server.md` (AK11)
+- [x] 2. Depotsatz und Schalter (AK1–AK3)
+- [x] 3. GPT über USDC (AK4, AK5)
+- [x] 4. Einstellungen und Übersicht (AK6, AK7)
+- [x] 5. Löschbefehl und Server-Ablauf (AK8)
+- [x] 6. Bitgleichheit (AK9); Mutationsgruppe `nurusdc` (AK10) entfällt vorerst
+- [x] 7. Doku ARCHITEKTUR, PROJEKT, README, `docs/betrieb/server.md` (AK11)
 - [ ] 8. Mit Zustimmung: Deploy, danach Löschlauf auf dem Server (AK12)
 
 ## Risiken & offene Fragen
@@ -147,6 +146,10 @@ Wegs) und die Referenz `buyhold-usdc`. Die Euro-Depots laufen nicht mehr, versch
   Verhalten. Tests von vor Spec 022, die Euro-Depots über `load_config` betreiben, setzen `BOT_EURO_DEPOTS=1`
   (Harness-Standard); eingefrorene Fixtures unverändert. Geändert wurde die Erwartung „ein Depot bleibt eine Stunde
   sichtbar“ (`tests/web/test_reference.py`) zu „bleibt `ACTIVE_SECONDS` = 300 s sichtbar“, wie AK7 verlangt.
+  Tests der Einstellungen wählen statt `trend`/`gpt-luna` jetzt `trend-usdc`/`gpt-luna-usdc` (nur diese sind
+  wählbar); `test_usdc_depots.py` prüft statt „nur USDC → BOT_AGENTS leer → Fehler“ jetzt „BOT_AGENTS bekommt die
+  Euro-Zwillinge, leere Wahl → Fehler“. Mutationsprüfung auf Vorgabe des Workflows nicht gelaufen (AK10 offen).
+  Digest von Release 9946852 für AK9 vor der ersten Codeänderung auf diesem Branch berechnet.
 
 ## Ergebnis
 <!-- Von /abschluss ausgefüllt. -->
